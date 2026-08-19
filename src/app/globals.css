@@ -42,3 +42,23 @@ body {
   outline: 3px solid var(--color-flame-500);
   outline-offset: 2px;
 }
+
+/* Mobile nav strip scrolls without showing a scrollbar. */
+.scrollbar-none {
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

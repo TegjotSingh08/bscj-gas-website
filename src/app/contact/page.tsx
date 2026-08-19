@@ -1,7 +1,7 @@
 import Link from "next/link";
 import type { Metadata } from "next";
 import { AreasCovered } from "@/components/AreasCovered";
-import { availability, business, sameDayMessaging } from "@/lib/business";
+import { availability, business, legal, sameDayMessaging } from "@/lib/business";
 import { JsonLd, breadcrumbSchema } from "@/lib/schema";
 
 export const metadata: Metadata = {
@@ -12,6 +12,7 @@ export const metadata: Metadata = {
 
 const methods = [
   {
+    analyticsId: "contact-call",
     label: "Call us",
     value: business.phoneDisplay,
     href: business.phoneHref,
@@ -19,6 +20,7 @@ const methods = [
     external: false,
   },
   {
+    analyticsId: "contact-whatsapp",
     label: "WhatsApp",
     value: business.phoneDisplay,
     href: business.whatsappHref,
@@ -26,6 +28,7 @@ const methods = [
     external: true,
   },
   {
+    analyticsId: "contact-email-general",
     label: "General enquiries",
     value: business.emailGeneral,
     href: `mailto:${business.emailGeneral}`,
@@ -33,6 +36,7 @@ const methods = [
     external: false,
   },
   {
+    analyticsId: "contact-email-booking",
     label: "Bookings",
     value: business.emailBooking,
     href: `mailto:${business.emailBooking}`,
@@ -61,6 +65,7 @@ export default function ContactPage() {
             <a
               key={method.label}
               href={method.href}
+              data-analytics-id={method.analyticsId}
               {...(method.external
                 ? { target: "_blank", rel: "noopener noreferrer" }
                 : {})}
@@ -101,6 +106,7 @@ export default function ContactPage() {
             </p>
             <Link
               href="/book"
+              data-analytics-id="contact-book"
               className="mt-4 inline-block rounded-xl bg-flame-500 px-6 py-3 text-sm font-bold text-white hover:bg-flame-600"
             >
               Book online
@@ -117,10 +123,31 @@ export default function ContactPage() {
           </div>
         </div>
 
-        <p className="mt-14 text-center text-sm text-navy-600">
-          {business.name} is a trading name of {business.legalName}. Gas Safe
-          Register No. {business.gasSafeNumber}.
-        </p>
+        <div className="mx-auto mt-14 max-w-2xl rounded-2xl border border-navy-100 bg-white p-6 text-center text-sm leading-relaxed text-navy-700">
+          <h2 className="text-base font-bold text-navy-900">Company details</h2>
+          <p className="mt-3">
+            {business.name} is a trading name of {business.legalName}, registered
+            in England and Wales, company number {legal.companyNumber}.
+          </p>
+          <p className="mt-2">
+            Registered office: {legal.registeredAddress}
+          </p>
+          <p className="mt-2">
+            Gas Safe Register No. {business.gasSafeNumber} — verify at{" "}
+            <a
+              href="https://www.gassaferegister.co.uk"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-semibold text-flame-600 underline underline-offset-4"
+            >
+              gassaferegister.co.uk
+            </a>
+          </p>
+          <p className="mt-3 text-xs text-navy-600">
+            This is our registered office address, not a walk-in shop — we come
+            to you.
+          </p>
+        </div>
       </section>
 
       <JsonLd

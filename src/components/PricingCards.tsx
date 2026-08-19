@@ -23,7 +23,7 @@ export function PricingCards() {
             {cp12.priceDisplay}
           </span>
           <span className="text-sm font-medium text-navy-600">
-            fixed price, paid after completion
+            {cp12.vatNote} · paid after completion
           </span>
         </p>
 
@@ -52,10 +52,15 @@ export function PricingCards() {
             <span aria-hidden="true" className="text-trust-600">✓</span>
             {cp12.payment} — nothing to pay upfront
           </li>
+          <li className="flex gap-2">
+            <span aria-hidden="true" className="text-trust-600">✓</span>
+            No account to create and no deposit — booking takes about a minute
+          </li>
         </ul>
 
         <Link
           href="/book"
+          data-analytics-id="pricing-book"
           className="mt-7 block rounded-xl bg-flame-500 px-6 py-4 text-center text-base font-bold text-white hover:bg-flame-600"
         >
           Book your CP12
@@ -92,6 +97,9 @@ export function PricingCards() {
         </div>
 
         <p className="mt-5 text-xs leading-relaxed text-navy-600">
+          {cp12.vatSentence}
+        </p>
+        <p className="mt-3 text-xs leading-relaxed text-navy-600">
           Not sure how many appliances you have? An appliance is anything that
           runs on gas — a gas hob, gas oven, gas fire or gas water heater. Tell
           us when you book, or ask us and we will work it out with you.

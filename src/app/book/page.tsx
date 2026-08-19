@@ -87,6 +87,7 @@ export default function BookPage() {
             <div className="mt-4 flex flex-col gap-2">
               <a
                 href={business.phoneHref}
+                data-analytics-id="bookpage-call"
                 className="rounded-lg bg-navy-800 px-4 py-3 text-center text-sm font-bold text-white hover:bg-navy-900"
               >
                 Call {business.phoneDisplay}
@@ -95,6 +96,7 @@ export default function BookPage() {
                 href={business.whatsappHref}
                 target="_blank"
                 rel="noopener noreferrer"
+                data-analytics-id="bookpage-whatsapp"
                 className="rounded-lg border-2 border-trust-600 px-4 py-3 text-center text-sm font-bold text-trust-600"
               >
                 WhatsApp us

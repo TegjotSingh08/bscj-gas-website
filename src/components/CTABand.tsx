@@ -21,12 +21,14 @@ export function CTABand({
         <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
           <Link
             href="/book"
+            data-analytics-id="ctaband-book"
             className="rounded-xl bg-flame-500 px-8 py-4 text-base font-bold text-white hover:bg-flame-600"
           >
             Book online
           </Link>
           <a
             href={business.phoneHref}
+            data-analytics-id="ctaband-call"
             className="rounded-xl border-2 border-white/30 px-8 py-4 text-base font-bold text-white hover:border-white"
           >
             Call {business.phoneDisplay}
@@ -35,6 +37,7 @@ export function CTABand({
             href={business.whatsappHref}
             target="_blank"
             rel="noopener noreferrer"
+            data-analytics-id="ctaband-whatsapp"
             className="rounded-xl border-2 border-white/30 px-8 py-4 text-base font-bold text-white hover:border-white"
           >
             WhatsApp

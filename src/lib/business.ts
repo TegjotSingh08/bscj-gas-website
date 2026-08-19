@@ -28,12 +28,16 @@ export const business = {
 } as const;
 
 export const cp12 = {
-  price: 50,
-  priceDisplay: "£50",
-  /** What the £50 covers. Never show the price without this. */
+  price: 45,
+  priceDisplay: "£45",
+  /** What the headline price covers. Never show the price without this. */
   includes: "one boiler and two additional appliances",
   extraAppliancePrice: 15,
   extraApplianceDisplay: "£15",
+  /** All advertised prices include VAT — confirmed in docs/business-details.md. */
+  vatNote: "VAT included",
+  vatSentence:
+    "All our prices include VAT, so the price you see is the price you pay.",
   durationMinutes: 45,
   payment: "Pay after completion",
   certificateDelivery:
@@ -69,8 +73,14 @@ export const serviceAreas = [
   "Willenhall",
 ] as const;
 
-export const calendarEmbedUrl =
-  "https://calendar.google.com/calendar/appointments/schedules/AcZssZ12vkB90RMVqx2c9U0XF2RyD2UYpvhp4HzPD07IOlCEgJJT_5_mzGGO9jw8u2nLW8mVnrzM5vwS?gv=true";
+const calendarScheduleId =
+  "AcZssZ12vkB90RMVqx2c9U0XF2RyD2UYpvhp4HzPD07IOlCEgJJT_5_mzGGO9jw8u2nLW8mVnrzM5vwS";
+
+/** Embedded inside /book. */
+export const calendarEmbedUrl = `https://calendar.google.com/calendar/appointments/schedules/${calendarScheduleId}?gv=true`;
+
+/** Standalone Google booking page — the fallback if the embed fails to load. */
+export const calendarDirectUrl = `https://calendar.google.com/calendar/appointments/schedules/${calendarScheduleId}`;
 
 /**
  * Details required for the legal pages that are NOT yet in
@@ -83,9 +93,20 @@ export const legal: {
   registeredAddress: string | null;
   icoRegistrationNumber: string | null;
 } = {
-  companyNumber: null,
-  registeredAddress: null,
+  companyNumber: "12212412",
+  registeredAddress:
+    "Marshall Industrial Estate, Unit 11b, Sedgley Street, Wolverhampton, England, WV2 3AJ",
+  // Not yet confirmed. Stays null until verified — never invent it.
   icoRegistrationNumber: null,
 };
+
+/** Registered office, split for structured data. Verified at Companies House. */
+export const registeredOffice = {
+  streetAddress: "Marshall Industrial Estate, Unit 11b, Sedgley Street",
+  addressLocality: "Wolverhampton",
+  addressRegion: "West Midlands",
+  postalCode: "WV2 3AJ",
+  addressCountry: "GB",
+} as const;
 
 export const lastUpdated = "19 August 2026";

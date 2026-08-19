@@ -4,6 +4,12 @@
 
 - Public business name: BSCJ Gas & Heating
 - Legal company name: Supreme Gas Ltd
+- Companies House number: 12212412
+- Registered office: Marshall Industrial Estate, Unit 11b, Sedgley Street, Wolverhampton, England, WV2 3AJ
+- Incorporated: 17 September 2019
+- SIC code: 43220 - Plumbing, heat and air-conditioning installation
+- Company status: Active
+- Source: Companies House record, verified 19 August 2026
 - Domain:www.bscj-solutions.com 
 - Public telephone: 07494949648
 - WhatsApp number: 07494949648
@@ -14,9 +20,10 @@
 
 ## CP12 Service
 
-- CP12 price: £50
-- Appliances included in £50: 	One Boiler and two appliances
-- Additional appliance price: £15/appliance
+- CP12 price: £45 (VAT included)
+- Appliances included in £45: 	One Boiler and two appliances
+- Additional appliance price: £15/appliance (VAT included)
+- VAT: all advertised prices include VAT. The price shown is the price paid.
 - Typical appointment duration: 45 minutes
 - Certificate delivery time: Physical Certificate completed at property - digital certificate emailed same day free of charge
 - Payment method: Pay after completion

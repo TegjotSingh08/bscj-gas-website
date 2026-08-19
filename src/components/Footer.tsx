@@ -25,7 +25,7 @@ export function Footer() {
           </h2>
           <ul className="mt-4 space-y-2 text-sm">
             <li>
-              <a href={business.phoneHref} className="hover:text-flame-400">
+              <a href={business.phoneHref} className="inline-flex min-h-11 items-center hover:text-flame-400">
                 {business.phoneDisplay}
               </a>
             </li>
@@ -34,7 +34,7 @@ export function Footer() {
                 href={business.whatsappHref}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="hover:text-flame-400"
+                className="inline-flex min-h-11 items-center hover:text-flame-400"
               >
                 WhatsApp us
               </a>
@@ -42,7 +42,7 @@ export function Footer() {
             <li>
               <a
                 href={`mailto:${business.emailGeneral}`}
-                className="hover:text-flame-400"
+                className="inline-flex min-h-11 items-center hover:text-flame-400"
               >
                 {business.emailGeneral}
               </a>
@@ -72,24 +72,24 @@ export function Footer() {
           </h2>
           <ul className="mt-4 space-y-2 text-sm">
             <li>
-              <Link href="/gas-safety-certificate-wolverhampton" className="hover:text-flame-400">
+              <Link href="/gas-safety-certificate-wolverhampton" className="inline-flex min-h-11 items-center hover:text-flame-400">
                 Gas Safety Certificate
               </Link>
             </li>
             <li>
-              <Link href="/book" className="hover:text-flame-400">Book Online</Link>
+              <Link href="/book" className="inline-flex min-h-11 items-center hover:text-flame-400">Book Online</Link>
             </li>
             <li>
-              <Link href="/about" className="hover:text-flame-400">About</Link>
+              <Link href="/about" className="inline-flex min-h-11 items-center hover:text-flame-400">About</Link>
             </li>
             <li>
-              <Link href="/contact" className="hover:text-flame-400">Contact</Link>
+              <Link href="/contact" className="inline-flex min-h-11 items-center hover:text-flame-400">Contact</Link>
             </li>
             <li>
-              <Link href="/privacy" className="hover:text-flame-400">Privacy Policy</Link>
+              <Link href="/privacy" className="inline-flex min-h-11 items-center hover:text-flame-400">Privacy Policy</Link>
             </li>
             <li>
-              <Link href="/terms" className="hover:text-flame-400">Terms</Link>
+              <Link href="/terms" className="inline-flex min-h-11 items-center hover:text-flame-400">Terms</Link>
             </li>
           </ul>
         </div>

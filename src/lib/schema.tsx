@@ -1,4 +1,11 @@
-import { availability, business, cp12, serviceAreas } from "./business";
+import {
+  availability,
+  business,
+  cp12,
+  legal,
+  registeredOffice,
+  serviceAreas,
+} from "./business";
 import { faqs } from "./faqs";
 
 /**
@@ -23,10 +30,19 @@ export const localBusinessSchema = {
   })),
   address: {
     "@type": "PostalAddress",
-    addressLocality: "Wolverhampton",
-    addressRegion: "West Midlands",
-    addressCountry: "GB",
+    streetAddress: registeredOffice.streetAddress,
+    addressLocality: registeredOffice.addressLocality,
+    addressRegion: registeredOffice.addressRegion,
+    postalCode: registeredOffice.postalCode,
+    addressCountry: registeredOffice.addressCountry,
   },
+  identifier: legal.companyNumber
+    ? {
+        "@type": "PropertyValue",
+        name: "Companies House company number",
+        value: legal.companyNumber,
+      }
+    : undefined,
   openingHoursSpecification: [
     {
       "@type": "OpeningHoursSpecification",
@@ -66,8 +82,15 @@ export const serviceSchema = {
     price: cp12.price,
     priceCurrency: "GBP",
     availability: "https://schema.org/InStock",
-    description: `Fixed price covering ${cp12.includes}. Additional appliances ${cp12.extraApplianceDisplay} each.`,
+    valueAddedTaxIncluded: true,
+    description: `Fixed price including VAT, covering ${cp12.includes}. Additional appliances ${cp12.extraApplianceDisplay} each.`,
     url: `${business.url}/book`,
+    priceSpecification: {
+      "@type": "PriceSpecification",
+      price: cp12.price,
+      priceCurrency: "GBP",
+      valueAddedTaxIncluded: true,
+    },
   },
 } as const;
 

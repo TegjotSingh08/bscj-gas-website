@@ -1,4 +1,8 @@
-import { calendarEmbedUrl, sameDayMessaging } from "@/lib/business";
+import {
+  calendarDirectUrl,
+  calendarEmbedUrl,
+  sameDayMessaging,
+} from "@/lib/business";
 
 /**
  * Google Calendar Appointment Scheduling embed. Bookings land straight in the
@@ -18,10 +22,23 @@ export function BookingEmbed() {
       <p className="mt-4 rounded-xl bg-navy-50 px-4 py-3 text-sm leading-relaxed text-navy-800">
         {sameDayMessaging.bookingNote}
       </p>
+      <p className="mt-3 text-center text-sm text-navy-700">
+        Calendar not loading?{" "}
+        <a
+          href={calendarDirectUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          data-analytics-id="booking-direct-fallback"
+          className="font-bold text-flame-600 underline underline-offset-4"
+        >
+          Open the booking page directly
+        </a>
+        .
+      </p>
       <noscript>
         <p className="mt-4 text-sm text-navy-800">
-          The booking calendar needs JavaScript. Please call or WhatsApp us
-          instead and we will book you in.
+          The booking calendar needs JavaScript. Use the direct booking link
+          above, or call or WhatsApp us and we will book you in.
         </p>
       </noscript>
     </div>

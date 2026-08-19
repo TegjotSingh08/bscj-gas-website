@@ -46,12 +46,14 @@ export default function GasSafetyCertificateWolverhamptonPage() {
           <div className="mt-8 flex flex-col gap-3 sm:flex-row">
             <Link
               href="/book"
+              data-analytics-id="cp12hero-book"
               className="rounded-xl bg-flame-500 px-8 py-4 text-center text-base font-bold text-white hover:bg-flame-600"
             >
               Check available dates
             </Link>
             <a
               href={business.phoneHref}
+              data-analytics-id="cp12hero-call"
               className="rounded-xl border-2 border-white/30 px-8 py-4 text-center text-base font-bold text-white hover:border-white"
             >
               Call {business.phoneDisplay}
