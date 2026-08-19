@@ -7,7 +7,7 @@ import { business, cp12 } from "@/lib/business";
 const trustPoints = [
   {
     title: "Gas Safe Registered",
-    detail: `Register No. ${business.gasSafeNumber}`,
+    detail: "Qualified gas engineer",
   },
   {
     title: `${business.yearsExperience} Years' Experience`,
@@ -18,8 +18,8 @@ const trustPoints = [
     detail: "Family-run business",
   },
   {
-    title: "Pay After Completion",
-    detail: `Fixed ${cp12.priceDisplay} price`,
+    title: `Fixed ${cp12.priceTotalDisplay}`,
+    detail: "Pay after completion",
   },
 ];
 

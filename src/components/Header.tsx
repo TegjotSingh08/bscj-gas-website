@@ -21,7 +21,7 @@ export function Header() {
             BSCJ <span className="text-flame-600">Gas &amp; Heating</span>
           </span>
           <span className="text-xs font-medium text-navy-600">
-            Gas Safe Registered {business.gasSafeNumber} · Wolverhampton
+            Gas Safe Registered · Wolverhampton
           </span>
         </Link>
 

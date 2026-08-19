@@ -7,7 +7,7 @@ import { JsonLd, breadcrumbSchema } from "@/lib/schema";
 
 export const metadata: Metadata = {
   title: "About Us — Gas Safe Registered Engineers in Wolverhampton",
-  description: `${business.name} is a family-run, Gas Safe registered gas engineering business in Wolverhampton. ${business.yearsExperience} years in the industry. Gas Safe Register No. ${business.gasSafeNumber}.`,
+  description: `${business.name} is a family-run, Gas Safe registered gas engineering business in Wolverhampton. ${business.yearsExperience} years in the industry.`,
   alternates: { canonical: "/about" },
 };
 

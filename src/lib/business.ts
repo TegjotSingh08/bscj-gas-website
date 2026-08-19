@@ -34,10 +34,14 @@ export const cp12 = {
   includes: "one boiler and two additional appliances",
   extraAppliancePrice: 15,
   extraApplianceDisplay: "£15",
-  /** All advertised prices include VAT — confirmed in docs/business-details.md. */
-  vatNote: "VAT included",
-  vatSentence:
-    "All our prices include VAT, so the price you see is the price you pay.",
+  /**
+   * Public price presentation. The price is shown as a plain fixed total —
+   * deliberately no VAT wording anywhere customer-facing.
+   */
+  priceTotalDisplay: "£45 total",
+  totalNote: "total",
+  priceSentence:
+    "That is the total price for the certificate. There is no separate callout fee and nothing else is added on the day.",
   durationMinutes: 45,
   payment: "Pay after completion",
   certificateDelivery:

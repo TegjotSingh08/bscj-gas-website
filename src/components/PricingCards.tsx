@@ -23,7 +23,7 @@ export function PricingCards() {
             {cp12.priceDisplay}
           </span>
           <span className="text-sm font-medium text-navy-600">
-            {cp12.vatNote} · paid after completion
+            {cp12.totalNote} · paid after completion
           </span>
         </p>
 
@@ -97,7 +97,7 @@ export function PricingCards() {
         </div>
 
         <p className="mt-5 text-xs leading-relaxed text-navy-600">
-          {cp12.vatSentence}
+          {cp12.priceSentence}
         </p>
         <p className="mt-3 text-xs leading-relaxed text-navy-600">
           Not sure how many appliances you have? An appliance is anything that

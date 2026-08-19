@@ -17,7 +17,8 @@ Things that genuinely stop the site going up.
 - [x] No placeholder text (TODO / FIXME / Lorem Ipsum) anywhere in `src/`
 - [x] Company number and registered office confirmed (12212412, WV2 3AJ) and
       shown on `/privacy`, `/terms` and `/contact`
-- [x] Price confirmed at £45 including VAT, in one place (`src/lib/business.ts`)
+- [x] Price confirmed at £45, shown publicly as "£45 total" with no VAT wording,
+      defined in one place (`src/lib/business.ts`)
 - [x] No invented reviews, ratings, guarantees or accreditations anywhere
 - [x] No review/rating structured data (there are no verified reviews yet)
 - [x] Google Calendar embed loads and shows genuine availability

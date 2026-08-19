@@ -82,14 +82,12 @@ export const serviceSchema = {
     price: cp12.price,
     priceCurrency: "GBP",
     availability: "https://schema.org/InStock",
-    valueAddedTaxIncluded: true,
-    description: `Fixed price including VAT, covering ${cp12.includes}. Additional appliances ${cp12.extraApplianceDisplay} each.`,
+    description: `Fixed total price covering ${cp12.includes}. Additional appliances ${cp12.extraApplianceDisplay} each.`,
     url: `${business.url}/book`,
     priceSpecification: {
       "@type": "PriceSpecification",
       price: cp12.price,
       priceCurrency: "GBP",
-      valueAddedTaxIncluded: true,
     },
   },
 } as const;

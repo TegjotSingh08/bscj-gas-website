@@ -46,6 +46,6 @@ Read these before making changes:
 
 ## Main offer
 
-Gas Safety Certificate Wolverhampton from £45, VAT included.
+Gas Safety Certificate Wolverhampton — fixed £45 total.
 
 The exact wording must follow docs/business-details.md.

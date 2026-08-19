@@ -21,7 +21,7 @@ export default function OpengraphImage() {
         }}
       >
         <div style={{ display: "flex", fontSize: 30, color: "#ffab2e", fontWeight: 700 }}>
-          GAS SAFE REGISTERED · NO. {business.gasSafeNumber}
+          GAS SAFE REGISTERED · WOLVERHAMPTON
         </div>
         <div
           style={{
@@ -44,7 +44,7 @@ export default function OpengraphImage() {
             marginTop: 20,
           }}
         >
-          Fixed {cp12.priceDisplay} · {cp12.vatNote}
+          Fixed {cp12.priceTotalDisplay}
         </div>
         <div style={{ display: "flex", fontSize: 32, color: "#c2d5ec", marginTop: 32 }}>
           {business.name} · Book online · Pay after completion

@@ -20,10 +20,10 @@
 
 ## CP12 Service
 
-- CP12 price: £45 (VAT included)
+- CP12 price: £45
 - Appliances included in £45: 	One Boiler and two appliances
-- Additional appliance price: £15/appliance (VAT included)
-- VAT: all advertised prices include VAT. The price shown is the price paid.
+- Additional appliance price: £15/appliance
+- VAT (INTERNAL ONLY, do not publish): the £45 is VAT inclusive. Decided 19 August 2026 that the website must present the price simply as "£45 total" and must not use VAT wording anywhere public. Do not add VAT wording back without an explicit instruction.
 - Typical appointment duration: 45 minutes
 - Certificate delivery time: Physical Certificate completed at property - digital certificate emailed same day free of charge
 - Payment method: Pay after completion

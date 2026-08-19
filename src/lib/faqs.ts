@@ -20,7 +20,7 @@ export const faqs: Faq[] = [
   },
   {
     question: "How much does it cost?",
-    answer: `${cp12.priceDisplay} covers ${cp12.includes}. Each additional appliance is ${cp12.extraApplianceDisplay}. That is the full price — you pay after the work is completed, so there is nothing to pay when you book.`,
+    answer: `${cp12.priceTotalDisplay} covers ${cp12.includes}. Each additional appliance is ${cp12.extraApplianceDisplay}. That is the whole price — there is no separate callout fee, and you pay after the work is completed, so there is nothing to pay when you book.`,
   },
   {
     question: "How long does the appointment take?",

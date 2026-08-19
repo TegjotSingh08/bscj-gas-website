@@ -38,7 +38,7 @@ export default function HomePage() {
       <section className="bg-gradient-to-b from-navy-900 to-navy-800 pb-14 pt-8 sm:pb-16 sm:pt-16">
         <div className="mx-auto max-w-6xl px-4">
           <p className="inline-flex items-center gap-2 rounded-full bg-white/10 px-4 py-1.5 text-xs font-bold uppercase tracking-wider text-flame-400">
-            Gas Safe Registered · No. {business.gasSafeNumber}
+            Gas Safe Registered
           </p>
 
           <h1 className="mt-4 max-w-3xl text-[2rem] font-extrabold leading-[1.15] text-white sm:text-5xl lg:text-6xl">
@@ -72,7 +72,7 @@ export default function HomePage() {
           </div>
 
           <p className="mt-5 text-sm text-navy-200">
-            {cp12.priceDisplay} {cp12.vatNote} · {sameDayMessaging.short} ·{" "}
+            {cp12.priceTotalDisplay} · {sameDayMessaging.short} ·{" "}
             {availability.workingDays}, {availability.workingHours}
           </p>
         </div>
@@ -228,8 +228,14 @@ export default function HomePage() {
               <div>
                 <dt className="font-bold text-navy-900">Who can do it?</dt>
                 <dd className="mt-1 leading-relaxed text-navy-800">
-                  Only a Gas Safe registered engineer. Ours is register number{" "}
-                  {business.gasSafeNumber}.
+                  Only a Gas Safe registered engineer — which ours is. You can{" "}
+                  <Link
+                    href="/about"
+                    className="font-semibold text-flame-600 underline underline-offset-4"
+                  >
+                    check our registration
+                  </Link>{" "}
+                  before booking.
                 </dd>
               </div>
               <div>
@@ -264,7 +270,7 @@ export default function HomePage() {
             {[
               {
                 title: "The price is on the page",
-                body: `${cp12.priceDisplay} ${cp12.vatNote}, covering ${cp12.includes}, and ${cp12.extraApplianceDisplay} for anything beyond that. You do not have to ring anyone to find out what a standard CP12 costs.`,
+                body: `${cp12.priceTotalDisplay}, covering ${cp12.includes}, and ${cp12.extraApplianceDisplay} for anything beyond that. You do not have to ring anyone to find out what a standard CP12 costs.`,
               },
               {
                 title: "You book a real slot",

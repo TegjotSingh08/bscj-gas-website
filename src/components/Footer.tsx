@@ -14,8 +14,16 @@ export function Footer() {
             and the surrounding area.
           </p>
           <p className="mt-4 text-sm text-navy-200">
-            Gas Safe Register No.{" "}
-            <span className="font-bold text-white">{business.gasSafeNumber}</span>
+            <span className="font-bold text-white">Gas Safe Registered</span>
+            <br />
+            <a
+              href="https://www.gassaferegister.co.uk"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline underline-offset-4 hover:text-flame-400"
+            >
+              Verify us on the Gas Safe Register
+            </a>
           </p>
         </div>
 
