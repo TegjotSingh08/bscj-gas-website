@@ -20,7 +20,22 @@
 - Typical appointment duration: 45 minutes
 - Certificate delivery time: Physical Certificate completed at property - digital certificate emailed same day free of charge
 - Payment method: Pay after completion
-- Same-day service available: Yes
+- Same-day service available: Yes - by phone/WhatsApp only (see Availability Messaging below)
+
+## Availability Messaging
+
+DECIDED 19 August 2026. Chosen approach: Option C.
+
+- Website wording: same-day appointments are often available, arranged by phone or WhatsApp.
+- Online Google Calendar booking keeps the 12 hour minimum notice.
+- Urgent and same-day jobs are taken by phone or WhatsApp, not through the online booking form.
+- Do not state a guaranteed same-day slot anywhere on the site.
+
+This is a messaging decision, not a fixed constraint. It can be changed later to:
+- Option A: drop same-day wording entirely and advertise next-day appointments.
+- Option B: genuinely offer same-day online by reducing the calendar minimum notice to 2-4 hours.
+
+Any change must be made here first, then reflected on the site.
 
 ## Availability
 
