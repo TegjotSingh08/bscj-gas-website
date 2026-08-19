@@ -56,6 +56,14 @@ Needs a confirmed BSCJ price before it can be advertised.
 
 ## Tier 3 — operational automation
 
+### Customer confirmation emails
+The booking flow deliberately does **not** claim an email is sent, because the
+service account cannot send Google invitations without domain-wide delegation.
+Options later: enable domain-wide delegation so Google emails the invitation,
+or send our own confirmation through an email service. Until then the
+confirmation screen tells the customer to note the appointment down.
+
+
 Worth building once booking volume makes the manual version painful.
 
 - Automated SMS/WhatsApp booking confirmations and reminders

@@ -5,8 +5,12 @@ import {
 } from "@/lib/business";
 
 /**
- * Google Calendar Appointment Scheduling embed. Bookings land straight in the
- * engineer's calendar — there is deliberately no custom booking backend.
+ * RETAINED AS A ROLLBACK ONLY — not rendered anywhere.
+ *
+ * /book now uses the BSCJ booking flow in src/components/booking/. This
+ * component is the previous Google Calendar iframe, kept until a real booking
+ * has been made through the new flow on the live site. Delete it after that
+ * (see docs/LAUNCH_CHECKLIST.md); until then it is a one-line way back.
  */
 export function BookingEmbed() {
   return (

@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { BookingEmbed } from "@/components/BookingEmbed";
+import { BookingFlow } from "@/components/booking/BookingFlow";
 import { TrustRow } from "@/components/TrustRow";
 import { availability, business, cp12 } from "@/lib/business";
 import { JsonLd, breadcrumbSchema, serviceSchema } from "@/lib/schema";
@@ -19,9 +19,9 @@ export default function BookPage() {
             Book your gas safety certificate
           </h1>
           <p className="mt-4 max-w-2xl text-lg leading-relaxed text-navy-100">
-            Pick a slot below and it goes straight into the engineer&rsquo;s
-            diary — you will get a confirmation by email. {cp12.payment}, so
-            there is nothing to pay now.
+            {cp12.priceTotalDisplay} · {cp12.payment}. Choose an available
+            appointment below and it goes straight into the engineer&rsquo;s
+            diary — confirmed on the spot, with nothing to pay now.
           </p>
         </div>
       </section>
@@ -32,8 +32,8 @@ export default function BookPage() {
         </div>
       </section>
 
-      <section className="mx-auto max-w-5xl px-4 py-12">
-        <BookingEmbed />
+      <section className="mx-auto max-w-3xl px-4 py-12">
+        <BookingFlow />
       </section>
 
       <section className="mx-auto max-w-5xl px-4 pb-16">

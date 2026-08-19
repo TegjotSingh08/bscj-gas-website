@@ -21,8 +21,18 @@ Things that genuinely stop the site going up.
       defined in one place (`src/lib/business.ts`)
 - [x] No invented reviews, ratings, guarantees or accreditations anywhere
 - [x] No review/rating structured data (there are no verified reviews yet)
-- [x] Google Calendar embed loads and shows genuine availability
-- [x] Direct booking fallback link if the embed fails
+- [x] Custom BSCJ booking flow replaces the Google iframe (no Google branding,
+      no customer sign-in)
+- [x] Availability engine unit tested — 38 tests covering working hours,
+      buffers, minimum notice, DST, daily cap, pricing and validation
+- [x] Server re-checks availability immediately before creating any event
+- [x] Duplicate submissions cannot create two bookings (deterministic event id)
+- [x] Price always derived server-side, never taken from the browser
+- [x] Booking fallback (alternative page / call / WhatsApp) when availability
+      cannot be loaded
+- [ ] **Google Calendar service account created and calendar shared** —
+      follow `docs/GOOGLE_CALENDAR_SETUP.md`. Until this is done the booking
+      page shows the fallback screen.
 - [x] Phone and WhatsApp links verified identical on every page
 - [x] No horizontal overflow at 375 / 390 / 430 / 768 / 1280 px
 - [x] 404 page returns a real 404 status
@@ -35,10 +45,20 @@ Must be checked by a human on the live site, after deployment.
 - [ ] **Google Workspace email still works** — send and receive a test message
       after any DNS change. MX records must not be touched.
 - [ ] HTTPS certificate is active and the site loads without warnings
-- [ ] Make one real test booking end to end, and confirm it lands in the
-      engineer's Google Calendar with the customer's answers attached
-- [ ] Confirm the booking confirmation email actually arrives
-- [ ] Cancel that test booking so it does not block a real slot
+- [ ] Add the three Google environment variables in Vercel and redeploy
+      (`GOOGLE_SERVICE_ACCOUNT_EMAIL`, `GOOGLE_PRIVATE_KEY`, `GOOGLE_CALENDAR_ID`)
+- [ ] Make one real test booking end to end on the live site, and confirm it
+      lands in the engineer's Google Calendar with name, phone, email,
+      property, appliance count and price in the description
+- [ ] Confirm the busy slot then disappears from the website's availability
+- [ ] Try booking the same slot from a second browser and confirm it is
+      refused with "that appointment has just been taken"
+- [ ] Double-click Confirm and check only one event is created
+- [ ] Check a Saturday shows as unavailable, and that today only offers slots
+      more than 12 hours away
+- [ ] Cancel the test booking so it does not block a real slot
+- [ ] Confirm no confirmation email is promised anywhere the site does not
+      actually send one
 - [ ] Tap the Call button on a real phone and confirm it dials 07494 949648
 - [ ] Tap WhatsApp on a real phone and confirm it opens the right chat
 - [ ] Check the Google Calendar booking form asks for: property address,
@@ -55,6 +75,9 @@ Must be checked by a human on the live site, after deployment.
 
 Genuinely useful, but none of it should delay going live.
 
+- [ ] Delete `src/components/BookingEmbed.tsx` once a real booking has been
+      made through the new flow on the live site — it is the rollback path to
+      the old Google iframe and is not rendered anywhere
 - [ ] Create and verify a Google Business Profile for Wolverhampton — this is
       the single biggest local-SEO win available and is currently missing
 - [ ] Start collecting reviews. Once there are genuine ones, they can be shown

@@ -1,0 +1,97 @@
+/** Server-side validation for the booking form. */
+
+import { z } from "zod";
+import { MAX_APPLIANCES } from "./pricing";
+
+const trimmed = (min: number, max: number, label: string) =>
+  z
+    .string()
+    .trim()
+    .min(min, `Please enter ${label}.`)
+    .max(max, `${label} is too long.`);
+
+/** UK mobile or landline, tolerant of spaces, +44 and brackets. */
+const ukPhone = z
+  .string()
+  .trim()
+  .min(10, "Please enter a contact number.")
+  .max(20, "That number looks too long.")
+  .refine(
+    (value) => /^(\+?44|0)[\d\s()-]{9,17}$/.test(value),
+    "Please enter a valid UK phone number.",
+  );
+
+const ukPostcode = z
+  .string()
+  .trim()
+  .toUpperCase()
+  .refine(
+    (value) => /^[A-Z]{1,2}\d[A-Z\d]?\s?\d[A-Z]{2}$/.test(value),
+    "Please enter a valid UK postcode.",
+  );
+
+export const customerTypes = [
+  "landlord",
+  "letting-agent",
+  "tenant",
+  "homeowner",
+] as const;
+
+export const customerTypeLabels: Record<(typeof customerTypes)[number], string> =
+  {
+    landlord: "Landlord",
+    "letting-agent": "Letting agent",
+    tenant: "Tenant",
+    homeowner: "Homeowner",
+  };
+
+export const bookingSchema = z.object({
+  /** ISO instant of the chosen slot start. Re-validated against availability. */
+  slotStart: z.string().datetime({ message: "Please choose an appointment." }),
+
+  fullName: trimmed(2, 80, "your full name"),
+  email: z.string().trim().toLowerCase().email("Please enter a valid email address."),
+  phone: ukPhone,
+
+  propertyAddress: trimmed(5, 200, "the property address"),
+  postcode: ukPostcode,
+
+  customerType: z.enum(customerTypes, {
+    message: "Please choose whether you are a landlord, agent, tenant or homeowner.",
+  }),
+  applianceCount: z.coerce
+    .number()
+    .int("Please choose a number of appliances.")
+    .min(1, "There must be at least one appliance.")
+    .max(MAX_APPLIANCES, `Please call us for more than ${MAX_APPLIANCES} appliances.`),
+
+  tenantName: z.string().trim().max(80).optional().or(z.literal("")),
+  tenantPhone: z.string().trim().max(20).optional().or(z.literal("")),
+  accessNotes: z.string().trim().max(500).optional().or(z.literal("")),
+
+  /** Stable per-attempt id so a double click cannot create two bookings. */
+  idempotencyKey: z
+    .string()
+    .trim()
+    .min(8, "Please refresh the page and try again.")
+    .max(64, "Please refresh the page and try again."),
+
+  /** Honeypot — real customers never fill this in. */
+  company: z
+    .string()
+    .max(0, "Please refresh the page and try again.")
+    .optional()
+    .or(z.literal("")),
+});
+
+export type BookingInput = z.infer<typeof bookingSchema>;
+
+/**
+ * Booking payload shape. Deliberately carries the fields a future landlord /
+ * letting-agent portfolio would need (source, customer type, property
+ * reference) without introducing a database for them now.
+ */
+export type BookingRecord = BookingInput & {
+  source: "website";
+  propertyReference: string;
+};
