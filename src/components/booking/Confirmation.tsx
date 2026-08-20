@@ -1,6 +1,7 @@
 "use client";
 
 import { availability, business, cp12 } from "@/lib/business";
+import { emailNotice } from "@/lib/booking/confirmation-notice";
 
 export type ConfirmedBooking = {
   reference: string;
@@ -17,6 +18,8 @@ export type ConfirmedBooking = {
 };
 
 export function Confirmation({ booking }: { booking: ConfirmedBooking }) {
+  const notice = emailNotice(booking);
+
   return (
     <section aria-labelledby="booking-confirmed" role="status">
       <div className="rounded-2xl border-2 border-trust-600 bg-trust-50 p-6 text-center sm:p-8">
@@ -35,27 +38,58 @@ export function Confirmation({ booking }: { booking: ConfirmedBooking }) {
         <p className="mt-2 text-base text-navy-800">
           Your appointment is confirmed and in the engineer&rsquo;s diary.
         </p>
-        {booking.emailSent && (
-          <p className="mt-3 text-sm font-semibold text-navy-800">
-            A confirmation has been sent to {booking.customerEmail}.
-          </p>
-        )}
       </div>
+
+      {/*
+        Informational, not a warning. Real testing showed the first email can
+        land in Junk, and the email carries the appointment time and booking
+        reference — so this needs to be noticed, without competing with the
+        green success state above it.
+      */}
+      {notice.kind === "sent" && (
+        <section
+          aria-labelledby="confirmation-email-sent"
+          className="mt-4 rounded-2xl border-2 border-navy-200 bg-navy-50 p-5 sm:p-6"
+        >
+          <div className="flex items-start gap-3">
+            <span
+              aria-hidden="true"
+              className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-navy-800 text-base text-white"
+            >
+              ✉
+            </span>
+            <div className="min-w-0">
+              <h3
+                id="confirmation-email-sent"
+                className="text-sm font-bold uppercase tracking-wide text-navy-700"
+              >
+                {notice.heading}
+              </h3>
+              <p className="mt-2 text-sm text-navy-800">{notice.intro}</p>
+              <p className="mt-1 break-words text-base font-extrabold text-navy-900">
+                {notice.email}
+              </p>
+              <p className="mt-3 text-base font-bold text-navy-900">
+                {notice.spamAdvice}
+              </p>
+              <p className="mt-2 text-sm leading-relaxed text-navy-700">
+                {notice.keepAdvice}
+              </p>
+            </div>
+          </div>
+        </section>
+      )}
 
       {/*
         The appointment exists either way. An email problem is shown as an
         amber note, never as a red failure state, so nobody thinks the booking
         did not go through.
       */}
-      {!booking.emailSent && (
+      {notice.kind === "failed" && (
         <div className="mt-4 rounded-2xl border-2 border-flame-500 bg-flame-400/15 p-5">
-          <p className="text-sm font-bold text-navy-900">
-            Your appointment is confirmed, but we could not send the
-            confirmation email.
-          </p>
+          <p className="text-sm font-bold text-navy-900">{notice.heading}</p>
           <p className="mt-1 text-sm leading-relaxed text-navy-800">
-            Please save the details below, or get in touch and quote your
-            booking reference. Nothing is wrong with your appointment.
+            {notice.body}
           </p>
         </div>
       )}

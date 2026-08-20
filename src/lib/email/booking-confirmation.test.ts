@@ -316,3 +316,161 @@ describe("the booking reference", () => {
     }
   });
 });
+
+
+describe("mobile responsiveness", () => {
+  const { html } = render();
+
+  test("a mobile breakpoint exists", () => {
+    assert.ok(html.includes("@media screen and (max-width: 600px)"));
+  });
+
+  test("desktop values stay inline, so Outlook desktop is unaffected", () => {
+    // Outlook desktop ignores <style> entirely and reads only inline styles.
+    // These are the desktop paddings and sizes the owner approved.
+    assert.ok(html.includes("padding:24px 12px"), "outer wrapper");
+    assert.ok(html.includes("padding:24px 28px"), "header");
+    assert.ok(html.includes("padding:22px 24px"), "appointment card");
+    assert.ok(html.includes("font-size:26px"), "desktop date size");
+  });
+
+  test("mobile overrides target padding, not readability", () => {
+    const mobileBlock = html.slice(html.indexOf("@media screen"), html.indexOf("</style>"));
+    // Nothing in the mobile rules drops body text below 12px.
+    const sizes = [...mobileBlock.matchAll(/font-size:\s*(\d+)px/g)].map((m) => Number(m[1]));
+    assert.ok(sizes.length > 0, "mobile rules should adjust some type");
+    assert.ok(
+      sizes.every((size) => size >= 16),
+      `mobile type must stay readable, found: ${sizes.join(", ")}`,
+    );
+  });
+
+  test("the appointment card is still the most prominent element on mobile", () => {
+    const mobileBlock = html.slice(html.indexOf("@media screen"), html.indexOf("</style>"));
+    const dateSize = Number(/\.m-date \{ font-size: (\d+)px/.exec(mobileBlock)?.[1]);
+    const timeSize = Number(/\.m-time \{ font-size: (\d+)px/.exec(mobileBlock)?.[1]);
+    assert.ok(dateSize >= 20, "the date should stay large");
+    assert.ok(timeSize >= 18, "the time should stay large");
+  });
+
+  test("contact buttons stack full width on mobile", () => {
+    const mobileBlock = html.slice(html.indexOf("@media screen"), html.indexOf("</style>"));
+    assert.ok(mobileBlock.includes(".m-btn"));
+    assert.ok(mobileBlock.includes("width: 100% !important"));
+    assert.ok(html.includes('class="m-btn"'));
+    assert.ok(html.includes('class="m-btncell"'));
+  });
+
+  test("the mobile classes are attached to the elements they target", () => {
+    for (const className of [
+      "m-wrap",
+      "m-head",
+      "m-sec",
+      "m-card",
+      "m-hero",
+      "m-date",
+      "m-time",
+      "m-ref",
+      "m-foot",
+      "m-step",
+    ]) {
+      assert.ok(
+        html.includes(`class="${className}`) || html.includes(` ${className}"`),
+        `${className} is defined but never used`,
+      );
+    }
+  });
+
+  test("no fragile or unsupported CSS is introduced", () => {
+    assert.ok(!html.includes("display:flex"));
+    assert.ok(!html.includes("display: flex"));
+    assert.ok(!html.includes("display:grid"));
+    assert.ok(!html.includes("position:absolute"));
+    assert.ok(!/@import/.test(html));
+    assert.ok(!/<script/i.test(html));
+  });
+});
+
+describe("contrast and dark mode resilience", () => {
+  const { html } = render();
+
+  /** WCAG relative luminance. */
+  function contrast(a: string, b: string): number {
+    const luminance = (hex: string) => {
+      const channels = [1, 3, 5]
+        .map((index) => parseInt(hex.substr(index, 2), 16) / 255)
+        .map((value) =>
+          value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4,
+        );
+      return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+    };
+    const [lighter, darker] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return (lighter + 0.05) / (darker + 0.05);
+  }
+
+  test("the appointment time meets the large-text contrast threshold", () => {
+    // #f78d09 was 2.39:1 on white and failed; #db7304 reaches 3.25:1.
+    assert.ok(html.includes("#db7304"), "the darker brand orange should be used");
+    assert.ok(!html.includes("color:#f78d09"), "the failing orange should not be text");
+    assert.ok(contrast("#db7304", "#ffffff") >= 3);
+  });
+
+  test("body text on white comfortably passes", () => {
+    assert.ok(contrast("#112643", "#ffffff") >= 4.5);
+    assert.ok(contrast("#1c3a63", "#ffffff") >= 4.5);
+  });
+
+  test("footer text passes despite being secondary", () => {
+    assert.ok(contrast("#1c3a63", "#ffffff") >= 4.5);
+  });
+
+  test("header text passes on the navy background", () => {
+    assert.ok(contrast("#ffffff", "#0b1b30") >= 4.5);
+    assert.ok(contrast("#ffab2e", "#0b1b30") >= 4.5);
+  });
+
+  test("cards carry borders, so they survive a client flattening backgrounds", () => {
+    // Outlook mobile recolours backgrounds in dark mode. A card defined only
+    // by its fill would disappear; a border keeps it distinguishable.
+    assert.ok(html.includes("border:2px solid #0b1b30"), "appointment card border");
+    assert.ok(html.includes("border:1px solid #c2d5ec"), "property card border");
+    assert.ok(html.includes("border-left:4px solid #0f7a52"), "success marker");
+  });
+
+  test("the success state is not signalled by colour alone", () => {
+    // "You're booked." carries the meaning; the green is reinforcement.
+    assert.ok(html.includes("You&rsquo;re booked."));
+  });
+
+  test("the colour scheme is declared for clients that honour it", () => {
+    assert.ok(html.includes('name="color-scheme"'));
+    assert.ok(html.includes('name="supported-color-schemes"'));
+  });
+});
+
+describe("the keep-this-email reminder", () => {
+  test("appears in the html", () => {
+    assert.ok(
+      render().html.includes(
+        "Keep this email for your appointment details and booking reference.",
+      ),
+    );
+  });
+
+  test("appears in the plain text", () => {
+    assert.ok(
+      render().text.includes(
+        "Keep this email for your appointment details and booking reference.",
+      ),
+    );
+  });
+
+  test("does not tell the reader to check their spam folder", () => {
+    // They are already reading it. That guidance belongs on the website.
+    const { html, text } = render();
+    assert.ok(!/junk/i.test(html));
+    assert.ok(!/spam/i.test(html));
+    assert.ok(!/junk/i.test(text));
+    assert.ok(!/spam/i.test(text));
+  });
+});
