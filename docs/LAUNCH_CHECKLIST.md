@@ -34,6 +34,14 @@ Things that genuinely stop the site going up.
       slot at once. Atomic SET NX EX in Upstash Redis; TTL is authoritative
 - [x] Rate limiting moved to the shared store so it holds across Vercel
       instances, with a per-instance fallback during an outage
+- [x] Branded booking confirmation email, sent only after the calendar event
+      exists. An email failure never fails a booking
+- [x] Customer-safe booking reference (BSCJ-XXXXXX) on both the confirmation
+      page and the email
+- [ ] **Resend account created, domain verified, API key set** — see
+      `docs/EMAIL_SETUP.md`. Adding DNS records must not touch the existing
+      Google Workspace MX records. Without it bookings still complete and the
+      customer sees an amber "could not send email" note.
 - [ ] **Upstash Redis database created and its two variables set** —
       see `docs/REDIS_SETUP.md`. Without it holds are skipped and booking
       falls back to first-confirmed-wins, which is safe but allows two people
@@ -70,6 +78,12 @@ Must be checked by a human on the live site, after deployment.
 - [ ] Use Change time, let the switch fail (hold the target in another
       browser), and confirm the original reservation is still held
 - [ ] Use Cancel booking and confirm the slot returns to availability
+- [ ] Make a live test booking with your own email address and confirm the
+      confirmation email arrives, renders correctly on a phone, and shows the
+      right date, time, property, price and booking reference
+- [ ] Confirm the reply-to address reaches an inbox you actually read
+- [ ] Confirm Google Workspace email still sends and receives after the DNS
+      changes
 - [ ] Confirm an expired hold returns the customer to time selection rather
       than creating a booking
 - [ ] Check a Saturday shows as unavailable, and that today only offers slots

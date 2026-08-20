@@ -17,7 +17,10 @@ import {
 } from "@/lib/booking/rate-limit";
 import { bookingSchema, customerTypeLabels } from "@/lib/booking/schema";
 import { isSlotStillAvailable } from "@/lib/booking/slots";
+import { bookingReference } from "@/lib/booking/reference";
 import { formatLongDate, isoDateInZone, timeLabelInZone } from "@/lib/booking/time";
+import { renderBookingConfirmationEmail } from "@/lib/email/booking-confirmation";
+import { sendBookingConfirmation } from "@/lib/email/send";
 import {
   buildEventId,
   CalendarApiError,
@@ -28,6 +31,17 @@ import {
 } from "@/lib/google/calendar";
 
 export const dynamic = "force-dynamic";
+
+/** "Thursday 20 August" for the email subject, in the booking timezone. */
+function formatSubjectDate(isoDate: string, timeZone: string): string {
+  const [year, month, day] = isoDate.split("-").map(Number);
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  }).format(Date.UTC(year, month - 1, day, 12));
+}
 
 /** Strips control characters so nothing odd lands in the calendar entry. */
 function clean(value: string): string {
@@ -173,24 +187,58 @@ export async function POST(request: Request) {
       end,
     });
 
+    // ---------------------------------------------------------------
+    // From this point the appointment EXISTS. Nothing below may fail the
+    // booking: the calendar event is the source of truth and it is written.
+    // ---------------------------------------------------------------
+
     // The slot is now a real calendar event: the reservation has done its job.
     await markBookingCompleted(data.idempotencyKey, event.id);
     if (typeof data.holdToken === "string") {
       await releaseHold(data.slotStart, data.holdToken);
     }
 
+    const reference = bookingReference(event.id);
+    const dateLabel = formatLongDate(dateIso, bookingConfig.timeZone);
+    const startLabel = timeLabelInZone(start, bookingConfig.timeZone);
+    const endLabel = timeLabelInZone(end, bookingConfig.timeZone);
+
+    const confirmationEmail = renderBookingConfirmationEmail({
+      reference,
+      customerName: clean(data.fullName),
+      dateLabel,
+      startLabel,
+      endLabel,
+      subjectDateLabel: formatSubjectDate(dateIso, bookingConfig.timeZone),
+      propertyAddress: clean(data.propertyAddress),
+      postcode: clean(data.postcode),
+      applianceCount: price.applianceCount,
+      // Server-derived total, never the figure the browser displayed.
+      priceTotal: price.total,
+    });
+
+    // sendBookingConfirmation never throws, so this cannot turn a confirmed
+    // appointment into a failed one. A failure becomes a warning on screen.
+    const emailResult = await sendBookingConfirmation({
+      to: data.email,
+      email: confirmationEmail,
+      reference,
+    });
+
     return NextResponse.json({
       ok: true,
       booking: {
-        eventId: event.id,
-        dateLabel: formatLongDate(dateIso, bookingConfig.timeZone),
-        startLabel: timeLabelInZone(start, bookingConfig.timeZone),
-        endLabel: timeLabelInZone(end, bookingConfig.timeZone),
+        reference,
+        dateLabel,
+        startLabel,
+        endLabel,
         propertyAddress: clean(data.propertyAddress),
         postcode: clean(data.postcode),
         priceTotal: price.total,
         priceDisplay: price.totalDisplay,
         contactPhone: business.phoneDisplay,
+        customerEmail: data.email,
+        emailSent: emailResult.status === "sent",
       },
     });
   } catch (error) {

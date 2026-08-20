@@ -3,7 +3,7 @@
 import { availability, business, cp12 } from "@/lib/business";
 
 export type ConfirmedBooking = {
-  eventId: string;
+  reference: string;
   dateLabel: string;
   startLabel: string;
   endLabel: string;
@@ -12,6 +12,8 @@ export type ConfirmedBooking = {
   priceTotal: number;
   priceDisplay: string;
   contactPhone: string;
+  customerEmail: string;
+  emailSent: boolean;
 };
 
 export function Confirmation({ booking }: { booking: ConfirmedBooking }) {
@@ -33,7 +35,30 @@ export function Confirmation({ booking }: { booking: ConfirmedBooking }) {
         <p className="mt-2 text-base text-navy-800">
           Your appointment is confirmed and in the engineer&rsquo;s diary.
         </p>
+        {booking.emailSent && (
+          <p className="mt-3 text-sm font-semibold text-navy-800">
+            A confirmation has been sent to {booking.customerEmail}.
+          </p>
+        )}
       </div>
+
+      {/*
+        The appointment exists either way. An email problem is shown as an
+        amber note, never as a red failure state, so nobody thinks the booking
+        did not go through.
+      */}
+      {!booking.emailSent && (
+        <div className="mt-4 rounded-2xl border-2 border-flame-500 bg-flame-400/15 p-5">
+          <p className="text-sm font-bold text-navy-900">
+            Your appointment is confirmed, but we could not send the
+            confirmation email.
+          </p>
+          <p className="mt-1 text-sm leading-relaxed text-navy-800">
+            Please save the details below, or get in touch and quote your
+            booking reference. Nothing is wrong with your appointment.
+          </p>
+        </div>
+      )}
 
       <div className="mt-5 rounded-2xl border border-navy-100 bg-white p-6">
         <dl className="space-y-4">
@@ -58,6 +83,14 @@ export function Confirmation({ booking }: { booking: ConfirmedBooking }) {
               £{booking.priceTotal} total — {cp12.payment.toLowerCase()}
             </dd>
           </div>
+          <div>
+            <dt className="text-sm font-semibold text-navy-600">
+              Booking reference
+            </dt>
+            <dd className="text-base font-extrabold tracking-wider text-navy-900">
+              {booking.reference}
+            </dd>
+          </div>
         </dl>
 
         <div className="mt-6 border-t border-navy-100 pt-5 text-sm leading-relaxed text-navy-800">
@@ -71,8 +104,9 @@ export function Confirmation({ booking }: { booking: ConfirmedBooking }) {
               {cp12.certificateDelivery}.
             </li>
             <li>
-              Please write this appointment down — we have not sent you a
-              confirmation email.
+              {booking.emailSent
+                ? "Keep the confirmation email for your records, or note the details above."
+                : "Please note these details down, as we could not email them to you."}
             </li>
           </ul>
         </div>
@@ -108,7 +142,7 @@ export function Confirmation({ booking }: { booking: ConfirmedBooking }) {
         </div>
 
         <p className="mt-4 text-center text-xs text-navy-500">
-          Booking reference: {booking.eventId.slice(0, 12)}
+          Quote {booking.reference} if you contact us about this appointment.
         </p>
       </div>
     </section>

@@ -27,8 +27,18 @@ function firstExisting(basePath) {
   return null;
 }
 
+/** Specifiers that only exist inside the Next runtime. */
+const STUBS = {
+  "next/server": path.resolve(process.cwd(), "scripts/next-server-stub.mjs"),
+};
+
 registerHooks({
   resolve(specifier, context, nextResolve) {
+    const stub = STUBS[specifier];
+    if (stub) {
+      return { url: pathToFileURL(stub).href, shortCircuit: true };
+    }
+
     let target = null;
 
     if (specifier.startsWith("@/")) {
