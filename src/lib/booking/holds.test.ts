@@ -466,3 +466,127 @@ describe("double-clicking confirm creates one booking", () => {
     );
   });
 });
+
+
+describe("switching slots never costs the customer their reservation", () => {
+  test("the replacement is taken before the original is released", async () => {
+    const first = await acquireHold(SLOT_A, undefined, kv);
+    if (first.status !== "acquired") return assert.fail();
+
+    const switched = await acquireHold(
+      SLOT_B,
+      { slotStart: SLOT_A, token: first.token },
+      kv,
+    );
+    assert.equal(switched.status, "acquired");
+
+    // Exactly one hold afterwards, and it is the new one.
+    assert.equal(await kv.get(`booking-hold:${SLOT_A}`), null);
+    assert.notEqual(await kv.get(`booking-hold:${SLOT_B}`), null);
+  });
+
+  test("the old slot is immediately available to someone else", async () => {
+    const first = await acquireHold(SLOT_A, undefined, kv);
+    if (first.status !== "acquired") return assert.fail();
+    await acquireHold(SLOT_B, { slotStart: SLOT_A, token: first.token }, kv);
+
+    // No waiting for a TTL: another customer can take the vacated slot at once.
+    const someoneElse = await acquireHold(SLOT_A, undefined, kv);
+    assert.equal(someoneElse.status, "acquired");
+  });
+
+  test("a failed switch leaves the original reservation intact", async () => {
+    const mine = await acquireHold(SLOT_A, undefined, kv);
+    if (mine.status !== "acquired") return assert.fail();
+
+    // Someone else takes the slot I am about to switch to.
+    const theirs = await acquireHold(SLOT_B, undefined, kv);
+    assert.equal(theirs.status, "acquired");
+
+    const attempt = await acquireHold(
+      SLOT_B,
+      { slotStart: SLOT_A, token: mine.token },
+      kv,
+    );
+    assert.equal(attempt.status, "taken");
+
+    // This is the regression: my original reservation must still be mine.
+    assert.equal((await checkHold(SLOT_A, mine.token, kv)).status, "valid");
+  });
+
+  test("a failed switch does not disturb the other customer's hold either", async () => {
+    const mine = await acquireHold(SLOT_A, undefined, kv);
+    const theirs = await acquireHold(SLOT_B, undefined, kv);
+    if (mine.status !== "acquired" || theirs.status !== "acquired") {
+      return assert.fail();
+    }
+
+    await acquireHold(SLOT_B, { slotStart: SLOT_A, token: mine.token }, kv);
+    assert.equal((await checkHold(SLOT_B, theirs.token, kv)).status, "valid");
+  });
+
+  test("the new reservation gets a full fresh thirty minutes", async () => {
+    const first = await acquireHold(SLOT_A, undefined, kv);
+    if (first.status !== "acquired") return assert.fail();
+
+    // Most of the original reservation is used up before switching.
+    kv.advanceSeconds(HOLD_DURATION_SECONDS - 120);
+
+    const switched = await acquireHold(
+      SLOT_B,
+      { slotStart: SLOT_A, token: first.token },
+      kv,
+    );
+    assert.equal(switched.status, "acquired");
+    assert.equal(await kv.ttl(`booking-hold:${SLOT_B}`), HOLD_DURATION_SECONDS);
+  });
+
+  test("switching repeatedly still leaves exactly one hold", async () => {
+    const slots = [SLOT_A, SLOT_B, "2026-08-20T15:00:00.000Z"];
+    let current = await acquireHold(slots[0], undefined, kv);
+    if (current.status !== "acquired") return assert.fail();
+
+    for (const slot of slots.slice(1)) {
+      const previousSlot = current.status === "acquired" ? current.slotStart : "";
+      const previousToken = current.status === "acquired" ? current.token : "";
+      current = await acquireHold(
+        slot,
+        { slotStart: previousSlot, token: previousToken },
+        kv,
+      );
+      assert.equal(current.status, "acquired");
+    }
+
+    const held = await findHeldSlots(slots, undefined, kv);
+    assert.equal(held.size, 1);
+    assert.ok(held.has(slots[slots.length - 1]));
+  });
+
+  test("cancelling a booking releases the slot for everyone else", async () => {
+    const mine = await acquireHold(SLOT_A, undefined, kv);
+    if (mine.status !== "acquired") return assert.fail();
+
+    assert.equal(await releaseHold(SLOT_A, mine.token, kv), true);
+    assert.equal((await acquireHold(SLOT_A, undefined, kv)).status, "acquired");
+  });
+
+  test("another browser cannot see or take the actively held slot", async () => {
+    const mine = await acquireHold(SLOT_A, undefined, kv);
+    if (mine.status !== "acquired") return assert.fail();
+
+    // What the other browser's availability call computes: no own-hold header.
+    const heldForOthers = await findHeldSlots([SLOT_A, SLOT_B], undefined, kv);
+    assert.ok(heldForOthers.has(SLOT_A));
+
+    // And it cannot take it even by posting directly.
+    assert.equal((await acquireHold(SLOT_A, undefined, kv)).status, "taken");
+
+    // While my own availability call still shows it as mine.
+    const heldForMe = await findHeldSlots(
+      [SLOT_A, SLOT_B],
+      { slotStart: SLOT_A, token: mine.token },
+      kv,
+    );
+    assert.ok(!heldForMe.has(SLOT_A));
+  });
+});

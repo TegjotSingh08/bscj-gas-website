@@ -65,6 +65,11 @@ Must be checked by a human on the live site, after deployment.
 - [ ] Two-browser hold test: reserve a slot in one browser, confirm it
       disappears from the other browser's availability
 - [ ] Confirm the countdown appears and turns orange under 5 minutes
+- [ ] Confirm the reservation survives Details, Review and back navigation
+      without the countdown resetting
+- [ ] Use Change time, let the switch fail (hold the target in another
+      browser), and confirm the original reservation is still held
+- [ ] Use Cancel booking and confirm the slot returns to availability
 - [ ] Confirm an expired hold returns the customer to time selection rather
       than creating a booking
 - [ ] Check a Saturday shows as unavailable, and that today only offers slots

@@ -71,8 +71,10 @@ export function isWellFormedToken(token: unknown): token is string {
  * Attempts to reserve a slot. Atomic: exactly one caller can win, because the
  * underlying write is SET NX EX.
  *
- * Releasing any previous hold first is what stops a single session
- * accumulating reservations as the customer changes their mind.
+ * When switching times, the replacement is acquired first and the previous
+ * reservation released only once that succeeds. A booking attempt therefore
+ * owns exactly zero or one hold at any moment a customer could observe it,
+ * and a failed switch leaves the original reservation intact.
  */
 export async function acquireHold(
   slotStartIso: string,
@@ -82,12 +84,11 @@ export async function acquireHold(
   if (!client) return { status: "unavailable" };
 
   try {
-    if (previous && previous.slotStart !== slotStartIso) {
-      // Best effort: if this fails the old hold simply expires on its TTL.
-      await releaseHold(previous.slotStart, previous.token, client);
-    }
-
     const token = generateHoldToken();
+
+    // Acquire the replacement BEFORE letting go of anything. Releasing first
+    // would leave a customer with no reservation at all whenever the slot they
+    // were switching to had just been taken.
     const won = await client.setIfAbsent(
       holdKey(slotStartIso),
       token,
@@ -95,7 +96,7 @@ export async function acquireHold(
     );
 
     if (!won) {
-      // Re-acquiring a slot this session already owns is not a conflict.
+      // Re-selecting the slot this attempt already owns is not a conflict.
       if (previous && previous.slotStart === slotStartIso) {
         const existing = await client.get(holdKey(slotStartIso));
         if (existing && tokensMatch(existing, previous.token)) {
@@ -110,7 +111,15 @@ export async function acquireHold(
           };
         }
       }
+      // The old reservation is deliberately left untouched.
       return { status: "taken" };
+    }
+
+    // Only now is the previous reservation given up, so the attempt owns
+    // exactly one hold at every point a customer could observe it.
+    if (previous && previous.slotStart !== slotStartIso) {
+      // Best effort: if this fails the old hold expires on its own TTL.
+      await releaseHold(previous.slotStart, previous.token, client);
     }
 
     return {
