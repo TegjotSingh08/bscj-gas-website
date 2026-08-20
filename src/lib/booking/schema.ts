@@ -69,6 +69,15 @@ export const bookingSchema = z.object({
   tenantPhone: z.string().trim().max(20).optional().or(z.literal("")),
   accessNotes: z.string().trim().max(500).optional().or(z.literal("")),
 
+  /**
+   * Opaque reservation token. Optional: when the reservation store is
+   * unavailable the customer still books, and Google Calendar decides.
+   */
+  holdToken: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/, "Please choose your appointment time again.")
+    .optional(),
+
   /** Stable per-attempt id so a double click cannot create two bookings. */
   idempotencyKey: z
     .string()

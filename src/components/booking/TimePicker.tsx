@@ -17,12 +17,15 @@ export function TimePicker({
   date,
   slots,
   selected,
+  busy = false,
   onSelect,
   onChangeDate,
 }: {
   date: string;
   slots: Slot[];
   selected: Slot | null;
+  /** True while a reservation is being acquired. */
+  busy?: boolean;
   onSelect: (slot: Slot) => void;
   onChangeDate: () => void;
 }) {
@@ -42,6 +45,7 @@ export function TimePicker({
       </div>
       <p className="mt-1 text-sm text-navy-600">
         {longDate(date)} · appointments take about {cp12.durationMinutes} minutes
+        {busy && " · reserving your slot…"}
       </p>
 
       {slots.length === 0 ? (
@@ -66,9 +70,10 @@ export function TimePicker({
                 key={slot.startIso}
                 type="button"
                 onClick={() => onSelect(slot)}
+                disabled={busy}
                 aria-pressed={isSelected}
                 className={[
-                  "min-h-14 rounded-xl border-2 text-base font-bold transition",
+                  "min-h-14 rounded-xl border-2 text-base font-bold transition disabled:opacity-50",
                   isSelected
                     ? "border-navy-900 bg-navy-900 text-white"
                     : "border-navy-200 bg-white text-navy-900 hover:border-flame-500 hover:bg-flame-500 hover:text-white",

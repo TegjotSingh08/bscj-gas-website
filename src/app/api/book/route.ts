@@ -3,7 +3,18 @@ import { NextResponse } from "next/server";
 import { business } from "@/lib/business";
 import { bookingConfig } from "@/lib/booking/config";
 import { calculatePrice } from "@/lib/booking/pricing";
-import { clientKey, pruneRateLimits, rateLimit } from "@/lib/booking/rate-limit";
+import {
+  checkHold,
+  findCompletedBooking,
+  markBookingCompleted,
+  releaseHold,
+} from "@/lib/booking/holds";
+import {
+  clientKey,
+  pruneRateLimits,
+  rateLimit,
+  rateLimits,
+} from "@/lib/booking/rate-limit";
 import { bookingSchema, customerTypeLabels } from "@/lib/booking/schema";
 import { isSlotStillAvailable } from "@/lib/booking/slots";
 import { formatLongDate, isoDateInZone, timeLabelInZone } from "@/lib/booking/time";
@@ -25,7 +36,11 @@ function clean(value: string): string {
 
 export async function POST(request: Request) {
   pruneRateLimits();
-  const limited = rateLimit(`book:${clientKey(request)}`, 8, 10 * 60_000);
+  const limited = await rateLimit(
+    `book:${clientKey(request)}`,
+    rateLimits.booking.limit,
+    rateLimits.booking.windowSeconds,
+  );
   if (!limited.ok) {
     return NextResponse.json(
       {
@@ -65,6 +80,36 @@ export async function POST(request: Request) {
   if (data.company) {
     return NextResponse.json({ error: "rejected" }, { status: 400 });
   }
+
+  // A repeat submission of an attempt that already succeeded. Checked before
+  // the hold, because a successful booking deletes its own hold — without this
+  // a double click would be reported as an expired reservation.
+  const alreadyBooked = await findCompletedBooking(data.idempotencyKey);
+  if (alreadyBooked) {
+    return NextResponse.json(
+      { error: "duplicate", message: "That booking has already been made." },
+      { status: 409 },
+    );
+  }
+
+  // The reservation must still exist, belong to this attempt, and match this
+  // slot. The browser only carries an opaque token; slot, ownership and expiry
+  // are all decided here.
+  const hold = await checkHold(data.slotStart, data.holdToken);
+  if (hold.status === "expired" || hold.status === "mismatch") {
+    return NextResponse.json(
+      {
+        error: "hold_expired",
+        message:
+          "Your reserved appointment has expired. Please choose another available time.",
+      },
+      { status: 409 },
+    );
+  }
+  // hold.status === "unavailable" means the reservation store is unreachable,
+  // not that the slot is free. Booking continues, and the Google Calendar
+  // re-check below is what keeps it safe — first confirmed wins, exactly as
+  // before holds existed. That check is never skipped.
 
   // Price is always derived here — never taken from the client.
   const price = calculatePrice(data.applianceCount);
@@ -127,6 +172,12 @@ export async function POST(request: Request) {
       start,
       end,
     });
+
+    // The slot is now a real calendar event: the reservation has done its job.
+    await markBookingCompleted(data.idempotencyKey, event.id);
+    if (typeof data.holdToken === "string") {
+      await releaseHold(data.slotStart, data.holdToken);
+    }
 
     return NextResponse.json({
       ok: true,

@@ -11,16 +11,39 @@ import { ReviewStep } from "./ReviewStep";
 import { Confirmation, type ConfirmedBooking } from "./Confirmation";
 import { StepIndicator } from "./StepIndicator";
 import { BookingFallback } from "./BookingFallback";
+import { HoldBanner } from "./HoldBanner";
 
 export type Slot = { startIso: string; endIso: string; label: string };
 export type DayAvailability = { date: string; slots: Slot[] };
 
 type LoadState = "loading" | "ready" | "failed";
 
+/** What the server told us about our reservation. Server TTL is authoritative. */
+type Hold = {
+  token: string | null;
+  slotStart: string;
+  expiresAt: string | null;
+  /** True when there is no reservation store and Google alone decides. */
+  degraded: boolean;
+};
+
+/** Mirrors HOLD_WARNING_SECONDS on the server. */
+const HOLD_WARNING_SECONDS = 300;
+
 /** Pure fetcher: no React state, so it can live outside the component. */
-async function fetchAvailability(): Promise<DayAvailability[] | null> {
+async function fetchAvailability(
+  hold?: Hold | null,
+): Promise<DayAvailability[] | null> {
   try {
-    const response = await fetch("/api/availability", { cache: "no-store" });
+    const headers: Record<string, string> = {};
+    if (hold?.token) {
+      headers["x-hold-slot"] = hold.slotStart;
+      headers["x-hold-token"] = hold.token;
+    }
+    const response = await fetch("/api/availability", {
+      cache: "no-store",
+      headers,
+    });
     if (!response.ok) return null;
     const data = (await response.json()) as { days?: DayAvailability[] };
     return data.days ?? [];
@@ -60,6 +83,8 @@ export function BookingFlow() {
   const [formError, setFormError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [confirmed, setConfirmed] = useState<ConfirmedBooking | null>(null);
+  const [hold, setHold] = useState<Hold | null>(null);
+  const [holdPending, setHoldPending] = useState(false);
 
   /**
    * Bring each new step into view. Without this the customer can advance a
@@ -112,9 +137,9 @@ export function BookingFlow() {
   }, []);
 
   /** Re-reads availability from a handler — after a retry, or a lost slot. */
-  const refreshAvailability = useCallback(async () => {
+  const refreshAvailability = useCallback(async (current?: Hold | null) => {
     setLoadState("loading");
-    const result = await fetchAvailability();
+    const result = await fetchAvailability(current);
     if (result) {
       setDays(result);
       setLoadState("ready");
@@ -139,10 +164,74 @@ export function BookingFlow() {
     setStep(2);
   }
 
-  function handleSelectSlot(slot: Slot) {
-    setSelectedSlot(slot);
-    setStep(3);
+  /**
+   * Reserves the chosen slot before moving on. Any previous reservation is
+   * passed so the server can release it — one session never accumulates holds.
+   */
+  async function handleSelectSlot(slot: Slot) {
+    setHoldPending(true);
+    setFormError(null);
+
+    try {
+      const response = await fetch("/api/hold", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          slotStart: slot.startIso,
+          previous:
+            hold?.token && hold.slotStart !== slot.startIso
+              ? { slotStart: hold.slotStart, token: hold.token }
+              : undefined,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (response.status === 409) {
+        setFormError(
+          data.message ??
+            "Sorry — that appointment is no longer available. Please choose another time.",
+        );
+        setSelectedSlot(null);
+        setHold(null);
+        await refreshAvailability(null);
+        return;
+      }
+
+      if (!response.ok) {
+        setFormError(
+          "We could not reserve that appointment. Please try another time, or call or WhatsApp us.",
+        );
+        return;
+      }
+
+      setHold({
+        token: data.token ?? null,
+        slotStart: slot.startIso,
+        expiresAt: data.expiresAt ?? null,
+        degraded: Boolean(data.degraded),
+      });
+      setSelectedSlot(slot);
+      setStep(3);
+    } catch {
+      setFormError(
+        "We could not reach our booking system. Please call or WhatsApp us and we will book you in.",
+      );
+    } finally {
+      setHoldPending(false);
+    }
   }
+
+  /** The reservation ran out. Never creates a booking — sends them back. */
+  const handleHoldExpired = useCallback(async () => {
+    setHold(null);
+    setSelectedSlot(null);
+    setStep(2);
+    setFormError(
+      "Your reserved appointment has expired. Please choose another available time.",
+    );
+    await refreshAvailability(null);
+  }, [refreshAvailability]);
 
   async function handleConfirm() {
     if (!selectedSlot) return;
@@ -157,6 +246,7 @@ export function BookingFlow() {
         body: JSON.stringify({
           ...details,
           slotStart: selectedSlot.startIso,
+          holdToken: hold?.token ?? undefined,
           idempotencyKey: ensureIdempotencyKey(),
         }),
       });
@@ -164,15 +254,26 @@ export function BookingFlow() {
       const data = await response.json();
 
       if (response.ok && data.ok) {
+        setHold(null);
         setConfirmed(data.booking as ConfirmedBooking);
+        return;
+      }
+
+      if (data.error === "hold_expired") {
+        setFormError(data.message);
+        setHold(null);
+        setSelectedSlot(null);
+        setStep(2);
+        await refreshAvailability(null);
         return;
       }
 
       if (data.error === "slot_taken") {
         setFormError(data.message);
         setSelectedSlot(null);
+        setHold(null);
         setStep(2);
-        await refreshAvailability();
+        await refreshAvailability(null);
         return;
       }
 
@@ -225,6 +326,14 @@ export function BookingFlow() {
         }}
       />
 
+      {hold?.expiresAt && (step === 3 || step === 4) && (
+        <HoldBanner
+          expiresAt={hold.expiresAt}
+          warningSeconds={HOLD_WARNING_SECONDS}
+          onExpired={() => void handleHoldExpired()}
+        />
+      )}
+
       {formError && (
         <p
           role="alert"
@@ -250,7 +359,8 @@ export function BookingFlow() {
             date={selectedDate}
             slots={slotsForSelectedDate}
             selected={selectedSlot}
-            onSelect={handleSelectSlot}
+            busy={holdPending}
+            onSelect={(slot) => void handleSelectSlot(slot)}
             onChangeDate={() => setStep(1)}
           />
         )}

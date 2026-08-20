@@ -30,6 +30,14 @@ Things that genuinely stop the site going up.
 - [x] Price always derived server-side, never taken from the browser
 - [x] Booking fallback (alternative page / call / WhatsApp) when availability
       cannot be loaded
+- [x] 30-minute appointment holds, so two customers cannot fill in the same
+      slot at once. Atomic SET NX EX in Upstash Redis; TTL is authoritative
+- [x] Rate limiting moved to the shared store so it holds across Vercel
+      instances, with a per-instance fallback during an outage
+- [ ] **Upstash Redis database created and its two variables set** —
+      see `docs/REDIS_SETUP.md`. Without it holds are skipped and booking
+      falls back to first-confirmed-wins, which is safe but allows two people
+      to reach the confirm step on one slot.
 - [ ] **Google Calendar service account created and calendar shared** —
       follow `docs/GOOGLE_CALENDAR_SETUP.md`. Until this is done the booking
       page shows the fallback screen.
@@ -54,6 +62,11 @@ Must be checked by a human on the live site, after deployment.
 - [ ] Try booking the same slot from a second browser and confirm it is
       refused with "that appointment has just been taken"
 - [ ] Double-click Confirm and check only one event is created
+- [ ] Two-browser hold test: reserve a slot in one browser, confirm it
+      disappears from the other browser's availability
+- [ ] Confirm the countdown appears and turns orange under 5 minutes
+- [ ] Confirm an expired hold returns the customer to time selection rather
+      than creating a booking
 - [ ] Check a Saturday shows as unavailable, and that today only offers slots
       more than 12 hours away
 - [ ] Cancel the test booking so it does not block a real slot
