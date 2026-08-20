@@ -30,12 +30,14 @@ export class CalendarNotConfiguredError extends Error {
 }
 
 export class CalendarApiError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-  ) {
+  // A plain field rather than a constructor parameter property: Node's
+  // type-stripping cannot parse the latter, and this module is unit tested.
+  readonly status: number;
+
+  constructor(message: string, status: number) {
     super(message);
     this.name = "CalendarApiError";
+    this.status = status;
   }
 }
 
@@ -97,7 +99,11 @@ async function getAccessToken(credentials: Credentials): Promise<string> {
     return cachedToken.value;
   }
 
-  const issuedAt = Math.floor(Date.now() / 1000);
+  // Backdated slightly: Google rejects an assertion whose iat is in the future,
+  // and a serverless host's clock can sit a second or two ahead. The lifetime
+  // stays within the one hour Google allows.
+  const CLOCK_SKEW_SECONDS = 30;
+  const issuedAt = Math.floor(Date.now() / 1000) - CLOCK_SKEW_SECONDS;
   const claims = {
     iss: credentials.clientEmail,
     scope: SCOPES,
@@ -178,15 +184,83 @@ export async function fetchBusyPeriods(
     );
   }
 
-  const data = (await response.json()) as {
-    calendars?: Record<string, { busy?: { start: string; end: string }[] }>;
-  };
+  return parseFreeBusyResponse(await response.json(), credentials.calendarId);
+}
 
-  const calendar = data.calendars?.[credentials.calendarId];
-  return (calendar?.busy ?? []).map((period) => ({
-    start: new Date(period.start),
-    end: new Date(period.end),
-  }));
+export type FreeBusyResponse = {
+  calendars?: Record<
+    string,
+    {
+      busy?: { start: string; end: string }[];
+      errors?: { domain?: string; reason?: string }[];
+    }
+  >;
+};
+
+/**
+ * Turns a free/busy response into busy periods, failing closed.
+ *
+ * This must never return an empty array when the truth is unknown. Google
+ * answers HTTP 200 even when it could not read the calendar — access revoked,
+ * wrong calendar id — and puts the reason in an `errors` array with `busy`
+ * absent. Reading that as "no busy periods" would make the site offer every
+ * slot on a diary it cannot see, and the pre-write re-check in /api/book uses
+ * this same function, so the safety net would fail with it. An unreadable
+ * calendar is an error, not a free one.
+ *
+ * Exported for testing.
+ */
+export function parseFreeBusyResponse(
+  data: FreeBusyResponse,
+  calendarId: string,
+): BusyPeriod[] {
+  const calendars = data.calendars;
+  if (!calendars) {
+    throw new CalendarApiError("Google Calendar returned no availability.", 502);
+  }
+
+  let entry = calendars[calendarId];
+  if (!entry) {
+    // Google may normalise the key it echoes back. Exactly one calendar is
+    // ever requested, so a single returned entry is unambiguous.
+    const keys = Object.keys(calendars);
+    if (keys.length === 1) entry = calendars[keys[0]];
+  }
+
+  if (!entry) {
+    throw new CalendarApiError(
+      "Google Calendar returned no availability for the configured calendar.",
+      502,
+    );
+  }
+
+  // Reason codes are not echoed back: they can name the calendar.
+  if (entry.errors?.length) {
+    throw new CalendarApiError(
+      "Google Calendar could not read the configured calendar.",
+      403,
+    );
+  }
+
+  if (!Array.isArray(entry.busy)) {
+    throw new CalendarApiError(
+      "Google Calendar returned an unreadable availability response.",
+      502,
+    );
+  }
+
+  return entry.busy.map((period) => {
+    const start = new Date(period.start);
+    const end = new Date(period.end);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      // An unparseable period would silently behave as free time.
+      throw new CalendarApiError(
+        "Google Calendar returned an unreadable busy period.",
+        502,
+      );
+    }
+    return { start, end };
+  });
 }
 
 /**
