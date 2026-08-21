@@ -64,7 +64,6 @@ const emptyDetails: DetailsValues = {
   street: "",
   town: "",
   postcode: "",
-  addressConfirmedByCustomer: false,
   customerType: "landlord",
   applianceCount: 3,
   tenantName: "",
@@ -92,6 +91,8 @@ export function BookingFlow() {
   const [notice, setNotice] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [confirmed, setConfirmed] = useState<ConfirmedBooking | null>(null);
+  /** Ticked on the review step. Never carried over from a previous attempt. */
+  const [addressConfirmed, setAddressConfirmed] = useState(false);
 
   const { step, reservation, changingTime, selectedDate } = attempt;
 
@@ -281,6 +282,7 @@ export function BookingFlow() {
     const current = reservation;
     dispatch({ type: "cancel-booking" });
     setDetails(emptyDetails);
+    setAddressConfirmed(false);
     setFormError(null);
     setNotice(null);
     setFieldErrors({});
@@ -316,6 +318,7 @@ export function BookingFlow() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...details,
+          addressConfirmedByCustomer: addressConfirmed,
           slotStart: reservation.slotStart,
           holdToken: reservation.token ?? undefined,
           idempotencyKey: ensureIdempotencyKey(),
@@ -447,9 +450,11 @@ export function BookingFlow() {
           <DetailsForm
             values={details}
             fieldErrors={fieldErrors}
-            onPatch={(patch) =>
-              setDetails((previous) => ({ ...previous, ...patch }))
-            }
+            onPatch={(patch) => {
+              // Any edit invalidates a confirmation given on the review step.
+              setAddressConfirmed(false);
+              setDetails((previous) => ({ ...previous, ...patch }));
+            }}
             onBack={() => dispatch({ type: "go-to-step", step: 2 })}
             onContinue={() => {
               setFieldErrors({});
@@ -469,6 +474,8 @@ export function BookingFlow() {
             }}
             details={details}
             submitting={submitting}
+            addressConfirmed={addressConfirmed}
+            onAddressConfirmedChange={setAddressConfirmed}
             onBack={() => dispatch({ type: "go-to-step", step: 3 })}
             onConfirm={handleConfirm}
           />

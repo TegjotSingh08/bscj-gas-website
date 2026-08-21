@@ -268,9 +268,10 @@ describe("booking form validation", () => {
     fullName: "Jane Smith",
     email: "Jane@Example.co.uk",
     phone: "07700 900123",
-    houseOrName: "12",
-    street: "Sedgley Street",
-    postcode: "wv2 3aj",
+    houseOrName: "24",
+    street: "Example Road",
+    postcode: "wv1 1aa",
+    addressConfirmedByCustomer: true,
     customerType: "landlord",
     applianceCount: 4,
     idempotencyKey: "abcdefgh1234",
@@ -281,7 +282,8 @@ describe("booking form validation", () => {
     assert.equal(result.success, true);
     if (result.success) {
       assert.equal(result.data.email, "jane@example.co.uk");
-      assert.equal(result.data.postcode, "WV2 3AJ");
+      assert.equal(result.data.postcode, "WV1 1AA");
+      assert.equal(result.data.phone, "+447700900123");
     }
   });
 

@@ -5,8 +5,7 @@ import type { PropertyAddress, ValidatedPostcode } from "./types";
  *
  * Every surface — review screen, calendar event, confirmation page, email —
  * renders the `formattedAddress` built here, so the same property can never
- * appear as "197 sweetman st" in one place and "197 Sweetman Street" in
- * another.
+ * appear as "24 example rd" in one place and "24 Example Road" in another.
  */
 
 /** Collapses whitespace and strips control characters. */
@@ -26,7 +25,7 @@ export function comparable(value: string): string {
     .trim();
 }
 
-/** Uppercase, single-spaced postcode. Accepts "wv60ar" and "WV6 0AR" alike. */
+/** Uppercase, single-spaced postcode. Accepts "wv11aa" and "WV1 1AA" alike. */
 export function normalisePostcode(value: string): string {
   const bare = normaliseLine(value).toUpperCase().replace(/\s+/g, "");
   if (bare.length < 5) return bare;
@@ -38,7 +37,7 @@ export function looksLikePostcode(value: string): boolean {
   return /^[A-Z]{1,2}\d[A-Z\d]?\s\d[A-Z]{2}$/.test(normalisePostcode(value));
 }
 
-/** "197 Sweetman Street, Wolverhampton, WV6 0AR" */
+/** "24 Example Road, Wolverhampton, WV1 1AA" */
 export function formatAddress(parts: {
   houseOrName: string;
   street: string;
@@ -82,7 +81,6 @@ export function buildPropertyAddress(input: {
   houseOrName: string;
   street: string;
   postcode: ValidatedPostcode;
-  verificationStatus: PropertyAddress["addressVerificationStatus"];
   confirmedByCustomer: boolean;
   town?: string;
 }): PropertyAddress {
@@ -102,7 +100,6 @@ export function buildPropertyAddress(input: {
       postcode: input.postcode.postcode,
     }),
     postcodeValidated: true,
-    addressVerificationStatus: input.verificationStatus,
     confirmedByCustomer: input.confirmedByCustomer,
     latitude: input.postcode.latitude,
     longitude: input.postcode.longitude,

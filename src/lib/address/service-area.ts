@@ -1,59 +1,90 @@
+import "server-only";
+
 import { serviceAreas } from "@/lib/business";
-import { normalisePostcode } from "./format";
+import { haversineMiles, isValidCoordinates, type Coordinates } from "./geo";
+import type { ValidatedPostcode } from "./types";
 
 /**
- * Which postcodes the site will take an instant online booking for.
+ * Whether a property is inside the area we take instant online bookings for.
  *
- * Decided on the outward code from a validated postcode, never on a town name
- * the customer typed — "Wolverhampton" in a text box proves nothing.
+ * A radius around a configured operating centre, measured from the coordinates
+ * a postcode lookup returns. Radius rather than a list of postcode districts
+ * because district boundaries have nothing to do with how far the engineer
+ * actually travels — WV16 shares a prefix with Wolverhampton and is 15 miles
+ * away, while a DY postcode can be closer than a WV one.
  *
- * NOTE FOR THE OWNER: docs/business-details.md names four towns
- * (Wolverhampton, Bilston, Wednesfield, Willenhall) but does not list
- * postcodes. The mapping below is the standard outward-code coverage of those
- * four towns and should be confirmed before launch. Deliberately excluded:
- * WV7/WV8/WV9 (Albrighton, Codsall, Coven) and WV15/WV16 (Bridgnorth), which
- * share the WV prefix but are not the named towns.
- *
- * Being outside this list is not a rejection — it routes the customer to the
- * phone so the engineer can decide.
+ * The centre is a rounded neighbourhood coordinate held in server-side
+ * configuration. It is deliberately never a street name and never precise
+ * enough to identify a property, and it is not exposed to the browser.
  */
-export const SERVICE_AREA_OUTCODES: readonly string[] = [
-  // Wolverhampton
-  "WV1",
-  "WV2",
-  "WV3",
-  "WV4",
-  "WV5",
-  "WV6",
-  "WV10",
-  // Wednesfield
-  "WV11",
-  // Willenhall
-  "WV12",
-  "WV13",
-  // Bilston
-  "WV14",
-] as const;
+
+/**
+ * Fallback operating centre.
+ *
+ * A neighbourhood point in the Wolverhampton operating area, rounded to three
+ * decimal places — roughly a 100 metre grid — and deliberately offset so it
+ * does not correspond to any particular building. With a twelve mile radius
+ * this level of precision makes no practical difference to coverage.
+ *
+ * Override in server-side configuration with SERVICE_AREA_LAT and
+ * SERVICE_AREA_LNG. Never expose these to the browser.
+ */
+const DEFAULT_LATITUDE = 52.594;
+const DEFAULT_LONGITUDE = -2.145;
+const DEFAULT_RADIUS_MILES = 12;
+
+function readNumber(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+export function serviceAreaCentre(): Coordinates {
+  return {
+    latitude: readNumber("SERVICE_AREA_LAT", DEFAULT_LATITUDE),
+    longitude: readNumber("SERVICE_AREA_LNG", DEFAULT_LONGITUDE),
+  };
+}
+
+export function serviceAreaRadiusMiles(): number {
+  return readNumber("SERVICE_AREA_RADIUS_MILES", DEFAULT_RADIUS_MILES);
+}
 
 export type ServiceAreaResult =
-  | { covered: true }
-  | { covered: false; reason: "outside_area" };
+  | { covered: true; distanceMiles: number }
+  | { covered: false; reason: "outside_radius"; distanceMiles: number }
+  /** The postcode is valid but carries no coordinates, so distance is unknown. */
+  | { covered: false; reason: "no_coordinates"; distanceMiles: null };
 
-export function isWithinServiceArea(outcode: string): boolean {
-  return SERVICE_AREA_OUTCODES.includes(outcode.trim().toUpperCase());
-}
+/**
+ * Decides coverage from a validated postcode.
+ *
+ * Takes the whole postcode rather than raw numbers so a caller cannot
+ * accidentally pass coordinates the customer supplied.
+ */
+export function checkServiceArea(
+  postcode: Pick<ValidatedPostcode, "latitude" | "longitude">,
+  options?: { centre?: Coordinates; radiusMiles?: number },
+): ServiceAreaResult {
+  const property = {
+    latitude: postcode.latitude,
+    longitude: postcode.longitude,
+  };
 
-export function checkServiceArea(outcode: string): ServiceAreaResult {
-  return isWithinServiceArea(outcode)
-    ? { covered: true }
-    : { covered: false, reason: "outside_area" };
-}
+  if (!isValidCoordinates(property)) {
+    // Without coordinates there is no honest way to decide, so it routes to
+    // the phone rather than being waved through.
+    return { covered: false, reason: "no_coordinates", distanceMiles: null };
+  }
 
-/** The outward code of a postcode, e.g. "WV6 0AR" gives "WV6". */
-export function outcodeOf(postcode: string): string {
-  const canonical = normalisePostcode(postcode);
-  const [outcode] = canonical.split(" ");
-  return outcode ?? "";
+  const centre = options?.centre ?? serviceAreaCentre();
+  const radius = options?.radiusMiles ?? serviceAreaRadiusMiles();
+  const distanceMiles = haversineMiles(centre, property);
+
+  return distanceMiles <= radius
+    ? { covered: true, distanceMiles }
+    : { covered: false, reason: "outside_radius", distanceMiles };
 }
 
 /** Human-readable list of the towns covered, for customer-facing copy. */

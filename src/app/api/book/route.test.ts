@@ -98,11 +98,9 @@ mock.module("@/lib/email/send", {
 });
 
 /**
- * Address providers are faked: the suite must never call live Postcodes.io or
- * the public Nominatim service.
+ * The postcode provider is faked: the suite must never call the live service.
  */
 let postcodeBehaviour: "valid" | "not_found" | "unavailable" | "out_of_area" = "valid";
-let storedVerification: "verified" | "partial_match" | "unverified" | null = "verified";
 
 mock.module("@/lib/address/postcodes-io", {
   namedExports: {
@@ -116,26 +114,16 @@ mock.module("@/lib/address/postcodes-io", {
         return {
           status: "valid",
           postcode: {
-            postcode: "WV6 0AR",
-            outcode: postcodeBehaviour === "out_of_area" ? "B1" : "WV6",
+            postcode: "WV99 1AA",
+            outcode: "WV99",
             areaName: "Wolverhampton",
-            latitude: 52.592901,
-            longitude: -2.143953,
+            // Far away when the test wants an out-of-area postcode.
+            latitude: postcodeBehaviour === "out_of_area" ? 51.5072 : 52.6,
+            longitude: postcodeBehaviour === "out_of_area" ? -0.1276 : -2.12,
           },
         };
       }
     },
-  },
-});
-
-mock.module("@/lib/address/attestation", {
-  namedExports: {
-    readVerification: async () => {
-      calls.push("redis:read-verification");
-      return storedVerification;
-    },
-    recordVerification: async () => {},
-    attestationKey: () => "addrattest:test",
   },
 });
 
@@ -163,9 +151,9 @@ function bookingRequest(overrides: Record<string, unknown> = {}) {
       fullName: "Jane Smith",
       email: "jane@example.com",
       phone: "07700 900123",
-      houseOrName: "197",
-      street: "Sweetman Street",
-      postcode: "WV6 0AR",
+      houseOrName: "24",
+      street: "Example Road",
+      postcode: "WV99 1AA",
       addressConfirmedByCustomer: true,
       customerType: "landlord",
       applianceCount: 1,
@@ -183,7 +171,6 @@ beforeEach(() => {
   holdBehaviour = "valid";
   completedMarker = null;
   postcodeBehaviour = "valid";
-  storedVerification = "verified";
 });
 
 describe("transaction order", () => {

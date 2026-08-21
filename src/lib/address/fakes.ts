@@ -1,8 +1,5 @@
 import { normalisePostcode } from "./format";
-import { bestMatch } from "./match";
 import type {
-  AddressVerificationProvider,
-  AddressVerificationResult,
   PostcodeLookupResult,
   PostcodeProvider,
   ValidatedPostcode,
@@ -11,10 +8,9 @@ import type {
 /**
  * Test doubles.
  *
- * The automated suite must never touch live Postcodes.io or the public
- * Nominatim service — running hundreds of tests against donated
- * infrastructure would be an abuse of it, and the policy forbids automated
- * testing against the public endpoint. Every test uses these instead.
+ * The automated suite must never touch the live postcode service — running
+ * hundreds of tests against free public infrastructure would be an abuse of
+ * it. Every test uses these instead.
  */
 
 export class FakePostcodeProvider implements PostcodeProvider {
@@ -24,7 +20,7 @@ export class FakePostcodeProvider implements PostcodeProvider {
   private readonly known: Map<string, ValidatedPostcode>;
   private behaviour: "normal" | "provider_unavailable" = "normal";
 
-  constructor(known: ValidatedPostcode[] = [DEFAULT_POSTCODE]) {
+  constructor(known: ValidatedPostcode[] = [IN_AREA_POSTCODE]) {
     this.known = new Map(
       known.map((entry) => [normalisePostcode(entry.postcode), entry]),
     );
@@ -51,66 +47,35 @@ export class FakePostcodeProvider implements PostcodeProvider {
   }
 }
 
-export class FakeAddressVerificationProvider
-  implements AddressVerificationProvider
-{
-  readonly calls: { houseOrName: string; street: string; postcode: string }[] =
-    [];
-
-  private candidates: {
-    street: string | null;
-    houseNumber: string | null;
-    postcode: string | null;
-  }[] = [];
-  private behaviour: "normal" | "unavailable" = "normal";
-
-  /** What the mapping service will claim to have found. */
-  setCandidates(
-    candidates: {
-      street: string | null;
-      houseNumber: string | null;
-      postcode: string | null;
-    }[],
-  ): void {
-    this.candidates = candidates;
-  }
-
-  setUnavailable(unavailable: boolean): void {
-    this.behaviour = unavailable ? "unavailable" : "normal";
-  }
-
-  async verify(input: {
-    houseOrName: string;
-    street: string;
-    postcode: string;
-  }): Promise<AddressVerificationResult> {
-    this.calls.push(input);
-
-    if (this.behaviour === "unavailable") return { status: "unavailable" };
-
-    const match = bestMatch(this.candidates, input);
-    if (match.status === "unverified") return { status: "unverified" };
-    return {
-      status: match.status,
-      matchedStreet: match.matchedStreet,
-      matchedHouseNumber: match.matchedHouseNumber,
-    };
-  }
-}
-
-export const DEFAULT_POSTCODE: ValidatedPostcode = {
-  postcode: "WV6 0AR",
-  outcode: "WV6",
+/**
+ * Fictional fixtures. The postcodes are deliberately in the unallocated WV99
+ * range so no test data can correspond to a real property, and the
+ * coordinates are chosen to sit at known distances from the operating centre.
+ */
+export const IN_AREA_POSTCODE: ValidatedPostcode = {
+  postcode: "WV99 1AA",
+  outcode: "WV99",
   areaName: "Wolverhampton",
-  latitude: 52.592901,
-  longitude: -2.143953,
+  // Roughly a mile from the configured centre.
+  latitude: 52.6,
+  longitude: -2.12,
 };
 
-/** A valid postcode outside the configured service area. */
+/** Valid, but far enough away to fall outside the radius. */
 export const OUT_OF_AREA_POSTCODE: ValidatedPostcode = {
-  postcode: "B1 1AA",
-  outcode: "B1",
+  postcode: "WV99 9ZZ",
+  outcode: "WV99",
   areaName: "Birmingham",
-  latitude: 52.47944,
-  longitude: -1.90269,
+  // Birmingham city centre, about 13 miles away.
+  latitude: 52.4796,
+  longitude: -1.9027,
+};
+
+/** A valid postcode the provider returned without coordinates. */
+export const NO_COORDINATES_POSTCODE: ValidatedPostcode = {
+  postcode: "WV99 2BB",
+  outcode: "WV99",
+  areaName: "Wolverhampton",
+  latitude: null,
+  longitude: null,
 };

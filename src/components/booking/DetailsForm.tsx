@@ -6,6 +6,7 @@ import { customerTypeLabels, customerTypes } from "@/lib/booking/schema";
 import { calculatePrice, MAX_APPLIANCES } from "@/lib/booking/pricing";
 import { cp12 } from "@/lib/business";
 import { AddressFields } from "./AddressFields";
+import { PhoneField } from "./PhoneField";
 
 export type DetailsValues = {
   fullName: string;
@@ -15,8 +16,6 @@ export type DetailsValues = {
   street: string;
   town: string;
   postcode: string;
-  /** Set when the customer confirms an address we could not verify. */
-  addressConfirmedByCustomer: boolean;
   customerType: (typeof customerTypes)[number];
   applianceCount: number;
   tenantName: string;
@@ -115,22 +114,14 @@ export function DetailsForm({
           <FieldError message={fieldErrors.email} />
         </div>
 
-        <div>
-          <label htmlFor="phone" className={labelClass}>
-            Mobile number
-          </label>
-          <input
-            id="phone"
-            type="tel"
-            inputMode="tel"
-            autoComplete="tel"
-            required
-            value={values.phone}
-            onChange={(event) => set("phone", event.target.value)}
-            className={fieldClass}
-          />
-          <FieldError message={fieldErrors.phone} />
-        </div>
+        <PhoneField
+          id="phone"
+          label="Mobile number"
+          value={values.phone}
+          serverError={fieldErrors.phone}
+          hint="So the engineer can reach you on the day."
+          onChange={(value) => set("phone", value)}
+        />
 
         <AddressFields
           values={{
@@ -138,7 +129,6 @@ export function DetailsForm({
             street: values.street,
             town: values.town,
             postcode: values.postcode,
-            addressConfirmedByCustomer: values.addressConfirmedByCustomer,
           }}
           fieldErrors={fieldErrors}
           onPatch={onPatch}
@@ -216,23 +206,15 @@ export function DetailsForm({
                 className={fieldClass}
               />
             </div>
-            <div>
-              <label htmlFor="tenantPhone" className={labelClass}>
-                Tenant phone{" "}
-                <span className="font-medium text-navy-500">(optional)</span>
-              </label>
-              <input
-                id="tenantPhone"
-                type="tel"
-                inputMode="tel"
-                value={values.tenantPhone}
-                onChange={(event) => set("tenantPhone", event.target.value)}
-                className={fieldClass}
-              />
-              <p className="mt-1 text-xs text-navy-600">
-                So we can arrange access directly with them.
-              </p>
-            </div>
+            <PhoneField
+              id="tenantPhone"
+              label="Tenant phone"
+              optional
+              value={values.tenantPhone}
+              serverError={fieldErrors.tenantPhone}
+              hint="So we can arrange access directly with them."
+              onChange={(value) => set("tenantPhone", value)}
+            />
           </>
         )}
 

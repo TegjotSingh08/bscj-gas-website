@@ -50,11 +50,20 @@ Things that genuinely stop the site going up.
       confirmation page and email — they cannot disagree
 - [x] Address verification is recorded server-side and cannot be forged by
       the browser
-- [ ] **Confirm the service-area postcode list** in
-      `src/lib/address/service-area.ts`. business-details.md names four towns
-      but no postcodes; the configured list is the standard coverage of
-      Wolverhampton, Bilston, Wednesfield and Willenhall. Anything outside it
-      routes to the phone rather than booking online.
+- [x] Service area is now a 12 mile radius from a configured operating centre,
+      measured with a tested haversine calculation against the coordinates the
+      postcode provider returns
+- [x] OpenStreetMap property verification removed — it could not establish
+      whether a house exists and added a step without adding information
+- [x] Property address confirmed explicitly by the customer on the review step,
+      required by the server as a literal true
+- [x] UK mobile numbers normalised to +447XXXXXXXXX by one shared
+      implementation used by the form, the schema and the booking route
+- [ ] **Decide the advertised service area.** A 12 mile radius now covers
+      Dudley (6.3 mi), Walsall (6.9 mi) and Codsall (3.2 mi), none of which the
+      site advertises — it still lists only Wolverhampton, Bilston, Wednesfield
+      and Willenhall. Either widen the "Areas we cover" copy and
+      business-details.md, or reduce SERVICE_AREA_RADIUS_MILES.
 - [x] Customer-safe booking reference (BSCJ-XXXXXX) on both the confirmation
       page and the email
 - [x] **Resend account created, domain verified, API key set** — done and

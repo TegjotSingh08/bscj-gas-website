@@ -2,6 +2,12 @@
 
 import { z } from "zod";
 import { MAX_APPLIANCES } from "./pricing";
+import {
+  emailProblemMessage,
+  normaliseEmail,
+  normaliseUkMobile,
+  phoneProblemMessage,
+} from "./contact";
 
 const trimmed = (min: number, max: number, label: string) =>
   z
@@ -10,16 +16,42 @@ const trimmed = (min: number, max: number, label: string) =>
     .min(min, `Please enter ${label}.`)
     .max(max, `${label} is too long.`);
 
-/** UK mobile or landline, tolerant of spaces, +44 and brackets. */
-const ukPhone = z
+/**
+ * UK mobile, normalised to +447XXXXXXXXX by the one shared implementation.
+ * The stored value is always canonical, whatever the customer typed.
+ */
+const ukMobile = z
   .string()
   .trim()
-  .min(10, "Please enter a contact number.")
-  .max(20, "That number looks too long.")
-  .refine(
-    (value) => /^(\+?44|0)[\d\s()-]{9,17}$/.test(value),
-    "Please enter a valid UK phone number.",
-  );
+  .transform((value, ctx) => {
+    const result = normaliseUkMobile(value);
+    if (!result.ok) {
+      ctx.addIssue({
+        code: "custom",
+        message: phoneProblemMessage(result.reason),
+      });
+      return z.NEVER;
+    }
+    return result.e164;
+  });
+
+/** The same rules, but blank is allowed because the tenant number is optional. */
+const optionalUkMobile = z
+  .string()
+  .trim()
+  .transform((value, ctx) => {
+    if (!value) return "";
+    const result = normaliseUkMobile(value);
+    if (!result.ok) {
+      ctx.addIssue({
+        code: "custom",
+        message: phoneProblemMessage(result.reason),
+      });
+      return z.NEVER;
+    }
+    return result.e164;
+  })
+  .optional();
 
 const ukPostcode = z
   .string()
@@ -50,8 +82,18 @@ export const bookingSchema = z.object({
   slotStart: z.string().datetime({ message: "Please choose an appointment." }),
 
   fullName: trimmed(2, 80, "your full name"),
-  email: z.string().trim().toLowerCase().email("Please enter a valid email address."),
-  phone: ukPhone,
+  email: z
+    .string()
+    .trim()
+    .transform((value, ctx) => {
+      const result = normaliseEmail(value);
+      if (!result.ok) {
+        ctx.addIssue({ code: "custom", message: emailProblemMessage(result.reason) });
+        return z.NEVER;
+      }
+      return result.email;
+    }),
+  phone: ukMobile,
 
   /** Structured address. Assembled and re-validated server-side. */
   houseOrName: trimmed(1, 60, "the house number or property name"),
@@ -59,11 +101,13 @@ export const bookingSchema = z.object({
   postcode: ukPostcode,
 
   /**
-   * Set when the customer explicitly confirmed an address we could not
-   * automatically verify. Never a substitute for server-side checks — the
-   * server decides the verification status itself.
+   * The customer read the assembled address back and confirmed it. Required:
+   * no free service can prove a house exists at a postcode, so the customer
+   * is the only reliable check on their own address.
    */
-  addressConfirmedByCustomer: z.boolean().optional().default(false),
+  addressConfirmedByCustomer: z.literal(true, {
+    message: "Please confirm the property address is correct.",
+  }),
 
   customerType: z.enum(customerTypes, {
     message: "Please choose whether you are a landlord, agent, tenant or homeowner.",
@@ -75,7 +119,7 @@ export const bookingSchema = z.object({
     .max(MAX_APPLIANCES, `Please call us for more than ${MAX_APPLIANCES} appliances.`),
 
   tenantName: z.string().trim().max(80).optional().or(z.literal("")),
-  tenantPhone: z.string().trim().max(20).optional().or(z.literal("")),
+  tenantPhone: optionalUkMobile,
   accessNotes: z.string().trim().max(500).optional().or(z.literal("")),
 
   /**

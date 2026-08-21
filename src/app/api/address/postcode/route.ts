@@ -71,7 +71,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ status: "provider_unavailable" }, { status: 503 });
   }
 
-  const area = checkServiceArea(result.postcode.outcode);
+  const area = checkServiceArea(result.postcode);
 
   return NextResponse.json({
     status: "valid",

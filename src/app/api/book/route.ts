@@ -18,7 +18,6 @@ import {
 import { bookingSchema, customerTypeLabels } from "@/lib/booking/schema";
 import { isSlotStillAvailable } from "@/lib/booking/slots";
 import { bookingReference } from "@/lib/booking/reference";
-import { readVerification } from "@/lib/address/attestation";
 import { buildPropertyAddress, formatAddressLines } from "@/lib/address/format";
 import { PostcodesIoProvider } from "@/lib/address/postcodes-io";
 import { checkServiceArea } from "@/lib/address/service-area";
@@ -156,7 +155,9 @@ export async function POST(request: Request) {
       { status: 503 },
     );
   }
-  if (!checkServiceArea(postcodeLookup.postcode.outcode).covered) {
+  // Coverage is decided from the coordinates the postcode provider returned,
+  // never from a town name the browser sent.
+  if (!checkServiceArea(postcodeLookup.postcode).covered) {
     return NextResponse.json(
       {
         error: "outside_area",
@@ -167,30 +168,12 @@ export async function POST(request: Request) {
     );
   }
 
-  // What the server itself concluded, not what the browser sent. A missing
-  // record reads as unverified, so it can only ever add friction.
-  const storedStatus =
-    (await readVerification({
-      houseOrName: data.houseOrName,
-      street: data.street,
-      postcode: postcodeLookup.postcode.postcode,
-    })) ?? "unverified";
-
-  if (storedStatus !== "verified" && !data.addressConfirmedByCustomer) {
-    return NextResponse.json(
-      {
-        error: "address_confirmation_required",
-        message: "Please confirm the property address is correct.",
-      },
-      { status: 400 },
-    );
-  }
-
+  // The schema already requires addressConfirmedByCustomer to be literally
+  // true, so a submission without it never reaches this point.
   const property = buildPropertyAddress({
     houseOrName: data.houseOrName,
     street: data.street,
     postcode: postcodeLookup.postcode,
-    verificationStatus: storedStatus,
     confirmedByCustomer: data.addressConfirmedByCustomer,
   });
 
@@ -235,7 +218,7 @@ export async function POST(request: Request) {
       `Property: ${property.formattedAddress}`,
       tenantLine,
       `Access notes: ${clean(data.accessNotes || "none given")}`,
-      `Address check: ${property.addressVerificationStatus}${property.confirmedByCustomer ? " (confirmed by customer)" : ""}`,
+      "Address: confirmed by customer at booking",
       "",
       `Appliances: ${price.applianceCount}`,
       `Price: £${price.total} total (£${price.basePrice} base${

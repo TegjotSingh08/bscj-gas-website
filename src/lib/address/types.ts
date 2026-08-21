@@ -1,47 +1,40 @@
 /**
  * Structured property address.
  *
- * Provider-neutral by design: nothing here names Postcodes.io, Nominatim or
- * OpenStreetMap, so a commercial PAF provider can be swapped in later without
- * the booking flow, the calendar event or the email changing shape.
+ * Provider-neutral by design: nothing here names a postcode provider, so a
+ * commercial address provider can be swapped in later without the booking
+ * flow, the calendar event or the email changing shape.
  */
 
 /** What a postcode lookup tells us. Only the fields we actually use. */
 export type ValidatedPostcode = {
-  /** Canonical form as returned by the provider, e.g. "WV6 0AR". */
+  /** Canonical form as returned by the provider, e.g. "WV1 1AA". */
   postcode: string;
-  /** e.g. "WV6" — the part service-area rules are decided on. */
+  /** e.g. "WV1". Retained for display and support, not for coverage rules. */
   outcode: string;
   /** Nearest town or administrative area, for display. */
   areaName: string;
+  /** Used to measure distance from the operating centre. */
   latitude: number | null;
   longitude: number | null;
 };
 
-/**
- * How much confidence we have that the address exists as entered.
- *
- * Deliberately three states. "unverified" is a perfectly normal outcome — open
- * mapping data does not contain every new build, flat or private road — and it
- * never blocks a booking.
- */
-export type AddressVerificationStatus =
-  | "verified"
-  | "partial_match"
-  | "unverified";
-
 export type PropertyAddress = {
-  /** "197" or "Rose Cottage". */
+  /** "24" or "Rose Cottage". */
   houseOrName: string;
   street: string;
   town: string;
   postcode: string;
   /** The single display form used everywhere. */
   formattedAddress: string;
-  /** True only when a postcode provider confirmed the postcode is live. */
+  /**
+   * True only when a postcode provider confirmed the postcode is live.
+   *
+   * This says nothing about whether the property exists at it — no free
+   * service can establish that, and the site never claims it can.
+   */
   postcodeValidated: boolean;
-  addressVerificationStatus: AddressVerificationStatus;
-  /** Present when the customer explicitly confirmed an unverified address. */
+  /** The customer read the assembled address back and confirmed it. */
   confirmedByCustomer: boolean;
   latitude: number | null;
   longitude: number | null;
@@ -54,26 +47,6 @@ export type PostcodeLookupResult =
   | { status: "malformed" }
   | { status: "provider_unavailable" };
 
-/** Outcome of the secondary address confidence check. */
-export type AddressVerificationResult =
-  | {
-      status: "verified" | "partial_match";
-      /** What the provider matched, for our own comparison only. */
-      matchedStreet: string | null;
-      matchedHouseNumber: string | null;
-    }
-  | { status: "unverified" }
-  /** Provider down, throttled, or no safe way to call it. Never a rejection. */
-  | { status: "unavailable" };
-
 export interface PostcodeProvider {
   lookup(postcode: string): Promise<PostcodeLookupResult>;
-}
-
-export interface AddressVerificationProvider {
-  verify(input: {
-    houseOrName: string;
-    street: string;
-    postcode: string;
-  }): Promise<AddressVerificationResult>;
 }

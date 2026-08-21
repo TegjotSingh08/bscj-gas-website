@@ -17,7 +17,7 @@ const BASE: BookingEmailInput = {
   startLabel: "17:00",
   endLabel: "17:45",
   subjectDateLabel: "Monday 24 August",
-  addressLines: ["197 Sweetman Street", "Wolverhampton", "WV6 0AR"],
+  addressLines: ["24 Example Road", "Wolverhampton", "WV1 1AA"],
   applianceCount: 1,
   priceTotal: 45,
 };
@@ -68,8 +68,8 @@ describe("content is correct in both formats", () => {
 
     test(`${format}: property address and postcode`, () => {
       const output = render()[format];
-      assert.ok(output.includes("197 Sweetman Street"));
-      assert.ok(output.includes("WV6 0AR"));
+      assert.ok(output.includes("24 Example Road"));
+      assert.ok(output.includes("WV1 1AA"));
     });
 
     test(`${format}: appliance count is singular for one`, () => {
@@ -132,8 +132,8 @@ describe("plain text carries everything essential", () => {
     "YOU'RE BOOKED",
     "Monday, 24 August 2026",
     "17:00-17:45",
-    "197 Sweetman Street",
-    "WV6 0AR",
+    "24 Example Road",
+    "WV1 1AA",
     "Gas Safety Certificate (CP12)",
     "1 appliance",
     "£45 total",
@@ -246,7 +246,7 @@ describe("resilience of the rendered HTML", () => {
   test("customer-supplied text is escaped", () => {
     const rendered = render({
       customerName: '<script>alert("x")</script>',
-      addressLines: ["12 Rose & Crown <Lane>", "Wolverhampton", "WV6 0AR"],
+      addressLines: ["12 Rose & Crown <Lane>", "Wolverhampton", "WV1 1AA"],
     });
     assert.ok(!rendered.html.includes("<script>"));
     assert.ok(rendered.html.includes("&lt;script&gt;"));
@@ -257,9 +257,9 @@ describe("resilience of the rendered HTML", () => {
     const rendered = render({
       customerName: "Bartholomew Fitzwilliam-Montgomery Featherstonehaugh",
       addressLines: [
-        "Flat 12b, The Old Gasworks Building, 197 Sweetman Street",
+        "Flat 12b, The Old Gasworks Building, 24 Example Road",
         "Whitmore Reans",
-        "WV6 0AR",
+        "WV1 1AA",
       ],
     });
     assert.ok(rendered.html.includes("Featherstonehaugh"));

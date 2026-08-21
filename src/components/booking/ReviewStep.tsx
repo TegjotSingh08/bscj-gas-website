@@ -3,7 +3,8 @@
 import { calculatePrice } from "@/lib/booking/pricing";
 import { customerTypeLabels } from "@/lib/booking/schema";
 import { cp12 } from "@/lib/business";
-import { formatAddress } from "@/lib/address/format";
+import { formatAddressLines } from "@/lib/address/format";
+import { formatUkMobileForDisplay, normaliseUkMobile } from "@/lib/booking/contact";
 import type { Slot } from "./BookingFlow";
 import type { DetailsValues } from "./DetailsForm";
 
@@ -32,6 +33,8 @@ export function ReviewStep({
   slot,
   details,
   submitting,
+  addressConfirmed,
+  onAddressConfirmedChange,
   onBack,
   onConfirm,
 }: {
@@ -39,9 +42,23 @@ export function ReviewStep({
   slot: Slot;
   details: DetailsValues;
   submitting: boolean;
+  /** Never defaults to true — the customer must actively confirm. */
+  addressConfirmed: boolean;
+  onAddressConfirmedChange: (confirmed: boolean) => void;
   onBack: () => void;
   onConfirm: () => void;
 }) {
+  const addressLines = formatAddressLines({
+    houseOrName: details.houseOrName,
+    street: details.street,
+    town: details.town,
+    postcode: details.postcode,
+  });
+
+  const mobile = normaliseUkMobile(details.phone);
+  const mobileDisplay = mobile.ok
+    ? formatUkMobileForDisplay(mobile.e164)
+    : details.phone;
   const price = calculatePrice(details.applianceCount);
   const endLabel = new Intl.DateTimeFormat("en-GB", {
     hour: "2-digit",
@@ -70,20 +87,28 @@ export function ReviewStep({
           {slot.label} – {endLabel}
         </p>
 
+        {/*
+          The address gets its own block rather than a table row. It is the
+          thing most worth getting wrong, and the customer is the only reliable
+          check on it — no free service can prove a house exists at a postcode.
+        */}
+        <div className="mt-5 rounded-xl border-2 border-navy-200 bg-navy-50 p-5">
+          <p className="text-xs font-bold uppercase tracking-wider text-navy-600">
+            Property
+          </p>
+          <p className="mt-2 text-xl font-extrabold leading-snug text-navy-900">
+            {addressLines.map((line) => (
+              <span key={line} className="block">
+                {line}
+              </span>
+            ))}
+          </p>
+        </div>
+
         <dl className="mt-5">
-          <Row
-            label="Property"
-            // The same formatting helper the calendar entry and the email use,
-            // so the address cannot differ between screens.
-            value={formatAddress({
-              houseOrName: details.houseOrName,
-              street: details.street,
-              town: details.town,
-              postcode: details.postcode,
-            })}
-          />
           <Row label="Name" value={details.fullName} />
-          <Row label="Contact" value={`${details.phone} · ${details.email}`} />
+          <Row label="Email" value={details.email} />
+          <Row label="Mobile" value={mobileDisplay} />
           <Row
             label="You are the"
             value={customerTypeLabels[details.customerType]}
@@ -125,13 +150,29 @@ export function ReviewStep({
         </div>
       </div>
 
+      {/*
+        Unticked by default, and cleared by any edit. The server requires it
+        too, so an altered request cannot skip it.
+      */}
+      <label className="mt-5 flex items-start gap-3 rounded-xl border-2 border-navy-200 bg-white p-4 text-sm font-semibold text-navy-900">
+        <input
+          type="checkbox"
+          checked={addressConfirmed}
+          onChange={(event) => onAddressConfirmedChange(event.target.checked)}
+          data-analytics-id="review-confirm-address"
+          className="mt-0.5 h-5 w-5 shrink-0 rounded border-2 border-navy-300"
+        />
+        I confirm that the property address and booking details shown above are
+        correct.
+      </label>
+
       <div className="mt-6 flex flex-col gap-3 sm:flex-row-reverse">
         <button
           type="button"
           onClick={onConfirm}
-          disabled={submitting}
+          disabled={submitting || !addressConfirmed}
           data-analytics-id="booking-confirm"
-          className="rounded-xl bg-flame-500 px-8 py-4 text-base font-bold text-white hover:bg-flame-600 disabled:opacity-60 sm:flex-1"
+          className="rounded-xl bg-flame-500 px-8 py-4 text-base font-bold text-white hover:bg-flame-600 disabled:cursor-not-allowed disabled:opacity-50 sm:flex-1"
         >
           {submitting ? "Confirming…" : "Confirm booking"}
         </button>
