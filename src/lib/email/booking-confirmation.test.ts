@@ -17,8 +17,7 @@ const BASE: BookingEmailInput = {
   startLabel: "17:00",
   endLabel: "17:45",
   subjectDateLabel: "Monday 24 August",
-  propertyAddress: "197 Sweetman Street",
-  postcode: "WV6 0AR",
+  addressLines: ["197 Sweetman Street", "Wolverhampton", "WV6 0AR"],
   applianceCount: 1,
   priceTotal: 45,
 };
@@ -247,7 +246,7 @@ describe("resilience of the rendered HTML", () => {
   test("customer-supplied text is escaped", () => {
     const rendered = render({
       customerName: '<script>alert("x")</script>',
-      propertyAddress: "12 Rose & Crown <Lane>",
+      addressLines: ["12 Rose & Crown <Lane>", "Wolverhampton", "WV6 0AR"],
     });
     assert.ok(!rendered.html.includes("<script>"));
     assert.ok(rendered.html.includes("&lt;script&gt;"));
@@ -257,8 +256,11 @@ describe("resilience of the rendered HTML", () => {
   test("a very long name and address do not break the markup", () => {
     const rendered = render({
       customerName: "Bartholomew Fitzwilliam-Montgomery Featherstonehaugh",
-      propertyAddress:
-        "Flat 12b, The Old Gasworks Building, 197 Sweetman Street, Whitmore Reans",
+      addressLines: [
+        "Flat 12b, The Old Gasworks Building, 197 Sweetman Street",
+        "Whitmore Reans",
+        "WV6 0AR",
+      ],
     });
     assert.ok(rendered.html.includes("Featherstonehaugh"));
     assert.ok(rendered.html.includes("Whitmore Reans"));

@@ -53,8 +53,17 @@ export const bookingSchema = z.object({
   email: z.string().trim().toLowerCase().email("Please enter a valid email address."),
   phone: ukPhone,
 
-  propertyAddress: trimmed(5, 200, "the property address"),
+  /** Structured address. Assembled and re-validated server-side. */
+  houseOrName: trimmed(1, 60, "the house number or property name"),
+  street: trimmed(2, 120, "the street"),
   postcode: ukPostcode,
+
+  /**
+   * Set when the customer explicitly confirmed an address we could not
+   * automatically verify. Never a substitute for server-side checks — the
+   * server decides the verification status itself.
+   */
+  addressConfirmedByCustomer: z.boolean().optional().default(false),
 
   customerType: z.enum(customerTypes, {
     message: "Please choose whether you are a landlord, agent, tenant or homeowner.",

@@ -44,8 +44,11 @@ export type BookingEmailInput = {
   endLabel: string;
   /** "Thursday 20 August" — short form for the subject line. */
   subjectDateLabel: string;
-  propertyAddress: string;
-  postcode: string;
+  /**
+   * The property address, already assembled by the one formatting helper.
+   * Rendered line by line — the email never reconstructs an address itself.
+   */
+  addressLines: string[];
   applianceCount: number;
   /** Server-derived total. Never a client-submitted figure. */
   priceTotal: number;
@@ -103,8 +106,7 @@ function buildHtml(input: BookingEmailInput, preheader: string): string {
     dateLabel,
     startLabel,
     endLabel,
-    propertyAddress,
-    postcode,
+    addressLines,
     applianceCount,
     priceTotal,
   } = input;
@@ -187,7 +189,7 @@ function buildHtml(input: BookingEmailInput, preheader: string): string {
           <td class="m-card" style="padding:20px 24px;">
             ${sectionLabel("Property")}
             <p style="margin:0;font-family:${FONT_STACK};font-size:16px;line-height:24px;color:${NAVY_900};font-weight:bold;">
-              ${escapeHtml(propertyAddress)}<br />${escapeHtml(postcode)}
+              ${addressLines.map(escapeHtml).join("<br />")}
             </p>
           </td>
         </tr>
@@ -377,8 +379,7 @@ function buildText(input: BookingEmailInput): string {
     "Gas Safety Certificate (CP12)",
     "",
     "PROPERTY",
-    input.propertyAddress,
-    input.postcode,
+    ...input.addressLines,
     "",
     "SERVICE",
     "Gas Safety Certificate (CP12)",

@@ -3,6 +3,7 @@
 import { calculatePrice } from "@/lib/booking/pricing";
 import { customerTypeLabels } from "@/lib/booking/schema";
 import { cp12 } from "@/lib/business";
+import { formatAddress } from "@/lib/address/format";
 import type { Slot } from "./BookingFlow";
 import type { DetailsValues } from "./DetailsForm";
 
@@ -72,7 +73,14 @@ export function ReviewStep({
         <dl className="mt-5">
           <Row
             label="Property"
-            value={`${details.propertyAddress}, ${details.postcode}`}
+            // The same formatting helper the calendar entry and the email use,
+            // so the address cannot differ between screens.
+            value={formatAddress({
+              houseOrName: details.houseOrName,
+              street: details.street,
+              town: details.town,
+              postcode: details.postcode,
+            })}
           />
           <Row label="Name" value={details.fullName} />
           <Row label="Contact" value={`${details.phone} · ${details.email}`} />

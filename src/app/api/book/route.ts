@@ -18,6 +18,10 @@ import {
 import { bookingSchema, customerTypeLabels } from "@/lib/booking/schema";
 import { isSlotStillAvailable } from "@/lib/booking/slots";
 import { bookingReference } from "@/lib/booking/reference";
+import { readVerification } from "@/lib/address/attestation";
+import { buildPropertyAddress, formatAddressLines } from "@/lib/address/format";
+import { PostcodesIoProvider } from "@/lib/address/postcodes-io";
+import { checkServiceArea } from "@/lib/address/service-area";
 import { formatLongDate, isoDateInZone, timeLabelInZone } from "@/lib/booking/time";
 import { renderBookingConfirmationEmail } from "@/lib/email/booking-confirmation";
 import { sendBookingConfirmation } from "@/lib/email/send";
@@ -31,6 +35,8 @@ import {
 } from "@/lib/google/calendar";
 
 export const dynamic = "force-dynamic";
+
+const postcodes = new PostcodesIoProvider();
 
 /** "Thursday 20 August" for the email subject, in the booking timezone. */
 function formatSubjectDate(isoDate: string, timeZone: string): string {
@@ -125,6 +131,69 @@ export async function POST(request: Request) {
   // re-check below is what keeps it safe — first confirmed wins, exactly as
   // before holds existed. That check is never skipped.
 
+  // ---------------------------------------------------------------
+  // The address is re-established here from the postcode provider and the
+  // server's own verification record. Nothing about the address is taken on
+  // the browser's word — a request claiming a verified address proves nothing.
+  // ---------------------------------------------------------------
+  const postcodeLookup = await postcodes.lookup(data.postcode);
+  if (postcodeLookup.status === "not_found" || postcodeLookup.status === "malformed") {
+    return NextResponse.json(
+      {
+        error: "validation_failed",
+        fieldErrors: { postcode: "We couldn't find that postcode. Check it and try again." },
+      },
+      { status: 400 },
+    );
+  }
+  if (postcodeLookup.status === "provider_unavailable") {
+    return NextResponse.json(
+      {
+        error: "postcode_unavailable",
+        message:
+          "We couldn't verify the postcode right now. Please try again, or call or WhatsApp us to book.",
+      },
+      { status: 503 },
+    );
+  }
+  if (!checkServiceArea(postcodeLookup.postcode.outcode).covered) {
+    return NextResponse.json(
+      {
+        error: "outside_area",
+        message:
+          "This property is outside our standard online booking area. Call or WhatsApp us and we will check whether we can cover it.",
+      },
+      { status: 400 },
+    );
+  }
+
+  // What the server itself concluded, not what the browser sent. A missing
+  // record reads as unverified, so it can only ever add friction.
+  const storedStatus =
+    (await readVerification({
+      houseOrName: data.houseOrName,
+      street: data.street,
+      postcode: postcodeLookup.postcode.postcode,
+    })) ?? "unverified";
+
+  if (storedStatus !== "verified" && !data.addressConfirmedByCustomer) {
+    return NextResponse.json(
+      {
+        error: "address_confirmation_required",
+        message: "Please confirm the property address is correct.",
+      },
+      { status: 400 },
+    );
+  }
+
+  const property = buildPropertyAddress({
+    houseOrName: data.houseOrName,
+    street: data.street,
+    postcode: postcodeLookup.postcode,
+    verificationStatus: storedStatus,
+    confirmedByCustomer: data.addressConfirmedByCustomer,
+  });
+
   // Price is always derived here — never taken from the client.
   const price = calculatePrice(data.applianceCount);
 
@@ -163,9 +232,10 @@ export async function POST(request: Request) {
       `Email: ${clean(data.email)}`,
       `Customer type: ${customerTypeLabels[data.customerType]}`,
       "",
-      `Property: ${clean(data.propertyAddress)}, ${clean(data.postcode)}`,
+      `Property: ${property.formattedAddress}`,
       tenantLine,
       `Access notes: ${clean(data.accessNotes || "none given")}`,
+      `Address check: ${property.addressVerificationStatus}${property.confirmedByCustomer ? " (confirmed by customer)" : ""}`,
       "",
       `Appliances: ${price.applianceCount}`,
       `Price: £${price.total} total (£${price.basePrice} base${
@@ -180,9 +250,9 @@ export async function POST(request: Request) {
 
     const event = await createEvent({
       eventId: buildEventId(data.slotStart, data.idempotencyKey),
-      summary: `CP12 — ${clean(data.propertyAddress)}, ${clean(data.postcode)}`,
+      summary: `CP12 — ${property.formattedAddress}`,
       description,
-      location: `${clean(data.propertyAddress)}, ${clean(data.postcode)}`,
+      location: property.formattedAddress,
       start,
       end,
     });
@@ -210,8 +280,7 @@ export async function POST(request: Request) {
       startLabel,
       endLabel,
       subjectDateLabel: formatSubjectDate(dateIso, bookingConfig.timeZone),
-      propertyAddress: clean(data.propertyAddress),
-      postcode: clean(data.postcode),
+      addressLines: formatAddressLines(property),
       applianceCount: price.applianceCount,
       // Server-derived total, never the figure the browser displayed.
       priceTotal: price.total,
@@ -232,8 +301,8 @@ export async function POST(request: Request) {
         dateLabel,
         startLabel,
         endLabel,
-        propertyAddress: clean(data.propertyAddress),
-        postcode: clean(data.postcode),
+        propertyAddress: property.formattedAddress,
+        postcode: property.postcode,
         priceTotal: price.total,
         priceDisplay: price.totalDisplay,
         contactPhone: business.phoneDisplay,

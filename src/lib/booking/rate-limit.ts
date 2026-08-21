@@ -86,4 +86,12 @@ export const rateLimits = {
   hold: { limit: 20, windowSeconds: 600 },
   /** Confirming is rare; a person books once or twice. */
   booking: { limit: 8, windowSeconds: 600 },
+  /** Postcode checks are cheap and a customer may correct a typo a few times. */
+  postcode: { limit: 30, windowSeconds: 600 },
+  /**
+   * Address verification reaches a donated public service, so this is
+   * deliberately tight. The global one-per-second gate in the provider is the
+   * real protection; this stops one visitor consuming the whole allowance.
+   */
+  addressVerify: { limit: 12, windowSeconds: 600 },
 } as const;

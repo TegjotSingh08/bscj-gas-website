@@ -11,8 +11,7 @@ const EMAIL = renderBookingConfirmationEmail({
   startLabel: "17:00",
   endLabel: "17:45",
   subjectDateLabel: "Monday 24 August",
-  propertyAddress: "197 Sweetman Street",
-  postcode: "WV6 0AR",
+  addressLines: ["197 Sweetman Street", "Wolverhampton", "WV6 0AR"],
   applianceCount: 1,
   priceTotal: 45,
 });

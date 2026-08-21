@@ -43,6 +43,18 @@ Things that genuinely stop the site going up.
       Junk/Spam guidance — shown only when the email actually sent
 - [x] MILESTONE COMPLETE: verified end to end against live Resend, including
       a deliberate invalid-key test proving a booking survives an email failure
+- [x] Property addresses validated: postcode checked against Postcodes.io,
+      service area decided on the outward code, and a soft OpenStreetMap check
+      on the street with manual confirmation as the fallback
+- [x] One address formatter feeds the review screen, calendar event,
+      confirmation page and email — they cannot disagree
+- [x] Address verification is recorded server-side and cannot be forged by
+      the browser
+- [ ] **Confirm the service-area postcode list** in
+      `src/lib/address/service-area.ts`. business-details.md names four towns
+      but no postcodes; the configured list is the standard coverage of
+      Wolverhampton, Bilston, Wednesfield and Willenhall. Anything outside it
+      routes to the phone rather than booking online.
 - [x] Customer-safe booking reference (BSCJ-XXXXXX) on both the confirmation
       page and the email
 - [x] **Resend account created, domain verified, API key set** — done and
@@ -89,6 +101,10 @@ Must be checked by a human on the live site, after deployment.
 - [ ] Add `RESEND_API_KEY` and `BOOKING_EMAIL_FROM` in Vercel and redeploy
 - [ ] Confirm Google Workspace email still sends and receives after the DNS
       changes
+- [ ] Book with a real local address and confirm the postcode, street and town
+      read correctly on the review screen, in Google Calendar and in the email
+- [ ] Try a postcode just outside the area and confirm it offers the phone
+      rather than claiming the postcode is invalid
 - [ ] Confirm an expired hold returns the customer to time selection rather
       than creating a booking
 - [ ] Check a Saturday shows as unavailable, and that today only offers slots

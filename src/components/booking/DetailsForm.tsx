@@ -1,15 +1,22 @@
 "use client";
 
+import { useState } from "react";
+
 import { customerTypeLabels, customerTypes } from "@/lib/booking/schema";
 import { calculatePrice, MAX_APPLIANCES } from "@/lib/booking/pricing";
 import { cp12 } from "@/lib/business";
+import { AddressFields } from "./AddressFields";
 
 export type DetailsValues = {
   fullName: string;
   email: string;
   phone: string;
-  propertyAddress: string;
+  houseOrName: string;
+  street: string;
+  town: string;
   postcode: string;
+  /** Set when the customer confirms an address we could not verify. */
+  addressConfirmedByCustomer: boolean;
   customerType: (typeof customerTypes)[number];
   applianceCount: number;
   tenantName: string;
@@ -34,22 +41,28 @@ function FieldError({ message }: { message?: string }) {
 export function DetailsForm({
   values,
   fieldErrors,
-  onChange,
+  onPatch,
   onBack,
   onContinue,
 }: {
   values: DetailsValues;
   fieldErrors: Record<string, string>;
-  onChange: (values: DetailsValues) => void;
+  /**
+   * Applies a partial update. A patch rather than a whole object because two
+   * fields changing in the same tick must both survive — spreading a captured
+   * `values` snapshot silently discards the first.
+   */
+  onPatch: (patch: Partial<DetailsValues>) => void;
   onBack: () => void;
   onContinue: () => void;
 }) {
+  const [addressReady, setAddressReady] = useState(false);
   const price = calculatePrice(values.applianceCount);
   const showTenantFields =
     values.customerType === "landlord" || values.customerType === "letting-agent";
 
   function set<K extends keyof DetailsValues>(key: K, value: DetailsValues[K]) {
-    onChange({ ...values, [key]: value });
+    onPatch({ [key]: value } as Partial<DetailsValues>);
   }
 
   return (
@@ -119,37 +132,18 @@ export function DetailsForm({
           <FieldError message={fieldErrors.phone} />
         </div>
 
-        <div className="sm:col-span-2">
-          <label htmlFor="propertyAddress" className={labelClass}>
-            Property address
-          </label>
-          <input
-            id="propertyAddress"
-            autoComplete="street-address"
-            required
-            placeholder="House number and street"
-            value={values.propertyAddress}
-            onChange={(event) => set("propertyAddress", event.target.value)}
-            className={fieldClass}
-          />
-          <FieldError message={fieldErrors.propertyAddress} />
-        </div>
-
-        <div>
-          <label htmlFor="postcode" className={labelClass}>
-            Postcode
-          </label>
-          <input
-            id="postcode"
-            autoComplete="postal-code"
-            required
-            placeholder="WV1 1AA"
-            value={values.postcode}
-            onChange={(event) => set("postcode", event.target.value)}
-            className={`${fieldClass} uppercase`}
-          />
-          <FieldError message={fieldErrors.postcode} />
-        </div>
+        <AddressFields
+          values={{
+            houseOrName: values.houseOrName,
+            street: values.street,
+            town: values.town,
+            postcode: values.postcode,
+            addressConfirmedByCustomer: values.addressConfirmedByCustomer,
+          }}
+          fieldErrors={fieldErrors}
+          onPatch={onPatch}
+          onReadyChange={setAddressReady}
+        />
 
         <div>
           <label htmlFor="customerType" className={labelClass}>
@@ -273,7 +267,8 @@ export function DetailsForm({
       <div className="mt-7 flex flex-col gap-3 sm:flex-row-reverse">
         <button
           type="submit"
-          className="rounded-xl bg-flame-500 px-8 py-4 text-base font-bold text-white hover:bg-flame-600 sm:flex-1"
+          disabled={!addressReady}
+          className="rounded-xl bg-flame-500 px-8 py-4 text-base font-bold text-white hover:bg-flame-600 disabled:cursor-not-allowed disabled:opacity-50 sm:flex-1"
         >
           Review booking
         </button>

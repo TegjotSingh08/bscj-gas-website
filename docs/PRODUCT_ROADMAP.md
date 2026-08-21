@@ -35,6 +35,15 @@ demand into confirmed appointments in the engineer's diary.
 - Confirmed booking written directly into the engineer's Google Calendar
 - Pay after completion
 
+**Address handling in Version 1**
+
+Free validation rather than paid premise lookup: Postcodes.io validates the
+postcode hard and decides service-area eligibility, and an OpenStreetMap check
+adds soft confidence on the street. A booking is never blocked because open
+mapping data lacks a property — the customer confirms manually instead. Paid
+autocomplete (Loqate, Ideal Postcodes, getAddress.io) is deferred; see
+`ADDRESS_VALIDATION.md` for how one slots into the same interfaces.
+
 **Explicitly out of scope for Version 1**
 
 - No custom database

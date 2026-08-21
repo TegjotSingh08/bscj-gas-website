@@ -60,8 +60,11 @@ const emptyDetails: DetailsValues = {
   fullName: "",
   email: "",
   phone: "",
-  propertyAddress: "",
+  houseOrName: "",
+  street: "",
+  town: "",
   postcode: "",
+  addressConfirmedByCustomer: false,
   customerType: "landlord",
   applianceCount: 3,
   tenantName: "",
@@ -444,7 +447,9 @@ export function BookingFlow() {
           <DetailsForm
             values={details}
             fieldErrors={fieldErrors}
-            onChange={setDetails}
+            onPatch={(patch) =>
+              setDetails((previous) => ({ ...previous, ...patch }))
+            }
             onBack={() => dispatch({ type: "go-to-step", step: 2 })}
             onContinue={() => {
               setFieldErrors({});
