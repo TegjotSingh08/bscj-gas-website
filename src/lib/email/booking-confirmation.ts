@@ -1,4 +1,4 @@
-import { availability, business, cp12, legal } from "@/lib/business";
+import { business, cancellationPolicy, cp12, legal } from "@/lib/business";
 
 /**
  * Booking confirmation email.
@@ -52,6 +52,18 @@ export type BookingEmailInput = {
   applianceCount: number;
   /** Server-derived total. Never a client-submitted figure. */
   priceTotal: number;
+  /** The terms version accepted at booking, e.g. "2026-08-22". */
+  termsVersion: string;
+  /**
+   * "Friday, 5 September 2026" — the last day of the statutory cancellation
+   * period, already formatted in Europe/London by the booking route.
+   */
+  cancellationLastDateLabel: string;
+  /**
+   * True when the appointment fell inside the cancellation period and the
+   * customer expressly asked for the check to go ahead on that date.
+   */
+  earlyPerformanceRequested: boolean;
 };
 
 export type RenderedEmail = {
@@ -259,9 +271,9 @@ function buildHtml(input: BookingEmailInput, preheader: string): string {
         Need to change something?
       </p>
       <p class="m-body" style="margin:0 0 14px;font-family:${FONT_STACK};font-size:15px;line-height:22px;color:${NAVY_800};">
-        Contact us and quote your booking reference. Rescheduling is free more
-        than ${availability.rescheduleNoticeHours} hours before your appointment,
-        and cancellations need at least ${availability.cancellationNoticeHours} hours&rsquo; notice.
+        Contact us and quote your booking reference.
+        ${escapeHtml(cancellationPolicy.cancelSummary)}
+        ${escapeHtml(cancellationPolicy.noticeRequest)}
       </p>
       <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
         <tr class="m-btnrow">
@@ -275,6 +287,68 @@ function buildHtml(input: BookingEmailInput, preheader: string): string {
       <p class="m-body" style="margin:12px 0 0;font-family:${FONT_STACK};font-size:14px;line-height:21px;color:${NAVY_600};">
         Keep this email for your appointment details and booking reference.
       </p>
+    </td>
+  </tr>`);
+
+  /*
+    Regulation 16 confirmation, on a durable medium.
+
+    This is spelled out in the email body rather than linked, because official
+    guidance is explicit that an email is a durable medium but "information
+    contained via link to a website which may change, and which is embedded in
+    an email is not". A "read the terms on our website" line would not do the
+    job. See docs/CONSUMER_RIGHTS.md.
+  */
+  rows.push(`
+  <tr>
+    <td class="m-sec" style="padding:24px 28px 0;background:${WHITE};">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:${NAVY_50};border-radius:10px;">
+        <tr>
+          <td class="m-ref" style="padding:18px 20px;">
+            ${sectionLabel("Your right to cancel")}
+            <p class="m-body" style="margin:8px 0 0;font-family:${FONT_STACK};font-size:15px;line-height:22px;color:${NAVY_800};">
+              You have the right to cancel this contract within 14 days without
+              giving any reason. The cancellation period expires at the end of
+              <strong style="color:${NAVY_900};">${escapeHtml(input.cancellationLastDateLabel)}</strong>.
+            </p>
+            <p class="m-body" style="margin:10px 0 0;font-family:${FONT_STACK};font-size:15px;line-height:22px;color:${NAVY_800};">
+              To cancel, just tell us clearly that you want to — by phone on
+              ${escapeHtml(business.phoneDisplay)}, on WhatsApp, or by email to
+              <a href="mailto:${business.emailBooking}" style="color:${NAVY_800};">${business.emailBooking}</a>.
+              Quote your booking reference. You can use the cancellation form on
+              our website if you prefer, but you do not have to. Sending your
+              message before the deadline is enough.
+            </p>
+            ${
+              input.earlyPerformanceRequested
+                ? `<p class="m-body" style="margin:10px 0 0;font-family:${FONT_STACK};font-size:15px;line-height:22px;color:${NAVY_800};">
+              Because your appointment is inside that 14-day period, you asked
+              us to carry out the check on your chosen date and acknowledged
+              that you would lose the right to cancel once the check has been
+              carried out in full. If you cancel after we have started but
+              before we finish, you pay a proportionate amount for the work
+              done — not the whole ${escapeHtml(`£${input.priceTotal}`)}.
+            </p>`
+                : `<p class="m-body" style="margin:10px 0 0;font-family:${FONT_STACK};font-size:15px;line-height:22px;color:${NAVY_800};">
+              Your appointment falls after that period, so nothing will be
+              carried out before your right to cancel has expired.
+            </p>`
+            }
+            <p class="m-body" style="margin:10px 0 0;font-family:${FONT_STACK};font-size:14px;line-height:21px;color:${NAVY_600};">
+              Separately from this statutory right, you can cancel or move any
+              appointment free of charge, whatever notice you give. We do not
+              charge a cancellation fee. Nothing here affects your rights under
+              the Consumer Rights Act 2015.
+            </p>
+            <p class="m-body" style="margin:10px 0 0;font-family:${FONT_STACK};font-size:13px;line-height:20px;color:${NAVY_600};">
+              Total price: ${escapeHtml(`£${input.priceTotal}`)}, payable after the check is
+              carried out. Accepted under our Terms &amp; Conditions version
+              ${escapeHtml(input.termsVersion)}, at
+              <a href="${business.url}/terms" style="color:${NAVY_600};">${escapeHtml(business.domain)}/terms</a>.
+            </p>
+          </td>
+        </tr>
+      </table>
     </td>
   </tr>`);
 
@@ -405,14 +479,45 @@ function buildText(input: BookingEmailInput): string {
     "",
     "NEED TO CHANGE SOMETHING?",
     "Contact us and quote your booking reference.",
-    `Rescheduling is free more than ${availability.rescheduleNoticeHours} hours before your appointment,`,
-    `and cancellations need at least ${availability.cancellationNoticeHours} hours' notice.`,
+    cancellationPolicy.cancelSummary,
+    cancellationPolicy.noticeRequest,
     "",
     `Call: ${business.phoneDisplay}`,
     `WhatsApp: ${business.whatsappHref}`,
     `Email: ${business.emailBooking}`,
     "",
-    "Keep this email for your appointment details and booking reference.",
+    "YOUR RIGHT TO CANCEL",
+    "You have the right to cancel this contract within 14 days without giving",
+    `any reason. The cancellation period expires at the end of ${input.cancellationLastDateLabel}.`,
+    "",
+    "To cancel, just tell us clearly that you want to - by phone, on WhatsApp,",
+    `or by email to ${business.emailBooking}, quoting your booking reference.`,
+    "You can use the cancellation form on our website if you prefer, but you do",
+    "not have to. Sending your message before the deadline is enough.",
+    "",
+    ...(input.earlyPerformanceRequested
+      ? [
+          "Because your appointment is inside that 14-day period, you asked us to",
+          "carry out the check on your chosen date, and acknowledged that you would",
+          "lose the right to cancel once the check has been carried out in full.",
+          "If you cancel after we have started but before we finish, you pay a",
+          `proportionate amount for the work done - not the whole £${input.priceTotal}.`,
+        ]
+      : [
+          "Your appointment falls after that period, so nothing will be carried out",
+          "before your right to cancel has expired.",
+        ]),
+    "",
+    "Separately from this statutory right, you can cancel or move any appointment",
+    "free of charge, whatever notice you give. We do not charge a cancellation",
+    "fee. Nothing here affects your rights under the Consumer Rights Act 2015.",
+    "",
+    `Total price: £${input.priceTotal}, payable after the check is carried out.`,
+    `Accepted under our Terms & Conditions version ${input.termsVersion},`,
+    `at ${business.url}/terms`,
+    "",
+    "Keep this email for your appointment details, booking reference and",
+    "cancellation rights.",
     "",
     "---",
     business.name,

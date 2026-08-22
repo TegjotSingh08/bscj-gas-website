@@ -13,6 +13,7 @@ import {
 } from "./slots";
 import { calculatePrice } from "./pricing";
 import { bookingSchema } from "./schema";
+import { TERMS_VERSION } from "./terms";
 import { formatLongDate, isoDateInZone, timeLabelInZone, zonedTimeToUtc } from "./time";
 
 /** A Wednesday in British Summer Time. */
@@ -274,6 +275,8 @@ describe("booking form validation", () => {
     addressConfirmedByCustomer: true,
     customerType: "landlord",
     applianceCount: 4,
+    termsAccepted: true,
+    termsVersion: TERMS_VERSION,
     idempotencyKey: "abcdefgh1234",
   };
 

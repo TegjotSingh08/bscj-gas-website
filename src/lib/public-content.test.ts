@@ -3,7 +3,13 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 
-import { business, cp12, serviceAreas, serviceRadiusMiles } from "./business";
+import {
+  business,
+  cancellationPolicy,
+  cp12,
+  serviceAreas,
+  serviceRadiusMiles,
+} from "./business";
 import { faqs } from "./faqs";
 
 /**
@@ -192,6 +198,94 @@ describe("the advertised service area matches the booking rule", () => {
   });
 });
 
+/**
+ * The booking consent model, asserted against the components' source.
+ *
+ * These are rules about markup that no unit test of the reducer would catch: a
+ * pre-ticked box, a bundled consent, or a Terms link that navigates the tab
+ * away and takes the customer's 30-minute reservation with it.
+ */
+describe("the review step's confirmations", () => {
+  const reviewStep = readFileSync(
+    path.resolve(SOURCE_ROOT, "components/booking/ReviewStep.tsx"),
+    "utf8",
+  );
+  const bookingFlow = readFileSync(
+    path.resolve(SOURCE_ROOT, "components/booking/BookingFlow.tsx"),
+    "utf8",
+  );
+
+  test("nothing is ticked for the customer", () => {
+    // Every consent starts false in the flow's state, and no checkbox is
+    // rendered with a hard-coded checked value.
+    assert.match(bookingFlow, /useState\(false\);?\s*$/m);
+    assert.equal(/checked=\{true\}/.test(reviewStep), false);
+    assert.equal(/defaultChecked/.test(reviewStep), false);
+  });
+
+  test("all three consents start false", () => {
+    for (const name of [
+      "addressConfirmed",
+      "termsAccepted",
+      "earlyPerformanceRequested",
+    ]) {
+      assert.match(
+        bookingFlow,
+        new RegExp(`\\[${name},[\\s\\S]{0,60}\\]\\s*=?\\s*[\\s\\S]{0,40}useState\\(\\s*false`),
+        `${name} must default to false`,
+      );
+    }
+  });
+
+  test("the three consents are separate controls, not one bundled tick", () => {
+    for (const id of [
+      "review-confirm-address",
+      "review-accept-terms",
+      "review-early-performance",
+    ]) {
+      assert.ok(reviewStep.includes(id), `${id} should be its own control`);
+    }
+  });
+
+  test("confirming is blocked until every applicable consent is given", () => {
+    assert.match(reviewStep, /disabled=\{submitting \|\| !canConfirm\}/);
+    assert.match(reviewStep, /addressConfirmed &&\s*\n?\s*termsAccepted/);
+  });
+
+  test("the Terms link opens in a new tab, so the reservation survives", () => {
+    // Navigating this tab away fires the page's abandonment beacon and
+    // releases the customer's slot. Reading the terms must not cost them it.
+    const link = reviewStep.match(/<a[^>]*href="\/terms"[\s\S]*?>/);
+    assert.ok(link, "the Terms link should exist");
+    assert.match(link[0], /target="_blank"/);
+    assert.match(link[0], /rel="noopener noreferrer"/);
+  });
+
+  test("the new tab is announced, rather than being a surprise", () => {
+    assert.match(reviewStep, /opens in a new tab/i);
+  });
+
+  test("editing the details clears every consent again", () => {
+    const patch = bookingFlow.match(/onPatch=\{\(patch\) => \{[\s\S]*?\}\}/);
+    assert.ok(patch, "the details form should patch through the flow");
+    for (const setter of [
+      "setAddressConfirmed(false)",
+      "setTermsAccepted(false)",
+      "setEarlyPerformanceRequested(false)",
+    ]) {
+      assert.ok(patch[0].includes(setter), `${setter} should run on an edit`);
+    }
+  });
+
+  test("the order button says that confirming means paying", () => {
+    // Regulation 14: an order placed with a button must be labelled
+    // unambiguously where it entails an obligation to pay — deferred payment
+    // included.
+    assert.match(reviewStep, /Confirm booking — agree to pay/);
+    assert.match(reviewStep, /obligation to pay/i);
+  });
+});
+
 describe("no invented facts reach the public site", () => {
   test("no review or rating markup exists, because no reviews are verified", () => {
     assert.equal(schemaSource.includes("aggregateRating"), false);
@@ -201,6 +295,63 @@ describe("no invented facts reach the public site", () => {
   test("the published price is the one fixed price", () => {
     assert.equal(cp12.price, 45);
     assert.equal(cp12.priceTotalDisplay, "£45 total");
+  });
+
+  test("no cancellation or no-show charge exists anywhere", () => {
+    // Neither the £5 flat charge nor an automatic £45 no-show fee was ever
+    // implemented, and neither may reappear without evidence of actual loss.
+    assert.equal(cancellationPolicy.chargeApplies, false);
+    assert.deepEqual(
+      filesContaining([
+        "cancellation fee of",
+        "cancellation charge of",
+        "no-show fee",
+        "no-show charge",
+        "missed appointment fee",
+        "£5 charge",
+      ]),
+      [],
+    );
+  });
+
+  test("nothing claims an appointment cannot be cancelled", () => {
+    // The old terms said exactly this inside a 48-hour window, which read as
+    // though it removed a statutory right.
+    assert.deepEqual(
+      filesContaining([
+        "cannot be cancelled",
+        "can not be cancelled",
+        "cannot cancel",
+        "non-refundable",
+        "no refunds",
+      ]),
+      [],
+    );
+  });
+
+  test("statutory rights are never excluded or limited", () => {
+    assert.deepEqual(
+      filesContaining([
+        "exclude all liability",
+        "excludes all liability",
+        "to the fullest extent permitted",
+        "we accept no liability",
+        "no liability whatsoever",
+        "your statutory rights are not affected by", // trailing weasel wording
+      ]),
+      [],
+    );
+  });
+
+  test("the terms page states its version and the right to cancel", () => {
+    const terms = copy.get("src/app/terms/page.tsx");
+    assert.ok(terms, "the terms page should exist");
+    assert.match(terms, /right to cancel this contract within/i);
+    assert.match(terms, /TERMS_VERSION/);
+    assert.match(terms, /reasonable care and skill/i);
+    // The model cancellation form is made available, and is not compulsory.
+    assert.match(terms, /cancellation-form/);
+    assert.match(terms, /do not have to use this form/i);
   });
 
   test("no VAT wording appears anywhere customer-facing", () => {

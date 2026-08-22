@@ -109,6 +109,34 @@ export const bookingSchema = z.object({
     message: "Please confirm the property address is correct.",
   }),
 
+  /**
+   * The customer read and accepted the terms. Required as a literal true, so
+   * a truthy value like "yes" or 1 will not pass.
+   */
+  termsAccepted: z.literal(true, {
+    message: "Please read and accept the Terms & Conditions.",
+  }),
+
+  /**
+   * The version of the terms the browser displayed. Checked against the
+   * server's current version, so a stale tab cannot record acceptance of
+   * wording the customer never saw.
+   */
+  termsVersion: z
+    .string()
+    .trim()
+    .min(1, "Please refresh the page and read the Terms & Conditions again."),
+
+  /**
+   * Regulation 36(1) express request, needed only when the appointment falls
+   * inside the statutory cancellation period.
+   *
+   * Deliberately a plain boolean here: whether it is *required* depends on the
+   * slot and the moment of booking, which is the server's decision alone. The
+   * route enforces it — see `checkTermsAcceptance`.
+   */
+  earlyPerformanceRequested: z.boolean().optional().default(false),
+
   customerType: z.enum(customerTypes, {
     message: "Please choose whether you are a landlord, agent, tenant or homeowner.",
   }),

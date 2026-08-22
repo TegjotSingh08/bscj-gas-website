@@ -1,6 +1,6 @@
 "use client";
 
-import { availability, business, cp12 } from "@/lib/business";
+import { business, cancellationPolicy, cp12 } from "@/lib/business";
 import { emailNotice } from "@/lib/booking/confirmation-notice";
 
 export type ConfirmedBooking = {
@@ -150,10 +150,9 @@ export function Confirmation({ booking }: { booking: ConfirmedBooking }) {
             Need to change or cancel?
           </p>
           <p className="mt-1 text-sm leading-relaxed text-navy-800">
-            Rescheduling is free more than {availability.rescheduleNoticeHours}{" "}
-            hours before your slot. Cancellations need at least{" "}
-            {availability.cancellationNoticeHours} hours&rsquo; notice. Just get
-            in touch.
+            {cancellationPolicy.cancelSummary} {cancellationPolicy.noticeRequest}{" "}
+            Your confirmation email also sets out your statutory right to cancel
+            within 14 days and how to use it.
           </p>
           <div className="mt-4 flex flex-col gap-2 sm:flex-row">
             <a

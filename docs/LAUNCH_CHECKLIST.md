@@ -18,15 +18,27 @@ The application has **not** been intentionally deployed or launched. See
 
 Things that genuinely stop the site going up.
 
-- [ ] **Terms & Conditions / Consumer Contracts milestone — the next task, and
-      the one real blocker left.** `/terms` still holds an earlier page that
-      predates the consumer-rights research. It has no 14-day statutory
-      cancellation right, no regulation 36 express request, no acknowledgement
-      about losing the right on full performance, no versioned terms acceptance
-      and no server-side enforcement. Clause 4 currently states that
-      appointments cannot be cancelled inside the 48-hour window, which as
-      written purports to exclude a statutory right. **Do not launch on the
-      current terms.** See `PROJECT_HANDOFF.md` §11.
+- [x] **Terms & Conditions / Consumer Contracts milestone — done
+      22 August 2026.** `/terms` rewritten from primary sources as version
+      `2026-08-22`, with the 14-day statutory cancellation right, the
+      regulation 36 express request and acknowledgement, the regulation 13(1)(b)
+      cancellation form, versioned acceptance and server-side enforcement. The
+      old "appointments cannot be cancelled" wording is gone. See
+      `docs/CONSUMER_RIGHTS.md`.
+- [x] Confirm button labelled for the regulation 14 obligation to pay, with the
+      total price prominent directly above it
+- [x] Cancellation information written into the confirmation email body, on a
+      durable medium — not merely linked
+- [x] Three separate unticked confirmations on Review; nothing pre-ticked, and
+      the Terms link opens in a new tab so the 30-minute reservation survives
+- [x] No cancellation charge, no no-show charge, no £5 charge anywhere
+- [ ] **Owner: have a solicitor review the terms** before relying on them.
+      `docs/CONSUMER_RIGHTS.md` §12 lists the six open points. Recommended, not
+      a code task, and it does not block the release audit.
+- [ ] **Diagnose the runtime failure reported on 22 August 2026.** It did not
+      reproduce during the terms milestone — every page returned 200 locally and
+      the booking flow ran to Review against live Google Calendar and Redis.
+      This belongs to the final integrated release audit.
 
 - [x] Production build passes (`npm run build`)
 - [x] TypeScript passes (`npm run typecheck`)
@@ -42,11 +54,11 @@ Things that genuinely stop the site going up.
 - [x] No review/rating structured data (there are no verified reviews yet)
 - [x] Custom BSCJ booking flow replaces the Google iframe (no Google branding,
       no customer sign-in)
-- [x] Full suite green — 389 tests across 64 suites covering the availability
+- [x] Full suite green — 455 tests across 73 suites covering the availability
       engine, holds, the attempt reducer, the booking route's transaction order,
       the Google client, the email builder and transport, address handling,
-      contact validation and the public-content rules. No test contacts a live
-      provider
+      contact validation, the terms and cancellation-period rules, and the
+      public-content rules. No test contacts a live provider
 - [x] Server re-checks availability immediately before creating any event
 - [x] Duplicate submissions cannot create two bookings (deterministic event id)
 - [x] Price always derived server-side, never taken from the browser
@@ -152,6 +164,16 @@ Must be checked by a human on the live site, after deployment.
 - [ ] Cancel the test booking so it does not block a real slot
 - [ ] Confirm no confirmation email is promised anywhere the site does not
       actually send one
+- [ ] Make a live booking inside the 14-day window and confirm the express-request
+      box appears, is unticked, and blocks Confirm until ticked
+- [ ] Make a live booking more than 14 days out and confirm the express-request
+      box does NOT appear and Confirm still works
+- [ ] Open the Terms link from the review step and confirm the reservation and
+      its countdown are untouched when you come back
+- [ ] Confirm the delivered email carries the 14-day right, the exact expiry
+      date, how to cancel and the terms version — in the body, not as a link
+- [ ] Confirm the calendar event description records the terms version, the
+      cancellation deadline and whether an early start was requested
 - [ ] Tap the Call button on a real phone and confirm it dials 07494 949648
 - [ ] Tap WhatsApp on a real phone and confirm it opens the right chat
 - [ ] Confirm the site's own booking form collects: property address, number of

@@ -122,15 +122,29 @@ the phone and WhatsApp instead.
   house exists at a postcode.
 - Confirmation: one branded confirmation email is sent after the calendar event
   exists, with the appointment details and a booking reference.
-- Cancellation policy: Can cancel with 48 hour - unable to cancel if less than 48 hours between appointment time 
-- Rescheduling policy: Free rescheduling if more than 24 hours away from appointment time
+- Cancellation policy (REVISED 22 August 2026): the customer can cancel or move
+  any appointment free of charge, whatever notice is given. There is no
+  cancellation charge, no no-show charge and no deadline after which an
+  appointment "cannot" be cancelled. We ask for 24 hours' notice as a courtesy,
+  not as a condition. The previous "48 hours, cannot cancel inside that window"
+  wording was withdrawn because it purported to exclude a statutory right.
+- Statutory cancellation right: bookings made online are distance contracts, so
+  the customer has 14 days to cancel. Where the appointment falls inside those
+  14 days the booking flow takes a separate express request before the engineer
+  may attend. See docs/CONSUMER_RIGHTS.md.
+- Rescheduling policy: free. Arranged by contacting the business — there is no
+  self-service rescheduling on the website, and the site does not claim one.
+- Failed access policy: one further appointment free of charge. No automatic
+  charge. If access fails repeatedly, BSCJ may decline to keep rebooking online
+  rather than charging a penalty.
 - Tenant contact details required: Yes
 - Parking or access information required: If applicable
 
-**The cancellation and rescheduling wording above is the operational intent, not
-the published legal position.** The Terms & Conditions / Consumer Contracts
-milestone is still outstanding and will settle the customer-facing wording,
-including statutory cancellation rights. See `PROJECT_HANDOFF.md` §11.
+The customer-facing wording of all of the above now lives in one place:
+`cancellationPolicy` in `src/lib/business.ts`, rendered on /terms, /book, the
+FAQs, the confirmation page and the confirmation email. Terms version in force:
+**2026-08-22**. Change the policy here first, then in `business.ts`, then bump
+`TERMS_VERSION`.
 
 ## Customer Contact
 

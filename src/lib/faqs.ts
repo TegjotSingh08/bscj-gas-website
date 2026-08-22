@@ -1,5 +1,5 @@
 import {
-  availability,
+  cancellationPolicy,
   cp12,
   sameDayMessaging,
   serviceAreaCopy,
@@ -57,7 +57,7 @@ export const faqs: Faq[] = [
   },
   {
     question: "What if I need to cancel or move my appointment?",
-    answer: `You can reschedule free of charge as long as it is more than ${availability.rescheduleNoticeHours} hours before your slot. Cancellations need at least ${availability.cancellationNoticeHours} hours' notice.`,
+    answer: `${cancellationPolicy.cancelSummary} ${cancellationPolicy.noticeRequest} ${cancellationPolicy.rescheduleSummary} Because you booked online, you also have a statutory right to cancel within 14 days of booking — the Terms & Conditions explain how that works alongside an appointment that falls inside those 14 days.`,
   },
   {
     question: "How do I pay?",

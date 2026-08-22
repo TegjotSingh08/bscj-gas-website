@@ -14,6 +14,9 @@ const EMAIL = renderBookingConfirmationEmail({
   addressLines: ["24 Example Road", "Wolverhampton", "WV1 1AA"],
   applianceCount: 1,
   priceTotal: 45,
+  termsVersion: "2026-08-22",
+  cancellationLastDateLabel: "Saturday, 5 September 2026",
+  earlyPerformanceRequested: true,
 });
 
 const originalFetch = globalThis.fetch;

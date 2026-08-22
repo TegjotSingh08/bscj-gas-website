@@ -7,6 +7,7 @@ import {
   normaliseUkMobile,
 } from "./contact";
 import { bookingSchema } from "./schema";
+import { TERMS_VERSION } from "./terms";
 
 describe("UK mobile numbers are accepted however people write them", () => {
   const canonical = "+447700900123";
@@ -157,6 +158,8 @@ describe("the booking schema uses the same rules", () => {
     customerType: "landlord",
     applianceCount: 3,
     addressConfirmedByCustomer: true,
+    termsAccepted: true,
+    termsVersion: TERMS_VERSION,
     idempotencyKey: "abcdefgh1234",
   };
 

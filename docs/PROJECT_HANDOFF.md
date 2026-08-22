@@ -1,7 +1,7 @@
 # Project Handoff
 
 Written 21 August 2026. Revised 22 August 2026 by the pre-terms correction
-milestone.
+milestone and then by the Terms & Conditions / consumer-rights milestone.
 
 This document exists so a fresh session with no memory of previous
 conversations can pick this project up accurately. It describes what the
@@ -118,14 +118,31 @@ Four steps at `/book`, driven by `BookingFlow.tsx` and a pure reducer in
    - Phone and email are validated by the shared implementation (§8).
 5. **Review & Confirm** — the full address is shown as its own prominent
    block, with appointment, contact, service, appliances, total and payment
-   timing. An **unticked** confirmation is required:
-   *"I confirm that the property address and booking details shown above are
-   correct."* Confirm is disabled until it is ticked, and any edit clears it.
+   timing. Then **three separate, unticked confirmations**, each cleared by any
+   edit and each re-checked on the server:
+   1. *"I confirm that the property address and booking details shown above are
+      correct."*
+   2. *"I have read and agree to the Terms & Conditions"*, linking to `/terms`
+      **in a new tab** so the 30-minute reservation is not lost.
+   3. Only when the appointment falls inside the statutory cancellation period:
+      the express request to carry out the check on that date, with the
+      acknowledgement that the right to cancel is lost once it is fully
+      performed. See §11.
+
+   Confirm stays disabled until every applicable box is ticked, and the button
+   itself reads **"Confirm booking — agree to pay £45"** — regulation 14
+   requires an order button to say unambiguously that it carries an obligation
+   to pay, even where payment is deferred.
 6. **Booking** — `/api/book` runs, in order:
-   validate → completed-attempt check → hold check → postcode re-validation →
-   service-area re-check → **Google free/busy re-query** → **create the
-   calendar event** → mark completed → release hold → derive the booking
-   reference → render and attempt the confirmation email → respond.
+   validate → completed-attempt check → hold check → **terms gate** →
+   postcode re-validation → service-area re-check → **Google free/busy
+   re-query** → **create the calendar event** → mark completed → release hold →
+   derive the booking reference → render and attempt the confirmation email →
+   respond.
+
+   The terms gate re-derives whether the appointment falls inside the
+   cancellation period from the slot and the current time, so the browser
+   cannot make the requirement disappear.
 7. **Confirmation page** — "You're booked", then a prominent panel confirming
    the email was sent with **Junk/Spam guidance**, then the appointment
    details and the booking reference (`BSCJ-XXXXXX`).
@@ -157,8 +174,15 @@ preserve every one.
 9. **Pricing is always derived server-side** by `calculatePrice`. A price sent
    by the browser is ignored.
 10. **Browser values are never authoritative.** The postcode, service area,
-    phone, email and address confirmation are all re-established or re-checked
-    on the server.
+    phone, email, address confirmation, terms acceptance and early-performance
+    request are all re-established or re-checked on the server.
+11. **No booking is written without accepted, current terms.** The gate runs
+    before the postcode lookup and the calendar, so a refusal costs nothing and
+    creates nothing.
+12. **Whether an express request is required is the server's decision**, derived
+    from the slot and the moment of booking — never a flag the browser sent.
+13. **Nothing is ever pre-ticked**, and every consent is independent. Editing
+    the details clears all three.
 
 Infrastructure failure is never read as permission. If Redis cannot be
 reached, holds report *unavailable* — never *free* — and booking falls back to
@@ -326,17 +350,14 @@ From `business-details.md` via `lib/business.ts`:
 - Appointments are 45 minutes with a 15-minute buffer, 12 hours' minimum
   notice, up to 30 days ahead, maximum 8 per day.
 
-**Cancellation and rescheduling as currently agreed:**
+**Cancellation and rescheduling — now published in the terms (§11):**
 
+- **No cancellation charge of any kind**, whatever notice is given.
 - **Free rescheduling**, arranged by contacting the business.
-- **Failed access:** the intent is *not* to charge the £45 automatically.
-  Offer **one free reschedule**, with the customer responsible for arranging
-  access next time. Repeated failures should require contacting the business
-  rather than escalating financial penalties.
-- **No £5 cancellation charge is implemented, deliberately.** See §11.
-
-None of the failed-access or reschedule policy is written into customer-facing
-terms yet — that is the outstanding milestone.
+- **Failed access:** one further appointment free of charge; repeated failures
+  mean BSCJ may decline to keep rebooking online rather than charging.
+- **No £5 charge and no automatic £45 charge exist**, and a test fails the build
+  if either reappears.
 
 ---
 
@@ -368,73 +389,88 @@ approved its appearance on desktop and mobile.
 
 ---
 
-## 11. Legal and terms work still outstanding
+## 11. Terms, cancellation rights and booking consent — DELIVERED
 
-**The Terms & Conditions milestone is NOT complete.** `/terms` currently holds
-an earlier, basic page that predates this research and does not implement what
-follows.
+**The Terms & Conditions milestone is complete as of 22 August 2026.** The full
+research, with primary sources and access dates, is in
+`docs/CONSUMER_RIGHTS.md`. Read that before changing any wording here.
 
-> **Live and adverse.** Clause 4 of that page states that appointments *cannot
-> be cancelled* inside the 48-hour window. As written that purports to remove
-> the statutory 14-day distance-selling cancellation right, which CRA 2015 s57
-> does not permit. It was left in place deliberately — correcting it properly is
-> the terms milestone's job, not a patch — but the site **must not be published
-> while it stands**. Clause 7 was reworded on 22 August 2026 for service-area
-> accuracy only; no other clause was touched.
+**Terms version in force: `2026-08-22`**, defined once in
+`src/lib/booking/terms.ts` and rendered on `/terms`. Bump it whenever the page
+changes in substance.
 
-Research completed 21 August 2026:
+### The regime
 
-- **Consumer Contracts (Information, Cancellation and Additional Charges)
-  Regulations 2013, reg 30** — an online booking is a distance service
-  contract with a **14-day cancellation period** from the day after the
-  contract is made.
-- **Reg 36(1)** — a trader must not begin supplying the service during that
-  period without the consumer's **express request**.
-- **Reg 36(2)** — the right to cancel is lost once the service is **fully
-  performed**, but only if performance began after that express request **and**
-  the consumer **acknowledged they would lose the right**.
-- **Reg 36(4)/(6)** — cancel part-way and the consumer pays a proportionate
-  amount; but if the express request or the required information was missing,
-  **the consumer pays nothing**.
+A booking taken here is a **distance contract for a service**, so the Consumer
+Contracts (Information, Cancellation and Additional Charges) Regulations 2013
+apply. DMCCA 2024 s279 excludes only *subscription* contracts, and no reg 28
+exception fits a scheduled CP12.
 
-**Why this matters commercially.** Bookings are taken up to 30 days ahead with
-12 hours' notice, so most CP12s are performed inside the 14-day window.
-Without a separate express request and acknowledgement at checkout, a customer
-could have the certificate done and cancel within 14 days owing nothing. This
-is the single most important thing the terms milestone must deliver, and it
-must be its **own clearly presented, unticked confirmation** — not buried in
-general terms.
+- **14-day cancellation period**, reg 30(2)(a), ending 14 days after the day of
+  booking. Reg 31 extends it by up to **12 months** if the cancellation
+  information is not given — the real reason the confirmation email matters.
+- **Reg 36(1)** — no work may begin inside that period without the consumer's
+  express request. A durable medium is required only for *off-premises*
+  contracts, so an on-screen tick suffices here.
+- **Reg 36(2)** — the right is lost on full performance only if performance
+  began after that request **and** with an acknowledgement that the right would
+  be lost.
+- **Reg 36(6)** — without those, the consumer pays **nothing** for a service
+  already supplied.
+- **Reg 14** — an order button carrying an obligation to pay must say so
+  unambiguously, *even where payment is deferred*; otherwise the consumer is not
+  bound by the contract at all. This was missed by the earlier research.
+- **Reg 16** — confirmation on a durable medium. An email qualifies; **a link
+  inside an email does not**, so the cancellation information is written into
+  the email body.
 
-- **Consumer Rights Act 2015 s49, s51, s52** — reasonable care and skill,
-  reasonable price, reasonable time. **s57 — these cannot be excluded or
-  restricted.** The terms must not attempt to.
-- **CMA unfair contract terms guidance (CMA37)** — a cancellation charge must
-  reflect **actual direct loss**, must not be excessive, and the calculation
-  must be set out clearly. Flat penalties that ignore savings and resale are
-  likely unfair and unenforceable.
+### The consent model
 
-**The proposed £5 late-cancellation charge was deliberately not implemented**,
-for three independent reasons: it is not a genuine pre-estimate of loss for a
-resellable 45-minute slot; most cancellations fall inside the statutory window
-where an unperformed service costs the consumer nothing; and there is no
-payment method on file, so collecting £5 would cost more than £5. Launch
-without it and revisit only with evidence of actual loss.
+Three separate, unticked controls on Review & Confirm (§3), plus the button
+label. Enforced again in `/api/book` via `checkTermsAcceptance()`:
 
-> **This research is not legal advice.** A solicitor should review the final
-> wording before the business relies on it, particularly the reg 36
-> acknowledgement.
+- terms acceptance must be **literally `true`** and carry the **current**
+  version, else `400 terms_required`;
+- whether the express request is required is **recomputed server-side**;
+- the address confirmation stays independent of both.
 
-Sources, accessed 21 August 2026:
-- https://www.legislation.gov.uk/uksi/2013/3134/regulation/36/made
-- https://www.legislation.gov.uk/uksi/2013/3134/regulation/30
-- https://www.legislation.gov.uk/ukpga/2015/15/part/1/chapter/4
-- https://assets.publishing.service.gov.uk/media/6a609329b00f3323bf1a23f3/unfair_contract_terms_guidance.pdf
+### Commercial policy now published
+
+- **No cancellation charge of any kind.** Not £5, not £45, no sliding scale.
+  CMA37 (22 July 2026) §§6.63–6.65: a termination fee must reflect savings and
+  the ability to mitigate by reselling the slot. A 45-minute slot returns to
+  availability immediately, and no payment method is held.
+- **Free rescheduling**, arranged by contacting the business. There is no
+  self-service rescheduling and the site does not claim one.
+- **Failed access:** one further appointment free of charge; repeated failures
+  mean BSCJ may decline to keep rebooking online, rather than charging.
+- **Delays:** reasonable-endeavours arrival, rearrangement at no cost, no
+  penalty to the customer.
+
+### What was removed
+
+The previous `/terms` said *"Appointments cannot be cancelled inside that
+window"* for a 48-hour window. That purported to exclude a statutory right,
+which CRA 2015 s57 does not permit. It is gone, along with
+`availability.cancellationNoticeHours` and `rescheduleNoticeHours`, and a test
+now fails the build if such wording reappears anywhere under `src/`.
+
+### Consumers versus businesses
+
+Landlords and letting agents may be acting in the course of a business and so
+may not be consumers. **V1 does not classify anyone** — everyone gets the
+consumer-protective flow, because wrongly stripping rights is far worse than
+over-protecting. Do not add a classification questionnaire. See
+`CONSUMER_RIGHTS.md` §11.
+
+> **Not legal advice, and not solicitor-approved.** `CONSUMER_RIGHTS.md` §12
+> lists the six points a solicitor should review.
 
 ---
 
 ## 12. Testing
 
-**389 tests across 64 suites, all passing.**
+**455 tests across 73 suites, all passing.**
 
 Covered: the availability engine (working hours, buffers, minimum notice,
 BST/GMT, daily cap), holds (exclusivity, expiry, switching, forged and
@@ -444,9 +480,13 @@ transaction order against the real handler, the Google client's fail-closed
 free/busy parsing, the email builder and transport, the confirmation notice,
 postcode normalisation and lookup, the haversine calculation and radius
 boundaries, phone and email validation, the minimised postcode API response,
-the Change-date state model, and repository-level public-content rules (no
-engineer name, no VAT wording, no invented ratings, no promised journey time,
-and never telling a customer we do not serve them).
+the Change-date state model, the terms/cancellation-period maths across both
+daylight-saving transitions, server-side enforcement of terms acceptance and
+the express request, and repository-level public-content rules (no engineer
+name, no VAT wording, no invented ratings, no promised journey time, no
+cancellation or no-show charge, no "cannot be cancelled" wording, no exclusion
+of statutory rights, nothing pre-ticked, and a Terms link that opens in a new
+tab so a reservation survives being read).
 
 ```bash
 npm test        # node --test, TypeScript run directly
@@ -509,6 +549,12 @@ and untracked.
 10. **Contact validation** — one shared phone and email implementation.
 11. **Simplified manual address flow** — OSM verification removed, customer
     confirmation required.
+13. **Terms & Conditions / consumer-rights milestone (22 August 2026)** —
+    `/terms` rewritten from primary sources, versioned acceptance, the
+    regulation 36 express request, regulation 14 button labelling, the
+    regulation 13(1)(b) cancellation form, and regulation 16 cancellation
+    information written into the confirmation email. See §11 and
+    `docs/CONSUMER_RIGHTS.md`.
 12. **Pre-terms correction milestone (22 August 2026)** — "Change date" now
     reaches the date picker with the reservation intact; the postcode endpoint
     returns only what the form renders; dead address-verification config
@@ -520,10 +566,15 @@ and untracked.
 
 ## 15. Outstanding pre-launch work, in order
 
-1. **Terms & Conditions / consumer-rights milestone** (§11) — the next task,
-   and the only remaining blocker that is not deployment mechanics.
+1. ~~Terms & Conditions / consumer-rights milestone~~ — **delivered
+   22 August 2026** (§11). A solicitor review is recommended but is not a code
+   task; `CONSUMER_RIGHTS.md` §12 lists the points.
 2. ~~Service-area marketing-copy decision~~ — **resolved 22 August 2026** (§7).
-3. **Final integrated security and release audit.**
+3. **Final integrated security and release audit — the next task.** It must
+   also diagnose the runtime failure the owner reported on 22 August 2026,
+   which did not reproduce during the terms milestone: every page returned 200
+   and the booking flow ran to the review step against live Google Calendar and
+   Redis. See §16.
 4. **Vercel production setup.**
 5. **Add environment variables in Vercel** (§6) and redeploy — variables only
    take effect on a new deployment.
@@ -538,11 +589,17 @@ and untracked.
 
 ## 16. Known risks and open decisions
 
-- **Reg 36 express request** (§11) — the largest commercial exposure until the
-  terms milestone lands. The live `/terms` clause 4 also states that
-  appointments cannot be cancelled inside 48 hours, which as written purports to
-  exclude a statutory right. Deliberately left for that milestone; **do not
-  launch on the current terms**.
+- **Owner-reported runtime failure (22 August 2026), not reproduced.** The
+  owner reported the booking site not working. During this milestone every page
+  returned 200 locally, `/api/availability`, `/api/hold` and
+  `/api/address/postcode` all worked, and the flow ran to Review against the
+  live services. A transient `cancellationPolicy is not defined` 500 was seen in
+  the browser console mid-edit and cleared on reload — stale dev-server HMR
+  state, not present in the source. **The next session must diagnose the real
+  failure**; nothing was changed speculatively to chase it.
+- **Solicitor review of the terms** — recommended, not obtained. Six specific
+  points are listed in `CONSUMER_RIGHTS.md` §12, including the reg 36 wording
+  and the reg 14 button label.
 - **Rate limiting is per-window in Redis**, falling back to per-instance
   counting during an outage — weaker, but it still limits.
 - **No server-side observability.** Nothing is logged beyond email failure
@@ -588,6 +645,17 @@ Specifically:
   in any town other than the registered office.
 - **Do not advertise a journey time** off the back of the radius; it is
   straight-line distance, not road routing.
+- **Do not weaken the booking consents.** Nothing may be pre-ticked, the three
+  confirmations may not be bundled, the Terms link must keep opening in a new
+  tab, and terms acceptance and the express request must stay enforced
+  server-side. Bump `TERMS_VERSION` when `/terms` changes in substance.
+- **Do not reinstate a cancellation or no-show charge** without evidence of
+  actual direct loss and a transparent, proportionate figure — see
+  `CONSUMER_RIGHTS.md` §9.
+- **Do not tell a customer an appointment cannot be cancelled**, and do not
+  exclude statutory rights.
+- **Do not replace the email's cancellation information with a link.** An email
+  is a durable medium; a link inside one is not.
 - **Do not make "Change date" drop the reservation.** Reaching the date step
   with a live hold is a change in progress: the hold, its countdown and the
   "Keep this time" escape all stay.
@@ -618,30 +686,20 @@ Every previous session ended with an explicit instruction not to deploy.
 
 ## 19. Recommended first task for the next session
 
-**The Terms & Conditions / consumer-rights milestone.** Unchanged: it is still
-the next task, and the pre-terms correction milestone of 22 August 2026
-deliberately did not start any part of it.
+**The final integrated security and release audit** — which must include
+diagnosing the runtime failure the owner reported on 22 August 2026 (§16). That
+failure did not reproduce during the terms milestone, so it needs a session
+that can reproduce it with the owner.
 
-The technical booking work is done. What remains before launch is legal and
-commercial, and §11 has the research already completed.
+The technical booking work and the contractual layer are both done. What is left
+is verification and deployment mechanics:
 
-That milestone should deliver:
+1. Reproduce and fix the reported runtime failure.
+2. Full integrated audit of the booking transaction end to end.
+3. Vercel setup, environment variables, deploy, domain.
+4. One real production booking, verified and then cancelled.
+5. Live launch checks.
 
-1. A clear, readable `/terms` page written for a landlord or homeowner, not a
-   lawyer — covering the business and legal entity, what the CP12 service is
-   and is not, the £45 pricing logic, pay-after-completion, the customer's
-   responsibility for the address and access, the one-free-reschedule
-   failed-access policy, free rescheduling, cancellation and statutory rights,
-   additional work not being included, safety, delays, and complaints.
-2. **A separate, unticked express-request acknowledgement** on Review &
-   Confirm for appointments falling inside the statutory cancellation period —
-   the reg 36 point in §11. This is the commercially important part.
-3. **A terms acceptance checkbox** with a link that opens the terms **without
-   destroying the customer's 30-minute reservation**.
-4. **Server-side enforcement** in `/api/book`, with a versioned terms
-   identifier (for example `TERMS_VERSION`) recorded against the booking,
-   along with acceptance and any early-performance request.
-5. Tests for each of those, and no weakening of anything in §4.
-
-Confirm the wording with the owner, and recommend a solicitor review before
-the business relies on it.
+A solicitor review of the terms is recommended before the business relies on
+them; `docs/CONSUMER_RIGHTS.md` §12 lists the six open points. That is an
+owner task, not a code task, and it does not block the audit.

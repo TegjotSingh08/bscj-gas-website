@@ -1,6 +1,9 @@
 import { test, describe, beforeEach, mock } from "node:test";
 import assert from "node:assert/strict";
 
+import { getPartsInZone, zonedTimeToUtc } from "@/lib/booking/time";
+import { TERMS_VERSION } from "@/lib/booking/terms";
+
 /**
  * Transaction-order tests against the real /api/book handler.
  *
@@ -21,7 +24,47 @@ let emailBehaviour: "sent" | "failed" | "not_configured" = "sent";
 let holdBehaviour: "valid" | "expired" | "unavailable" = "valid";
 let completedMarker: string | null = null;
 
-const SLOT_START = "2026-08-24T16:00:00.000Z";
+/** What the route actually asked the calendar and the mailer to do. */
+let lastEvent: { description: string } | null = null;
+let lastEmail: {
+  to: string;
+  email: { subject: string; html: string; text: string };
+  reference: string;
+} | null = null;
+
+/** The description written into the calendar event, for the last booking. */
+function eventDescription(): string {
+  assert.ok(lastEvent, "no calendar event was created");
+  return lastEvent.description;
+}
+
+/** The rendered confirmation email, for the last booking. */
+function confirmationEmail(): { subject: string; html: string; text: string } {
+  assert.ok(lastEmail, "no confirmation email was sent");
+  return lastEmail.email;
+}
+
+/**
+ * Slots are computed relative to now rather than hard-coded, because the route
+ * validates them against the real availability rules — minimum notice, the
+ * 30-day horizon and the closed Saturday. A fixed calendar date would quietly
+ * start failing once it fell into the past.
+ */
+function slotDaysAhead(days: number): string {
+  const target = new Date(Date.now() + days * 24 * 60 * 60000);
+  const parts = getPartsInZone(target, "Europe/London");
+  // Saturdays are not worked, so shift onto the Sunday.
+  const at14 = zonedTimeToUtc({ ...parts, hour: 14, minute: 0 }, "Europe/London");
+  if (at14.getUTCDay() === 6) {
+    return slotDaysAhead(days + 1);
+  }
+  return at14.toISOString();
+}
+
+/** Inside the 14-day cancellation period, so an express request is required. */
+const SLOT_START = slotDaysAhead(3);
+/** Beyond the cancellation period, so no express request is needed. */
+const FAR_SLOT_START = slotDaysAhead(20);
 const HOLD_TOKEN = "a".repeat(64);
 
 mock.module("@/lib/google/calendar", {
@@ -38,8 +81,9 @@ mock.module("@/lib/google/calendar", {
       }
       return [];
     },
-    createEvent: async () => {
+    createEvent: async (input: { description: string }) => {
       calls.push("google:create-event");
+      lastEvent = input;
       if (calendarBehaviour === "fails") {
         const error = new Error("calendar down");
         error.name = "CalendarApiError";
@@ -87,8 +131,13 @@ mock.module("@/lib/booking/holds", {
 
 mock.module("@/lib/email/send", {
   namedExports: {
-    sendBookingConfirmation: async () => {
+    sendBookingConfirmation: async (input: {
+      to: string;
+      email: { subject: string; html: string; text: string };
+      reference: string;
+    }) => {
       calls.push("resend:send");
+      lastEmail = input;
       if (emailBehaviour === "sent") return { status: "sent", id: "resend-1" };
       if (emailBehaviour === "not_configured") return { status: "not_configured" };
       return { status: "failed", reason: "rejected" };
@@ -155,6 +204,10 @@ function bookingRequest(overrides: Record<string, unknown> = {}) {
       street: "Example Road",
       postcode: "WV99 1AA",
       addressConfirmedByCustomer: true,
+      termsAccepted: true,
+      termsVersion: TERMS_VERSION,
+      // SLOT_START is inside the cancellation period, so this is required.
+      earlyPerformanceRequested: true,
       customerType: "landlord",
       applianceCount: 1,
       holdToken: HOLD_TOKEN,
@@ -171,6 +224,8 @@ beforeEach(() => {
   holdBehaviour = "valid";
   completedMarker = null;
   postcodeBehaviour = "valid";
+  lastEvent = null;
+  lastEmail = null;
 });
 
 describe("transaction order", () => {
@@ -349,9 +404,247 @@ describe("the response given to the browser", () => {
     const response = await POST(bookingRequest());
     const body = await response.json();
 
-    // 16:00 UTC in August is 17:00 in London.
-    assert.equal(body.booking.startLabel, "17:00");
-    assert.equal(body.booking.endLabel, "17:45");
-    assert.ok(body.booking.dateLabel.includes("24 August 2026"));
+    // The slot is built at 14:00 London whatever the UTC offset that day, so
+    // a label of 14:00 proves the response is rendered in London time rather
+    // than echoing the UTC instant back.
+    assert.equal(body.booking.startLabel, "14:00");
+    assert.equal(body.booking.endLabel, "14:45");
+
+    const expectedDay = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Europe/London",
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    }).format(new Date(SLOT_START));
+    assert.ok(
+      body.booking.dateLabel.includes(expectedDay),
+      `${body.booking.dateLabel} should contain ${expectedDay}`,
+    );
+  });
+});
+
+/**
+ * The contractual gate, exercised against the real handler.
+ *
+ * A booking made online is a distance service contract. The customer must have
+ * accepted the terms they were actually shown, and where the appointment falls
+ * inside the 14-day cancellation period the engineer may not attend without
+ * the customer's express request. None of that may be decidable by the
+ * browser, and none of it may be reached after a calendar event exists.
+ */
+describe("terms and cancellation rights are enforced server-side", () => {
+  test("a booking without accepted terms is refused", async () => {
+    const response = await POST(bookingRequest({ termsAccepted: false }));
+    assert.equal(response.status, 400);
+  });
+
+  test("no calendar event is created when the terms are not accepted", async () => {
+    await POST(bookingRequest({ termsAccepted: false }));
+    assert.equal(calls.includes("google:create-event"), false);
+  });
+
+  test("no confirmation email is sent when the terms are not accepted", async () => {
+    await POST(bookingRequest({ termsAccepted: false }));
+    assert.equal(calls.includes("resend:send"), false);
+  });
+
+  test("omitting the acceptance entirely is refused", async () => {
+    const response = await POST(bookingRequest({ termsAccepted: undefined }));
+    assert.equal(response.status, 400);
+    assert.equal(calls.includes("google:create-event"), false);
+  });
+
+  test("a truthy value cannot stand in for acceptance", async () => {
+    for (const forged of ["true", "yes", 1, "on"]) {
+      calls = [];
+      const response = await POST(bookingRequest({ termsAccepted: forged }));
+      assert.equal(response.status, 400, `${JSON.stringify(forged)} must fail`);
+      assert.equal(calls.includes("google:create-event"), false);
+    }
+  });
+
+  test("a stale terms version is refused, even with acceptance ticked", async () => {
+    const response = await POST(
+      bookingRequest({ termsAccepted: true, termsVersion: "2020-01-01" }),
+    );
+    const body = await response.json();
+
+    assert.equal(response.status, 400);
+    assert.equal(body.error, "terms_required");
+    assert.equal(body.problem, "terms_version_stale");
+    assert.equal(calls.includes("google:create-event"), false);
+  });
+
+  test("a missing terms version is refused", async () => {
+    const response = await POST(bookingRequest({ termsVersion: undefined }));
+    assert.equal(response.status, 400);
+    assert.equal(calls.includes("google:create-event"), false);
+  });
+
+  test("an appointment inside the cancellation period needs the express request", async () => {
+    const response = await POST(
+      bookingRequest({ earlyPerformanceRequested: false }),
+    );
+    const body = await response.json();
+
+    assert.equal(response.status, 400);
+    assert.equal(body.problem, "early_performance_not_requested");
+    assert.equal(calls.includes("google:create-event"), false);
+  });
+
+  test("omitting the express request is the same as not making one", async () => {
+    const response = await POST(
+      bookingRequest({ earlyPerformanceRequested: undefined }),
+    );
+    assert.equal(response.status, 400);
+    assert.equal(calls.includes("google:create-event"), false);
+  });
+
+  test("the browser cannot make the requirement disappear", async () => {
+    // The payload carries only whether the customer ticked the box. Whether a
+    // request was needed is recomputed here from the slot, so stripping the
+    // field — or claiming the appointment is far away — changes nothing.
+    const response = await POST(
+      bookingRequest({
+        earlyPerformanceRequested: false,
+        // A fabricated field the server has never heard of.
+        earlyPerformanceRequired: false,
+      }),
+    );
+    assert.equal(response.status, 400);
+    assert.equal(calls.includes("google:create-event"), false);
+  });
+
+  test("an appointment beyond the period needs no express request", async () => {
+    const response = await POST(
+      bookingRequest({
+        slotStart: FAR_SLOT_START,
+        earlyPerformanceRequested: false,
+      }),
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).ok, true);
+  });
+
+  test("the address confirmation stays a separate requirement", async () => {
+    // Accepting the terms does not confirm the address, and vice versa.
+    const response = await POST(
+      bookingRequest({ addressConfirmedByCustomer: false }),
+    );
+    assert.equal(response.status, 400);
+    assert.equal(calls.includes("google:create-event"), false);
+  });
+
+  test("the gate closes before the hold and the calendar are touched", async () => {
+    await POST(bookingRequest({ termsAccepted: false }));
+    // Nothing beyond the cheap duplicate lookup should have run.
+    assert.equal(calls.includes("google:freebusy"), false);
+    assert.equal(calls.includes("postcodes:lookup"), false);
+  });
+});
+
+describe("the booking records what was agreed", () => {
+  test("the calendar event carries the terms version accepted", async () => {
+    await POST(bookingRequest());
+    assert.ok(eventDescription().includes(`Terms accepted: v${TERMS_VERSION}`));
+  });
+
+  test("it records the end of the cancellation period", async () => {
+    await POST(bookingRequest());
+    assert.match(eventDescription(), /Cancellation period ends: \w+, \d+ \w+ \d{4}/);
+  });
+
+  test("it records that an early start was requested", async () => {
+    await POST(bookingRequest());
+    assert.match(eventDescription(), /Early-start requested: yes/);
+  });
+
+  test("it records when no early start was needed", async () => {
+    await POST(bookingRequest({ slotStart: FAR_SLOT_START }));
+    assert.match(eventDescription(), /Early-start requested: not needed/);
+  });
+
+  test("no hold token, key or secret is written into the event", async () => {
+    await POST(bookingRequest());
+    const description = eventDescription();
+
+    assert.equal(description.includes(HOLD_TOKEN), false);
+    assert.equal(description.includes("attempt-0001"), false);
+    assert.equal(/token/i.test(description), false);
+  });
+});
+
+/**
+ * Regulation 16 confirmation.
+ *
+ * The information has to reach the customer on a durable medium. An email is
+ * one; a link inside an email to a page that can change is not. So these
+ * assertions are against the rendered email body, not against a link in it.
+ */
+describe("the confirmation carries the cancellation information", () => {
+  test("the email states the 14-day right and the exact deadline", async () => {
+    await POST(bookingRequest());
+    const { text } = confirmationEmail();
+
+    assert.match(text, /right to cancel this contract within 14 days/i);
+    assert.match(text, /cancellation period expires at the end of \w+, \d+ \w+ \d{4}/i);
+  });
+
+  test("the email says how to cancel, without demanding a particular form", async () => {
+    await POST(bookingRequest());
+    const { text } = confirmationEmail();
+
+    assert.match(text, /tell us clearly that you want to/i);
+    assert.match(text, /you do\s*\n?\s*not have to/i);
+  });
+
+  test("the email records the terms version accepted", async () => {
+    await POST(bookingRequest());
+    assert.ok(confirmationEmail().text.includes(TERMS_VERSION));
+    assert.ok(confirmationEmail().html.includes(TERMS_VERSION));
+  });
+
+  test("an early start is spelled out, with the proportionate-payment rule", async () => {
+    await POST(bookingRequest());
+    const { text } = confirmationEmail();
+
+    assert.match(text, /inside that 14-day period/i);
+    assert.match(text, /lose the right to cancel/i);
+    assert.match(text, /proportionate amount/i);
+  });
+
+  test("an appointment outside the period says so instead", async () => {
+    await POST(bookingRequest({ slotStart: FAR_SLOT_START }));
+    const { text } = confirmationEmail();
+
+    assert.match(text, /falls after that period/i);
+    assert.equal(/lose the right to cancel/i.test(text), false);
+  });
+
+  test("the cancellation information reaches both parts of the email", async () => {
+    await POST(bookingRequest());
+    const { html, text } = confirmationEmail();
+
+    for (const body of [html, text]) {
+      assert.match(body, /right to cancel/i);
+    }
+  });
+
+  test("nothing promises a cancellation charge", async () => {
+    await POST(bookingRequest());
+    const { html, text } = confirmationEmail();
+
+    for (const body of [html, text]) {
+      assert.equal(/cancellation fee of/i.test(body), false);
+      assert.equal(/£5/.test(body), false);
+    }
+  });
+
+  test("the cancellation information is only sent once the booking exists", async () => {
+    await POST(bookingRequest());
+    assert.ok(
+      calls.indexOf("google:create-event") < calls.indexOf("resend:send"),
+    );
   });
 });

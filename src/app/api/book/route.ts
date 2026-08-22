@@ -18,6 +18,12 @@ import {
 import { bookingSchema, customerTypeLabels } from "@/lib/booking/schema";
 import { isSlotStillAvailable } from "@/lib/booking/slots";
 import { bookingReference } from "@/lib/booking/reference";
+import {
+  cancellationPeriodLastDate,
+  checkTermsAcceptance,
+  termsProblemMessage,
+  TERMS_VERSION,
+} from "@/lib/booking/terms";
 import { buildPropertyAddress, formatAddressLines } from "@/lib/address/format";
 import { PostcodesIoProvider } from "@/lib/address/postcodes-io";
 import { checkServiceArea } from "@/lib/address/service-area";
@@ -164,6 +170,35 @@ export async function POST(request: Request) {
     );
   }
 
+  // ---------------------------------------------------------------
+  // The contractual gate.
+  //
+  // Whether the appointment falls inside the statutory cancellation period is
+  // recomputed here from the slot and the current time. The browser sends
+  // whether the customer *ticked* the request, never whether one was needed —
+  // so editing client state cannot make the requirement disappear.
+  // ---------------------------------------------------------------
+  const contractMadeAt = new Date();
+  const terms = checkTermsAcceptance({
+    termsVersion: data.termsVersion,
+    termsAccepted: data.termsAccepted,
+    earlyPerformanceRequested: data.earlyPerformanceRequested,
+    slotStart: new Date(data.slotStart),
+    contractMadeAt,
+    timeZone: bookingConfig.timeZone,
+  });
+
+  if (!terms.ok) {
+    return NextResponse.json(
+      {
+        error: "terms_required",
+        problem: terms.problem,
+        message: termsProblemMessage(terms.problem),
+      },
+      { status: 400 },
+    );
+  }
+
   // The schema already requires addressConfirmedByCustomer to be literally
   // true, so a submission without it never reaches this point.
   const property = buildPropertyAddress({
@@ -205,6 +240,15 @@ export async function POST(request: Request) {
           )}`
         : "Tenant: not applicable";
 
+    // The calendar event is the only record this version keeps, so it carries
+    // a short contractual footer: what was accepted, and whether the customer
+    // asked for the work inside their cancellation period. Non-sensitive by
+    // design — no hold token, no idempotency key, no credential.
+    const cancellationLastDate = cancellationPeriodLastDate(
+      contractMadeAt,
+      bookingConfig.timeZone,
+    );
+
     const description = [
       `Customer: ${clean(data.fullName)}`,
       `Phone: ${clean(data.phone)}`,
@@ -223,6 +267,12 @@ export async function POST(request: Request) {
           : ""
       })`,
       "Payment: after completion",
+      "",
+      `Terms accepted: v${TERMS_VERSION}`,
+      `Cancellation period ends: ${formatLongDate(cancellationLastDate, bookingConfig.timeZone)}`,
+      terms.earlyPerformanceRequired
+        ? "Early-start requested: yes — appointment is inside the cancellation period"
+        : "Early-start requested: not needed — appointment is outside the cancellation period",
       "",
       "Booking source: website",
     ].join("\n");
@@ -263,6 +313,15 @@ export async function POST(request: Request) {
       applianceCount: price.applianceCount,
       // Server-derived total, never the figure the browser displayed.
       priceTotal: price.total,
+      // Regulation 16 confirmation: the cancellation information travels in
+      // the email body itself, because an email is a durable medium but a
+      // link inside one is not.
+      termsVersion: TERMS_VERSION,
+      cancellationLastDateLabel: formatLongDate(
+        cancellationLastDate,
+        bookingConfig.timeZone,
+      ),
+      earlyPerformanceRequested: terms.earlyPerformanceRequired,
     });
 
     // sendBookingConfirmation never throws, so this cannot turn a confirmed

@@ -61,8 +61,35 @@ export const availability = {
   workingHours: "10:00 – 20:00",
   minimumNoticeHours: 12,
   maximumAdvanceDays: 30,
-  cancellationNoticeHours: 48,
-  rescheduleNoticeHours: 24,
+  /**
+   * A request, not a condition. There is no cancellation charge and no
+   * deadline after which an appointment "cannot" be cancelled — the previous
+   * 48-hour wording was withdrawn on 22 August 2026 because it read as though
+   * it removed a statutory right. See `lib/booking/terms.ts`.
+   */
+  preferredNoticeHours: 24,
+} as const;
+
+/**
+ * Cancellation, rescheduling and failed-access policy.
+ *
+ * Deliberately one place, because it has to read identically on /terms, in the
+ * FAQs, on /book and in the confirmation email. See docs/CONSUMER_RIGHTS.md
+ * for the legal reasoning; none of this has been reviewed by a solicitor.
+ */
+export const cancellationPolicy = {
+  /** No cancellation charge exists. Not £5, not £45, not a sliding scale. */
+  chargeApplies: false,
+  cancelSummary:
+    "You can cancel or move any appointment free of charge, whatever notice you give. We never charge a cancellation fee.",
+  noticeRequest: `Please give us as much notice as you can — ideally ${availability.preferredNoticeHours} hours — so we can offer the slot to someone else.`,
+  rescheduleSummary:
+    "Rescheduling is free. Contact us and we will find you another time — there is no self-service rescheduling on this website yet.",
+  /** One free reschedule on a failed visit. No automatic charge, ever. */
+  failedAccessSummary:
+    "If nobody is there to let the engineer in, or the appliances cannot be reached, we will offer you one further appointment free of charge. We do not make an automatic charge for a missed visit.",
+  failedAccessRepeat:
+    "If access fails more than once, we may ask you to arrange the work with us directly rather than booking online again.",
 } as const;
 
 /**

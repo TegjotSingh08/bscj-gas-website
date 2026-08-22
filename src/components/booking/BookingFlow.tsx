@@ -10,6 +10,11 @@ import {
 } from "react";
 
 import { business, calendarDirectUrl, cp12 } from "@/lib/business";
+import { bookingConfig } from "@/lib/booking/config";
+import {
+  requiresEarlyPerformanceRequest,
+  TERMS_VERSION,
+} from "@/lib/booking/terms";
 import {
   attemptReducer,
   initialAttemptState,
@@ -33,6 +38,8 @@ type LoadState = "loading" | "ready" | "failed";
 
 /** Mirrors HOLD_WARNING_SECONDS on the server. */
 const HOLD_WARNING_SECONDS = 300;
+
+const BOOKING_TIME_ZONE = bookingConfig.timeZone;
 
 /** Pure fetcher: no React state, so it can live outside the component. */
 async function fetchAvailability(
@@ -91,8 +98,15 @@ export function BookingFlow() {
   const [notice, setNotice] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [confirmed, setConfirmed] = useState<ConfirmedBooking | null>(null);
-  /** Ticked on the review step. Never carried over from a previous attempt. */
+  /**
+   * The review step's confirmations. All three start false, are never carried
+   * over from a previous attempt, and are cleared by any edit to the details.
+   * The server requires each of them again for itself.
+   */
   const [addressConfirmed, setAddressConfirmed] = useState(false);
+  const [termsAccepted, setTermsAccepted] = useState(false);
+  const [earlyPerformanceRequested, setEarlyPerformanceRequested] =
+    useState(false);
 
   const { step, reservation, changingTime, selectedDate } = attempt;
 
@@ -193,6 +207,23 @@ export function BookingFlow() {
     () => days.filter((day) => day.slots.length > 0),
     [days],
   );
+
+  /**
+   * Whether this appointment falls inside the statutory cancellation period,
+   * and so needs the customer's express request before the engineer attends.
+   *
+   * Display only — it decides whether to *show* the control. The server
+   * recomputes it from the slot and the moment of booking, so a browser that
+   * suppresses this cannot make the requirement go away.
+   */
+  const earlyPerformanceRequired = useMemo(() => {
+    if (!reservation) return false;
+    return requiresEarlyPerformanceRequest(
+      new Date(reservation.slotStart),
+      new Date(),
+      BOOKING_TIME_ZONE,
+    );
+  }, [reservation]);
 
   const slotsForSelectedDate = useMemo(() => {
     if (!selectedDate) return [];
@@ -319,6 +350,9 @@ export function BookingFlow() {
         body: JSON.stringify({
           ...details,
           addressConfirmedByCustomer: addressConfirmed,
+          termsAccepted,
+          termsVersion: TERMS_VERSION,
+          earlyPerformanceRequested,
           slotStart: reservation.slotStart,
           holdToken: reservation.token ?? undefined,
           idempotencyKey: ensureIdempotencyKey(),
@@ -352,6 +386,17 @@ export function BookingFlow() {
       }
 
       if (data.error === "duplicate") {
+        setFormError(data.message);
+        return;
+      }
+
+      if (data.error === "terms_required") {
+        // The server disagreed about what this booking needed — most likely a
+        // stale tab holding an older terms version. Clear the confirmations
+        // rather than leaving ticks standing for something no longer shown.
+        setAddressConfirmed(false);
+        setTermsAccepted(false);
+        setEarlyPerformanceRequested(false);
         setFormError(data.message);
         return;
       }
@@ -459,6 +504,8 @@ export function BookingFlow() {
             onPatch={(patch) => {
               // Any edit invalidates a confirmation given on the review step.
               setAddressConfirmed(false);
+              setTermsAccepted(false);
+              setEarlyPerformanceRequested(false);
               setDetails((previous) => ({ ...previous, ...patch }));
             }}
             onBack={() => dispatch({ type: "go-to-step", step: 2 })}
@@ -482,6 +529,11 @@ export function BookingFlow() {
             submitting={submitting}
             addressConfirmed={addressConfirmed}
             onAddressConfirmedChange={setAddressConfirmed}
+            termsAccepted={termsAccepted}
+            onTermsAcceptedChange={setTermsAccepted}
+            earlyPerformanceRequired={earlyPerformanceRequired}
+            earlyPerformanceRequested={earlyPerformanceRequested}
+            onEarlyPerformanceRequestedChange={setEarlyPerformanceRequested}
             onBack={() => dispatch({ type: "go-to-step", step: 3 })}
             onConfirm={handleConfirm}
           />

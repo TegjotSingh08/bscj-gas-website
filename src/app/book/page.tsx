@@ -1,7 +1,13 @@
+import Link from "next/link";
 import type { Metadata } from "next";
 import { BookingFlow } from "@/components/booking/BookingFlow";
 import { TrustRow } from "@/components/TrustRow";
-import { availability, business, cp12 } from "@/lib/business";
+import {
+  availability,
+  business,
+  cancellationPolicy,
+  cp12,
+} from "@/lib/business";
 import { JsonLd, breadcrumbSchema, serviceSchema } from "@/lib/schema";
 
 export const metadata: Metadata = {
@@ -63,13 +69,18 @@ export default function BookPage() {
               Changing your booking
             </h2>
             <ul className="mt-3 space-y-2 text-sm leading-relaxed text-navy-800">
+              <li>{cancellationPolicy.cancelSummary}</li>
+              <li>{cancellationPolicy.noticeRequest}</li>
               <li>
-                Reschedule free of charge more than{" "}
-                {availability.rescheduleNoticeHours} hours before your slot.
-              </li>
-              <li>
-                Cancellations need at least{" "}
-                {availability.cancellationNoticeHours} hours&rsquo; notice.
+                Booking online also gives you a statutory right to cancel within
+                14 days — see the{" "}
+                <Link
+                  href="/terms"
+                  className="font-semibold text-flame-600 underline underline-offset-4"
+                >
+                  Terms &amp; Conditions
+                </Link>
+                .
               </li>
               <li>
                 You can book up to {availability.maximumAdvanceDays} days ahead.

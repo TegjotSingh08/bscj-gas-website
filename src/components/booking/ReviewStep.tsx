@@ -2,7 +2,7 @@
 
 import { calculatePrice } from "@/lib/booking/pricing";
 import { customerTypeLabels } from "@/lib/booking/schema";
-import { cp12 } from "@/lib/business";
+import { business, cp12 } from "@/lib/business";
 import { formatAddressLines } from "@/lib/address/format";
 import { formatUkMobileForDisplay, normaliseUkMobile } from "@/lib/booking/contact";
 import type { Slot } from "./BookingFlow";
@@ -28,6 +28,37 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
+/**
+ * One consent control.
+ *
+ * Every one is unticked on arrival and independently controlled — none is a
+ * default the customer has to notice and undo.
+ */
+function Consent({
+  id,
+  checked,
+  onChange,
+  children,
+}: {
+  id: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="mt-4 flex items-start gap-3 rounded-xl border-2 border-navy-200 bg-white p-4 text-sm leading-relaxed text-navy-900">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+        data-analytics-id={id}
+        className="mt-0.5 h-5 w-5 shrink-0 rounded border-2 border-navy-300"
+      />
+      <span className="font-semibold">{children}</span>
+    </label>
+  );
+}
+
 export function ReviewStep({
   date,
   slot,
@@ -35,6 +66,11 @@ export function ReviewStep({
   submitting,
   addressConfirmed,
   onAddressConfirmedChange,
+  termsAccepted,
+  onTermsAcceptedChange,
+  earlyPerformanceRequired,
+  earlyPerformanceRequested,
+  onEarlyPerformanceRequestedChange,
   onBack,
   onConfirm,
 }: {
@@ -45,6 +81,15 @@ export function ReviewStep({
   /** Never defaults to true — the customer must actively confirm. */
   addressConfirmed: boolean;
   onAddressConfirmedChange: (confirmed: boolean) => void;
+  termsAccepted: boolean;
+  onTermsAcceptedChange: (accepted: boolean) => void;
+  /**
+   * True when this appointment falls inside the statutory cancellation period.
+   * Display only — the server decides this again for itself.
+   */
+  earlyPerformanceRequired: boolean;
+  earlyPerformanceRequested: boolean;
+  onEarlyPerformanceRequestedChange: (requested: boolean) => void;
   onBack: () => void;
   onConfirm: () => void;
 }) {
@@ -60,6 +105,13 @@ export function ReviewStep({
     ? formatUkMobileForDisplay(mobile.e164)
     : details.phone;
   const price = calculatePrice(details.applianceCount);
+
+  /** Every required confirmation, and only the ones that actually apply. */
+  const canConfirm =
+    addressConfirmed &&
+    termsAccepted &&
+    (!earlyPerformanceRequired || earlyPerformanceRequested);
+
   const endLabel = new Intl.DateTimeFormat("en-GB", {
     hour: "2-digit",
     minute: "2-digit",
@@ -151,30 +203,82 @@ export function ReviewStep({
       </div>
 
       {/*
-        Unticked by default, and cleared by any edit. The server requires it
-        too, so an altered request cannot skip it.
+        Three separate, independently controlled confirmations, each unticked
+        on arrival and cleared by any edit. They are legally distinct — the
+        address check, agreement to the terms, and the request to work inside
+        the cancellation period — so they are never bundled into one tick.
+        The server requires each of them again for itself.
       */}
-      <label className="mt-5 flex items-start gap-3 rounded-xl border-2 border-navy-200 bg-white p-4 text-sm font-semibold text-navy-900">
-        <input
-          type="checkbox"
-          checked={addressConfirmed}
-          onChange={(event) => onAddressConfirmedChange(event.target.checked)}
-          data-analytics-id="review-confirm-address"
-          className="mt-0.5 h-5 w-5 shrink-0 rounded border-2 border-navy-300"
-        />
+      <Consent
+        id="review-confirm-address"
+        checked={addressConfirmed}
+        onChange={onAddressConfirmedChange}
+      >
         I confirm that the property address and booking details shown above are
         correct.
-      </label>
+      </Consent>
 
-      <div className="mt-6 flex flex-col gap-3 sm:flex-row-reverse">
+      <Consent
+        id="review-accept-terms"
+        checked={termsAccepted}
+        onChange={onTermsAcceptedChange}
+      >
+        I have read and agree to the{" "}
+        {/*
+          A new tab, deliberately. The customer is holding a 30-minute
+          reservation: navigating this tab away would fire the page's
+          abandonment beacon and release their slot.
+        */}
+        <a
+          href="/terms"
+          target="_blank"
+          rel="noopener noreferrer"
+          data-analytics-id="review-terms-link"
+          className="text-flame-600 underline underline-offset-4"
+        >
+          Terms &amp; Conditions
+        </a>{" "}
+        <span className="font-normal text-navy-600">(opens in a new tab)</span>.
+      </Consent>
+
+      {earlyPerformanceRequired && (
+        <Consent
+          id="review-early-performance"
+          checked={earlyPerformanceRequested}
+          onChange={onEarlyPerformanceRequestedChange}
+        >
+          My appointment is inside my 14-day cancellation period. I am asking{" "}
+          {business.name} to carry out the gas safety check on that date, and I
+          understand that once the check has been carried out in full I will no
+          longer have the right to cancel it. If I cancel after the work has
+          started but before it is finished, I will pay a proportionate amount
+          for the work already done.
+        </Consent>
+      )}
+
+      {/*
+        Regulation 14: the consumer must explicitly acknowledge that placing
+        the order carries an obligation to pay, and where an order is placed
+        with a button, the button must say so unambiguously. This applies even
+        though payment is deferred until after the visit.
+      */}
+      <p className="mt-5 rounded-xl bg-navy-50 px-4 py-3 text-sm font-semibold leading-relaxed text-navy-900">
+        Confirming this booking creates a contract and an obligation to pay
+        £{price.total} for the Gas Safety Certificate. {cp12.payment} — there is
+        nothing to pay now.
+      </p>
+
+      <div className="mt-4 flex flex-col gap-3 sm:flex-row-reverse">
         <button
           type="button"
           onClick={onConfirm}
-          disabled={submitting || !addressConfirmed}
+          disabled={submitting || !canConfirm}
           data-analytics-id="booking-confirm"
           className="rounded-xl bg-flame-500 px-8 py-4 text-base font-bold text-white hover:bg-flame-600 disabled:cursor-not-allowed disabled:opacity-50 sm:flex-1"
         >
-          {submitting ? "Confirming…" : "Confirm booking"}
+          {submitting
+            ? "Confirming…"
+            : `Confirm booking — agree to pay £${price.total}`}
         </button>
         <button
           type="button"

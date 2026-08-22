@@ -20,6 +20,9 @@ const BASE: BookingEmailInput = {
   addressLines: ["24 Example Road", "Wolverhampton", "WV1 1AA"],
   applianceCount: 1,
   priceTotal: 45,
+  termsVersion: "2026-08-22",
+  cancellationLastDateLabel: "Saturday, 5 September 2026",
+  earlyPerformanceRequested: true,
 };
 
 function render(overrides: Partial<BookingEmailInput> = {}) {
@@ -460,9 +463,12 @@ describe("the keep-this-email reminder", () => {
   });
 
   test("appears in the plain text", () => {
+    // Wrapped across lines in the text part, so the newline is collapsed
+    // before matching rather than the assertion being weakened.
+    const text = render().text.replace(/\s+/g, " ");
     assert.ok(
-      render().text.includes(
-        "Keep this email for your appointment details and booking reference.",
+      text.includes(
+        "Keep this email for your appointment details, booking reference and cancellation rights.",
       ),
     );
   });
