@@ -485,6 +485,61 @@ describe("switching slots never costs the customer their reservation", () => {
     assert.notEqual(await kv.get(`booking-hold:${SLOT_B}`), null);
   });
 
+  test("switching to a slot on another date uses the same safe order", async () => {
+    // "Change date" reaches a different day's slots, but the store semantics
+    // must not soften: the replacement is taken first, and only then is the
+    // original given up.
+    const anotherDate = "2026-08-27T13:00:00.000Z";
+
+    const first = await acquireHold(SLOT_A, undefined, kv);
+    if (first.status !== "acquired") return assert.fail();
+
+    const switched = await acquireHold(
+      anotherDate,
+      { slotStart: SLOT_A, token: first.token },
+      kv,
+    );
+    assert.equal(switched.status, "acquired");
+
+    assert.equal(await kv.get(`booking-hold:${SLOT_A}`), null);
+    assert.notEqual(await kv.get(`booking-hold:${anotherDate}`), null);
+  });
+
+  test("a failed switch to another date leaves the original date held", async () => {
+    const anotherDate = "2026-08-27T13:00:00.000Z";
+
+    const mine = await acquireHold(SLOT_A, undefined, kv);
+    if (mine.status !== "acquired") return assert.fail();
+
+    // Someone else takes the slot on the day being browsed.
+    assert.equal((await acquireHold(anotherDate, undefined, kv)).status, "acquired");
+
+    const attempt = await acquireHold(
+      anotherDate,
+      { slotStart: SLOT_A, token: mine.token },
+      kv,
+    );
+    assert.equal(attempt.status, "taken");
+    assert.equal((await checkHold(SLOT_A, mine.token, kv)).status, "valid");
+  });
+
+  test("browsing another date without choosing anything holds nothing new", async () => {
+    // Browsing is pure navigation: no acquisition is attempted until a time is
+    // actually chosen, so the attempt still owns exactly its original slot.
+    const mine = await acquireHold(SLOT_A, undefined, kv);
+    if (mine.status !== "acquired") return assert.fail();
+
+    const held = await findHeldSlots(
+      [SLOT_A, SLOT_B, "2026-08-27T13:00:00.000Z"],
+      { slotStart: SLOT_A, token: mine.token },
+      kv,
+    );
+    // Nothing is held but their own slot, and their own is not reported back
+    // to them as taken.
+    assert.equal(held.size, 0);
+    assert.equal((await checkHold(SLOT_A, mine.token, kv)).status, "valid");
+  });
+
   test("the old slot is immediately available to someone else", async () => {
     const first = await acquireHold(SLOT_A, undefined, kv);
     if (first.status !== "acquired") return assert.fail();

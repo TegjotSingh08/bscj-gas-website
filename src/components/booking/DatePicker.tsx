@@ -34,12 +34,15 @@ export function DatePicker({
   days,
   availableDates,
   selectedDate,
+  changingTime = false,
   onSelect,
 }: {
   loading: boolean;
   days: DayAvailability[];
   availableDates: string[];
   selectedDate: string | null;
+  /** True when the customer already holds a slot and is browsing alternatives. */
+  changingTime?: boolean;
   onSelect: (date: string) => void;
 }) {
   const bookableRange = useMemo(() => days.map((day) => day.date), [days]);
@@ -110,11 +113,19 @@ export function DatePicker({
   return (
     <section aria-labelledby="choose-date">
       <h2 id="choose-date" className="text-xl font-extrabold text-navy-900">
-        Choose a date
+        {changingTime ? "Choose a different date" : "Choose a date"}
       </h2>
       <p className="mt-1 text-sm text-navy-600">
         Dates shown in orange have appointments free.
       </p>
+
+      {changingTime && (
+        <p className="mt-3 rounded-xl bg-navy-50 px-4 py-3 text-sm leading-relaxed text-navy-800">
+          Your current appointment stays reserved while you look. It is only
+          given up once a new time is successfully reserved — and if you change
+          your mind, use <strong>Keep this time</strong> above.
+        </p>
+      )}
 
       <div className="mt-4 rounded-2xl border border-navy-100 bg-white p-4 shadow-sm sm:p-5">
         <div className="flex items-center justify-between gap-2">

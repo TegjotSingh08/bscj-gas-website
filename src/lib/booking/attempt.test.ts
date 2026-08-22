@@ -90,6 +90,10 @@ describe("the reservation survives the booking steps", () => {
   test("going back to the date step also keeps the hold", () => {
     const state = attemptReducer(reserved(), { type: "go-to-step", step: 1 });
     assert.deepEqual(state.reservation, RESERVATION);
+    // The requested step is honoured. Forcing it to 2 here is what used to
+    // make "Change date" a dead button.
+    assert.equal(state.step, 1);
+    assert.equal(state.changingTime, true);
   });
 
   test("choosing a date never disturbs the reservation", () => {
@@ -163,6 +167,175 @@ describe("changing the reserved time", () => {
       type: "cancel-change-time",
     });
     assert.deepEqual(state, initialAttemptState);
+  });
+});
+
+/**
+ * Regression tests for the "Change date" defect.
+ *
+ * Every route to the date step goes through `go-to-step`, which used to force
+ * a held reservation back to step 2. The button therefore did nothing, and a
+ * customer wanting a different day had to cancel and lose their slot.
+ *
+ * Slot A below is the held Thursday 17:00 appointment; Slot B is the
+ * alternative on another date.
+ */
+describe("changing the reserved date", () => {
+  /** Slot A held, customer has pressed "Change date" from the time step. */
+  function browsingDates(): AttemptState {
+    return attemptReducer(
+      attemptReducer(reserved(), { type: "start-change-time" }),
+      { type: "go-to-step", step: 1 },
+    );
+  }
+
+  test("Change date actually reaches the date picker", () => {
+    assert.equal(browsingDates().step, 1);
+  });
+
+  test("the original reservation is still held while browsing dates", () => {
+    assert.deepEqual(browsingDates().reservation, RESERVATION);
+  });
+
+  test("browsing dates is a change in progress, not a fresh booking", () => {
+    assert.equal(browsingDates().changingTime, true);
+  });
+
+  test("the countdown does not reset, because the expiry never changes", () => {
+    const browsing = browsingDates();
+    const onAnotherDate = attemptReducer(browsing, {
+      type: "select-date",
+      date: "2026-08-27",
+    });
+    const backAgain = attemptReducer(onAnotherDate, {
+      type: "go-to-step",
+      step: 1,
+    });
+
+    // The bar derives its countdown from expiresAt alone, so an untouched
+    // expiry is an untouched countdown however far the customer navigates.
+    for (const state of [browsing, onAnotherDate, backAgain]) {
+      assert.equal(state.reservation?.expiresAt, RESERVATION.expiresAt);
+    }
+  });
+
+  test("selecting another date does not release the original slot", () => {
+    const state = attemptReducer(browsingDates(), {
+      type: "select-date",
+      date: "2026-08-27",
+    });
+    assert.deepEqual(state.reservation, RESERVATION);
+    assert.equal(state.selectedDate, "2026-08-27");
+  });
+
+  test("viewing another day's times keeps the original held and in change mode", () => {
+    const state = attemptReducer(browsingDates(), {
+      type: "select-date",
+      date: "2026-08-27",
+    });
+    assert.equal(state.step, 2);
+    assert.equal(state.changingTime, true);
+    assert.deepEqual(state.reservation, RESERVATION);
+  });
+
+  test("the original hold is still offered for release-after-acquire", () => {
+    const state = attemptReducer(browsingDates(), {
+      type: "select-date",
+      date: "2026-08-27",
+    });
+    // Sent with the acquisition of Slot B so the server can release Slot A —
+    // but only once Slot B is safely taken.
+    assert.deepEqual(previousHoldFor(state), {
+      slotStart: RESERVATION.slotStart,
+      token: RESERVATION.token,
+    });
+  });
+
+  test("a failed acquisition on the new date leaves the original untouched", () => {
+    // A rejected acquisition dispatches nothing at all, so the state a
+    // customer is left with is exactly the one they were browsing from.
+    const browsing = attemptReducer(browsingDates(), {
+      type: "select-date",
+      date: "2026-08-27",
+    });
+    assert.deepEqual(browsing.reservation, RESERVATION);
+    assert.equal(browsing.reservation?.expiresAt, RESERVATION.expiresAt);
+    assert.equal(browsing.changingTime, true);
+  });
+
+  test("the customer can abandon the change and keep the original", () => {
+    const kept = attemptReducer(
+      attemptReducer(browsingDates(), {
+        type: "select-date",
+        date: "2026-08-27",
+      }),
+      { type: "cancel-change-time" },
+    );
+
+    assert.deepEqual(kept.reservation, RESERVATION);
+    assert.equal(kept.changingTime, false);
+    assert.equal(kept.step, 3);
+    // Back on the original appointment's date, not the one being browsed.
+    assert.equal(kept.selectedDate, RESERVATION.dateIso);
+  });
+
+  test("a successful switch to another date leaves exactly one reservation", () => {
+    const switched = attemptReducer(
+      attemptReducer(browsingDates(), {
+        type: "select-date",
+        date: OTHER_RESERVATION.dateIso,
+      }),
+      { type: "reserved", reservation: OTHER_RESERVATION },
+    );
+
+    assert.deepEqual(switched.reservation, OTHER_RESERVATION);
+    assert.notEqual(switched.reservation?.slotStart, RESERVATION.slotStart);
+    assert.equal(switched.changingTime, false);
+    assert.equal(switched.step, 3);
+    assert.equal(switched.selectedDate, OTHER_RESERVATION.dateIso);
+  });
+
+  test("the switched reservation carries its own fresh thirty minutes", () => {
+    const switched = attemptReducer(browsingDates(), {
+      type: "reserved",
+      reservation: OTHER_RESERVATION,
+    });
+    assert.equal(switched.reservation?.expiresAt, OTHER_RESERVATION.expiresAt);
+    assert.notEqual(switched.reservation?.expiresAt, RESERVATION.expiresAt);
+  });
+
+  test("expiry while browsing dates returns to time selection and holds nothing", () => {
+    const expired = attemptReducer(browsingDates(), { type: "expired" });
+    assert.equal(expired.reservation, null);
+    assert.equal(expired.step, 2);
+    assert.equal(expired.changingTime, false);
+    assert.equal(previousHoldFor(expired), undefined);
+  });
+
+  test("cancelling while browsing dates gives the reservation up deliberately", () => {
+    const cancelled = attemptReducer(browsingDates(), {
+      type: "cancel-booking",
+    });
+    assert.deepEqual(cancelled, initialAttemptState);
+  });
+
+  test("reaching the date step from review also keeps the hold", () => {
+    const onReview = attemptReducer(reserved(), { type: "go-to-step", step: 4 });
+    const onDates = attemptReducer(onReview, { type: "go-to-step", step: 1 });
+
+    assert.equal(onDates.step, 1);
+    assert.equal(onDates.changingTime, true);
+    assert.deepEqual(onDates.reservation, RESERVATION);
+  });
+
+  test("with no reservation the date step is plain navigation", () => {
+    const state = attemptReducer(initialAttemptState, {
+      type: "go-to-step",
+      step: 1,
+    });
+    assert.equal(state.step, 1);
+    assert.equal(state.changingTime, false);
+    assert.equal(state.reservation, null);
   });
 });
 

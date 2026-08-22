@@ -1,13 +1,32 @@
 # Launch Checklist
 
-Status as of 19 August 2026. Version 1 = fixed-price CP12 booking site for
-Wolverhampton, booking via Google Calendar Appointment Scheduling.
+Status as of 22 August 2026.
+
+Version 1 = fixed-price CP12 booking site for Wolverhampton and the surrounding
+area. Bookings are taken through the **BSCJ-branded booking flow built into the
+site**; Google Calendar is the backend availability source and appointment
+destination, not the customer-facing interface. Upstash Redis holds a chosen
+appointment for 30 minutes, Postcodes.io validates the postcode, the service
+area is a 12 mile radius, and Resend sends the confirmation email.
+
+The application has **not** been intentionally deployed or launched. See
+`PROJECT_HANDOFF.md` §18.
 
 ---
 
 ## Blocking before deployment
 
 Things that genuinely stop the site going up.
+
+- [ ] **Terms & Conditions / Consumer Contracts milestone — the next task, and
+      the one real blocker left.** `/terms` still holds an earlier page that
+      predates the consumer-rights research. It has no 14-day statutory
+      cancellation right, no regulation 36 express request, no acknowledgement
+      about losing the right on full performance, no versioned terms acceptance
+      and no server-side enforcement. Clause 4 currently states that
+      appointments cannot be cancelled inside the 48-hour window, which as
+      written purports to exclude a statutory right. **Do not launch on the
+      current terms.** See `PROJECT_HANDOFF.md` §11.
 
 - [x] Production build passes (`npm run build`)
 - [x] TypeScript passes (`npm run typecheck`)
@@ -23,8 +42,11 @@ Things that genuinely stop the site going up.
 - [x] No review/rating structured data (there are no verified reviews yet)
 - [x] Custom BSCJ booking flow replaces the Google iframe (no Google branding,
       no customer sign-in)
-- [x] Availability engine unit tested — 38 tests covering working hours,
-      buffers, minimum notice, DST, daily cap, pricing and validation
+- [x] Full suite green — 389 tests across 64 suites covering the availability
+      engine, holds, the attempt reducer, the booking route's transaction order,
+      the Google client, the email builder and transport, address handling,
+      contact validation and the public-content rules. No test contacts a live
+      provider
 - [x] Server re-checks availability immediately before creating any event
 - [x] Duplicate submissions cannot create two bookings (deterministic event id)
 - [x] Price always derived server-side, never taken from the browser
@@ -43,38 +65,47 @@ Things that genuinely stop the site going up.
       Junk/Spam guidance — shown only when the email actually sent
 - [x] MILESTONE COMPLETE: verified end to end against live Resend, including
       a deliberate invalid-key test proving a booking survives an email failure
-- [x] Property addresses validated: postcode checked against Postcodes.io,
-      service area decided on the outward code, and a soft OpenStreetMap check
-      on the street with manual confirmation as the fallback
+- [x] Property addresses validated: the postcode is checked hard against
+      Postcodes.io, and house number/name and street are then entered manually.
+      Nothing claims to prove a house exists at a postcode
 - [x] One address formatter feeds the review screen, calendar event,
       confirmation page and email — they cannot disagree
-- [x] Address verification is recorded server-side and cannot be forged by
-      the browser
-- [x] Service area is now a 12 mile radius from a configured operating centre,
-      measured with a tested haversine calculation against the coordinates the
-      postcode provider returns
-- [x] OpenStreetMap property verification removed — it could not establish
-      whether a house exists and added a step without adding information
+- [x] The postcode and the service area are re-established server-side in
+      `/api/book`; nothing about the address is taken on the browser's word
+- [x] Service area is a 12 mile straight-line radius from a configured operating
+      centre, measured with a tested haversine calculation against the
+      coordinates the postcode provider returns. The old postcode-district
+      whitelist is gone
+- [x] OpenStreetMap / Nominatim property verification removed — it could not
+      establish whether a house exists and added a step without adding
+      information. Do not reinstate it
 - [x] Property address confirmed explicitly by the customer on the review step,
       required by the server as a literal true
+- [x] The postcode endpoint returns only the canonical postcode, the town and
+      whether it is covered — no coordinates, no outcode, no distance
+- [x] Public copy reflects the 12 mile radius, names the towns currently inside
+      it as indicative only, and points customers at the postcode check
+- [x] The engineer's personal name appears nowhere customer-facing, enforced by
+      a test over the whole of `src/`
 - [x] UK mobile numbers normalised to +447XXXXXXXXX by one shared
       implementation used by the form, the schema and the booking route
-- [ ] **Decide the advertised service area.** A 12 mile radius now covers
-      Dudley (6.3 mi), Walsall (6.9 mi) and Codsall (3.2 mi), none of which the
-      site advertises — it still lists only Wolverhampton, Bilston, Wednesfield
-      and Willenhall. Either widen the "Areas we cover" copy and
-      business-details.md, or reduce SERVICE_AREA_RADIUS_MILES.
+- [x] **Advertised service area decided (22 August 2026).** The 12 mile radius
+      is kept, and the public copy was widened to match it rather than the radius
+      being reduced. Wolverhampton, Bilston, Wednesfield, Willenhall, Codsall,
+      Dudley, Walsall, West Bromwich, Cannock and Stourbridge are now named as
+      indicative, with the postcode check presented as authoritative
 - [x] Customer-safe booking reference (BSCJ-XXXXXX) on both the confirmation
       page and the email
 - [x] **Resend account created, domain verified, API key set** — done and
       confirmed by real delivery. See `docs/EMAIL_SETUP.md`.
-- [ ] **Upstash Redis database created and its two variables set** —
+- [x] **Upstash Redis database created and its two variables set locally** —
       see `docs/REDIS_SETUP.md`. Without it holds are skipped and booking
       falls back to first-confirmed-wins, which is safe but allows two people
-      to reach the confirm step on one slot.
-- [ ] **Google Calendar service account created and calendar shared** —
-      follow `docs/GOOGLE_CALENDAR_SETUP.md`. Until this is done the booking
-      page shows the fallback screen.
+      to reach the confirm step on one slot. Still to be added in Vercel.
+- [x] **Google Calendar service account created and calendar shared** —
+      follow `docs/GOOGLE_CALENDAR_SETUP.md`. Working locally against the live
+      calendar. Still to be added in Vercel; until then a deployment would show
+      the booking fallback screen.
 - [x] Phone and WhatsApp links verified identical on every page
 - [x] No horizontal overflow at 375 / 390 / 430 / 768 / 1280 px
 - [x] 404 page returns a real 404 status
@@ -123,10 +154,17 @@ Must be checked by a human on the live site, after deployment.
       actually send one
 - [ ] Tap the Call button on a real phone and confirm it dials 07494 949648
 - [ ] Tap WhatsApp on a real phone and confirm it opens the right chat
-- [ ] Check the Google Calendar booking form asks for: property address,
-      number of appliances, tenant contact details, access/parking notes
-- [ ] Confirm the calendar's minimum notice is set to 12 hours, matching the
-      wording on the site
+- [ ] Confirm the site's own booking form collects: property address, number of
+      appliances, tenant contact details and access/parking notes, and that all
+      of them reach the calendar event description
+- [ ] Confirm the site's 12-hour minimum notice behaves as the wording says —
+      the rule lives in `src/lib/booking/config.ts`, not in Google Calendar
+- [ ] Reserve a slot, press **Change date**, and confirm the date picker opens
+      with the original appointment still reserved and its countdown running on
+- [ ] Browse another date, then use **Keep this time** and confirm the original
+      appointment is still held and the countdown never restarted
+- [ ] Confirm the expanded "Areas we cover" copy reads correctly on mobile and
+      desktop, and that the engineer's name appears nowhere on the live site
 - [ ] Submit the sitemap in Google Search Console
       (`https://www.bscj-solutions.com/sitemap.xml`)
 - [ ] Verify the site in Google Search Console
@@ -150,9 +188,8 @@ Genuinely useful, but none of it should delay going live.
       it to the `data-analytics-id` hooks already on every CTA
 - [ ] Register with the ICO as a data controller if required, and add the
       registration number to `src/lib/business.ts`
-- [ ] Decide whether "Additional areas" in `business-details.md` should be
-      filled in — it is currently blank
 - [ ] Ask Companies House to correct the registered office spelling: the record
       reads "Marshall Industrail Estate" (the site shows it corrected)
 - [ ] Review whether the 48-hour cancellation vs 24-hour reschedule rule reads
-      oddly to customers — rescheduling is currently easier than cancelling
+      oddly to customers — rescheduling is currently easier than cancelling.
+      The Terms milestone settles this

@@ -36,11 +36,10 @@ export default function AboutPage() {
       <article className="mx-auto max-w-3xl px-4 py-16">
         <h2 className="text-3xl font-extrabold text-navy-900">Who you are dealing with</h2>
         <p className="mt-4 text-base leading-relaxed text-navy-800">
-          Your gas safety check is carried out by {business.engineerName}, a Gas
-          Safe registered engineer with {business.yearsExperience} years in the
-          gas industry. You are not being passed to a call centre or a
-          subcontractor you have never heard of — you deal with the engineer who
-          turns up at your door.
+          Your gas safety check is carried out by a Gas Safe registered engineer
+          with {business.yearsExperience} years in the gas industry. You are not
+          being passed to a call centre or a subcontractor you have never heard
+          of — you deal with the engineer who turns up at your door.
         </p>
 
         <h2 className="mt-12 text-3xl font-extrabold text-navy-900">
@@ -48,9 +47,8 @@ export default function AboutPage() {
         </h2>
         <p className="mt-4 text-base leading-relaxed text-navy-800">
           By law, anyone working on gas appliances in the UK must be on the Gas
-          Safe Register. Our register number is{" "}
-          <strong>{business.gasSafeNumber}</strong>, and you are welcome to
-          check it yourself at{" "}
+          Safe Register. Our register number is {business.gasSafeNumber}, and
+          you are welcome to check it yourself at{" "}
           <a
             href="https://www.gassaferegister.co.uk"
             target="_blank"

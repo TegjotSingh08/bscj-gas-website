@@ -1,4 +1,11 @@
-import { availability, cp12, sameDayMessaging, serviceAreas } from "./business";
+import {
+  availability,
+  cp12,
+  sameDayMessaging,
+  serviceAreaCopy,
+  serviceAreas,
+  serviceRadiusMiles,
+} from "./business";
 
 export type Faq = { question: string; answer: string };
 
@@ -41,7 +48,7 @@ export const faqs: Faq[] = [
   },
   {
     question: "Which areas do you cover?",
-    answer: `${serviceAreas.slice(0, -1).join(", ")} and ${serviceAreas[serviceAreas.length - 1]}. If you are just outside these areas, get in touch and we will let you know if we can reach you.`,
+    answer: `${serviceAreaCopy.headline} That is a ${serviceRadiusMiles} mile radius around Wolverhampton, which currently takes in ${serviceAreas.slice(0, -1).join(", ")} and ${serviceAreas[serviceAreas.length - 1]}. It is a straight-line service radius rather than a drive time, so ${serviceAreaCopy.postcodeNote.charAt(0).toLowerCase()}${serviceAreaCopy.postcodeNote.slice(1)} If you are outside it, get in touch — we may still be able to reach you.`,
   },
   {
     question: "Does someone need to be at the property?",

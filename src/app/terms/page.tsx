@@ -6,7 +6,8 @@ import {
   cp12,
   lastUpdated,
   legal,
-  serviceAreas,
+  serviceAreaCopy,
+  serviceRadiusMiles,
 } from "@/lib/business";
 
 export const metadata: Metadata = {
@@ -126,9 +127,10 @@ export default function TermsPage() {
         7. Where we work
       </h2>
       <p className="mt-3 text-base leading-relaxed text-navy-800">
-        We cover {serviceAreas.slice(0, -1).join(", ")} and{" "}
-        {serviceAreas[serviceAreas.length - 1]}. We may accept work outside
-        these areas at our discretion.
+        {serviceAreaCopy.headline} Our standard online booking area is a{" "}
+        {serviceRadiusMiles} mile straight-line radius around Wolverhampton,
+        and whether a property falls inside it is decided from its postcode
+        when you book. We may accept work outside that area at our discretion.
       </p>
 
       <h2 className="mt-10 text-2xl font-extrabold text-navy-900">

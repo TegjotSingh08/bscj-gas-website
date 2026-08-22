@@ -56,13 +56,17 @@ Needs a confirmed BSCJ price before it can be advertised.
 
 ## Tier 3 — operational automation
 
-### Customer confirmation emails
-The booking flow deliberately does **not** claim an email is sent, because the
-service account cannot send Google invitations without domain-wide delegation.
-Options later: enable domain-wide delegation so Google emails the invitation,
-or send our own confirmation through an email service. Until then the
-confirmation screen tells the customer to note the appointment down.
+### ~~Customer confirmation emails~~ — SHIPPED in Version 1
+Sent through Resend after the Google Calendar event exists, so an email failure
+can never undo a confirmed booking. Branded, responsive, idempotent on the
+booking reference, with a full plain-text alternative and Junk/Spam guidance on
+the confirmation page. Nothing here is outstanding.
 
+*Historical note:* this was originally deferred because a service account
+cannot send Google invitations without domain-wide delegation. Sending our own
+transactional email turned out to be simpler than enabling that.
+
+---
 
 Worth building once booking volume makes the manual version painful.
 
@@ -93,7 +97,9 @@ Do not build these for one engineer.
 - **Same-day messaging** is currently Option C (phone/WhatsApp only, online
   booking keeps 12 hours' notice). See "Availability Messaging" in
   `business-details.md`. Switch to Option B if same-day online becomes viable.
-- **Additional service areas** in `business-details.md` are blank. Walsall and
-  Dudley appeared in competitor research and may be worth adding.
+- **Service area** was settled on 22 August 2026: a 12 mile radius, kept, with
+  the public copy widened to match it. Walsall, Dudley, West Bromwich, Cannock,
+  Stourbridge and Codsall are now named alongside the original four. Revisit
+  only if travel time in practice argues for a different radius.
 - **Booking data** currently lives only in Google Calendar. That is the right
   call for Version 1, but it is not a long-term customer record.

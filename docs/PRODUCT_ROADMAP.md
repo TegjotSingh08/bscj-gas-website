@@ -26,22 +26,35 @@ demand into confirmed appointments in the engineer's diary.
 
 **Scope**
 
-- Fixed-price £45 CP12 booking in Wolverhampton
+- Fixed-price £45 CP12 booking in Wolverhampton and the surrounding area, within
+  a 12 mile standard service radius
 - Fully BSCJ-branded slot picker — no third-party booking interface
 - Availability derived from the engineer's real Google Calendar
 - Customer chooses the date and time
-- Customer provides property and contact details
+- The chosen appointment is reserved for 30 minutes while they finish the form
+- Customer provides property and contact details, with the postcode validated
+  and the assembled address confirmed by them
 - Server rechecks availability before the booking is written
 - Confirmed booking written directly into the engineer's Google Calendar
+- One branded confirmation email, sent after the calendar event exists
 - Pay after completion
 
 **Address handling in Version 1**
 
-Free validation rather than paid premise lookup: Postcodes.io validates the
-postcode hard and decides service-area eligibility, and an OpenStreetMap check
-adds soft confidence on the street. A booking is never blocked because open
-mapping data lacks a property — the customer confirms manually instead. Paid
-autocomplete (Loqate, Ideal Postcodes, getAddress.io) is deferred; see
+Free validation rather than paid premise lookup. Postcodes.io validates the
+postcode hard and returns coordinates; eligibility is then a server-side
+straight-line **12 mile radius** from a configured operating centre. House
+number/name and street are typed manually, and the customer explicitly confirms
+the assembled address before the booking is written — no free service can prove
+a house exists at a postcode, and the site never implies one can.
+
+*Historical:* an OpenStreetMap / Nominatim check was trialled as a soft
+confidence signal and **removed** — it graded almost every genuine address as
+"could not confirm", adding a step without adding information. An earlier
+postcode-district whitelist was also replaced by the radius. Neither is to be
+reinstated; see `ADDRESS_VALIDATION.md`.
+
+Paid autocomplete (Loqate, Ideal Postcodes, getAddress.io) is deferred; see
 `ADDRESS_VALIDATION.md` for how one slots into the same interfaces.
 
 **Explicitly out of scope for Version 1**
@@ -62,7 +75,9 @@ experience.
 Small additions that make the launched product measurable and complete. None of
 these justify delaying Version 1.
 
-- Customer booking-confirmation email
+- ~~Customer booking-confirmation email~~ — **shipped in Version 1.** Branded,
+  responsive, idempotent, sent through Resend after the calendar event exists,
+  and unable to fail a booking. Junk/Spam guidance sits on the confirmation page
 - Analytics
 - Google Search Console
 - Google Business Profile integration

@@ -19,7 +19,7 @@ export const metadata: Metadata = {
   alternates: { canonical: "/gas-safety-certificate-wolverhampton" },
   openGraph: {
     title: `Gas Safety Certificate Wolverhampton ${cp12.priceDisplay} | CP12`,
-    description: `Fixed-price CP12 gas safety certificates in Wolverhampton, Bilston, Wednesfield and Willenhall. Gas Safe registered.`,
+    description: `Fixed-price CP12 gas safety certificates in Wolverhampton and the surrounding areas within our standard service area. Gas Safe registered.`,
     url: "/gas-safety-certificate-wolverhampton",
   },
 };

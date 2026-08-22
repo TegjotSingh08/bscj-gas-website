@@ -95,14 +95,14 @@ export function AddressFields({
       if (data.status === "valid") {
         setPostcodeState({
           kind: "valid",
-          postcode: data.postcode.postcode,
-          areaName: data.postcode.areaName,
+          postcode: data.postcode,
+          areaName: data.areaName ?? "",
           covered: Boolean(data.covered),
         });
         // The canonical postcode and derived town, not what was typed.
         onPatch({
-          postcode: data.postcode.postcode,
-          town: data.postcode.areaName || latest.current.town,
+          postcode: data.postcode,
+          town: data.areaName || latest.current.town,
         });
         return;
       }

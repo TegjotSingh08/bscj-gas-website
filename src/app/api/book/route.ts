@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { business } from "@/lib/business";
+import { business, serviceAreaCopy } from "@/lib/business";
 import { bookingConfig } from "@/lib/booking/config";
 import { calculatePrice } from "@/lib/booking/pricing";
 import {
@@ -159,11 +159,7 @@ export async function POST(request: Request) {
   // never from a town name the browser sent.
   if (!checkServiceArea(postcodeLookup.postcode).covered) {
     return NextResponse.json(
-      {
-        error: "outside_area",
-        message:
-          "This property is outside our standard online booking area. Call or WhatsApp us and we will check whether we can cover it.",
-      },
+      { error: "outside_area", message: serviceAreaCopy.outsideArea },
       { status: 400 },
     );
   }

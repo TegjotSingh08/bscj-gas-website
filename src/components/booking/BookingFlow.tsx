@@ -393,7 +393,12 @@ export function BookingFlow() {
         }}
       />
 
-      {reservation && step >= 2 && (
+      {/*
+        Shown for every step a reservation can exist on, the date step
+        included: browsing for another date has to keep the held appointment,
+        its countdown and the "Keep this time" escape in front of the customer.
+      */}
+      {reservation && (
         <ReservationBar
           reservation={reservation}
           warningSeconds={HOLD_WARNING_SECONDS}
@@ -430,6 +435,7 @@ export function BookingFlow() {
             days={days}
             availableDates={availableDays.map((day) => day.date)}
             selectedDate={selectedDate}
+            changingTime={changingTime}
             onSelect={(date) => dispatch({ type: "select-date", date })}
           />
         )}

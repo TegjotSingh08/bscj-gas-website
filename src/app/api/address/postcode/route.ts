@@ -8,7 +8,7 @@ import {
   rateLimits,
 } from "@/lib/booking/rate-limit";
 import { PostcodesIoProvider } from "@/lib/address/postcodes-io";
-import { checkServiceArea, serviceAreaSummary } from "@/lib/address/service-area";
+import { checkServiceArea } from "@/lib/address/service-area";
 
 export const dynamic = "force-dynamic";
 
@@ -73,10 +73,19 @@ export async function POST(request: Request) {
 
   const area = checkServiceArea(result.postcode);
 
+  // Deliberately minimal: the canonical postcode, the town to display, and
+  // whether we cover it — exactly what the form renders and nothing more.
+  //
+  // The coordinates and the outcode stay on the server. The distance
+  // calculation happens here, the operating centre it is measured against is
+  // server-side configuration, and the measured distance is never returned:
+  // publishing it would let anyone triangulate the centre from a handful of
+  // postcodes. `/api/book` re-establishes all of this independently, so
+  // nothing the browser holds is load-bearing anyway.
   return NextResponse.json({
     status: "valid",
-    postcode: result.postcode,
+    postcode: result.postcode.postcode,
+    areaName: result.postcode.areaName,
     covered: area.covered,
-    areaSummary: area.covered ? null : serviceAreaSummary(),
   });
 }

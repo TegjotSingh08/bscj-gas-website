@@ -24,6 +24,9 @@ export const localBusinessSchema = {
   telephone: `+44${business.phone.slice(1)}`,
   email: business.emailGeneral,
   description: `Gas Safe registered gas engineers providing fixed-price ${cp12.priceDisplay} gas safety certificates (CP12) in Wolverhampton and the surrounding area.`,
+  // `areaServed` says where work is carried out. The single `address` below is
+  // the registered office — BSCJ has no premises in any other town listed, and
+  // none is claimed.
   areaServed: serviceAreas.map((area) => ({
     "@type": "City",
     name: area,
@@ -63,11 +66,8 @@ export const localBusinessSchema = {
     credentialCategory: "Gas Safe Register",
     identifier: business.gasSafeNumber,
   },
-  employee: {
-    "@type": "Person",
-    name: business.engineerName,
-    jobTitle: "Gas Safe Registered Engineer",
-  },
+  // No `employee` Person node: the engineer's name is not published anywhere
+  // customer-facing, and structured data is published content.
 } as const;
 
 export const serviceSchema = {

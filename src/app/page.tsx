@@ -24,7 +24,7 @@ const steps = [
   },
   {
     title: "We carry out the check",
-    body: `${business.engineerName}, our Gas Safe registered engineer, checks your boiler and gas appliances. It usually takes about ${cp12.durationMinutes} minutes.`,
+    body: `Your Gas Safe registered engineer checks your boiler and gas appliances. It usually takes about ${cp12.durationMinutes} minutes.`,
   },
   {
     title: "You get your certificate",
@@ -278,7 +278,7 @@ export default function HomePage() {
               },
               {
                 title: "One engineer, not a call centre",
-                body: `${business.engineerName} does the work, with ${business.yearsExperience} years in the gas industry behind him. You deal with the person who turns up.`,
+                body: `The same Gas Safe registered engineer does the work, with ${business.yearsExperience} years in the gas industry behind them. You deal with the person who turns up.`,
               },
             ].map((item) => (
               <div
@@ -300,10 +300,7 @@ export default function HomePage() {
           <h2 className="text-center text-3xl font-extrabold text-navy-900 sm:text-4xl">
             Areas we cover
           </h2>
-          <p className="mx-auto mt-4 max-w-xl text-center text-base text-navy-700">
-            We are based in Wolverhampton and work across the surrounding towns.
-          </p>
-          <div className="mt-10">
+          <div className="mt-8">
             <AreasCovered />
           </div>
         </div>

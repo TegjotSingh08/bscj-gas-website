@@ -59,6 +59,8 @@ export function attemptReducer(
     case "select-date":
       // Picking a date never disturbs an existing reservation — the customer
       // may be browsing alternatives and decide to keep what they have.
+      // `changingTime` is carried through deliberately, so browsing from the
+      // date step to another day's times stays a change in progress.
       return { ...state, selectedDate: action.date, step: 2 };
 
     case "reserved":
@@ -94,10 +96,15 @@ export function attemptReducer(
       // Plain navigation. Never touches the reservation: this is the rule the
       // old implementation broke.
       if (state.reservation && action.step <= 2) {
-        // The time step is only meaningful with an explicit change in mind,
-        // so reaching it with a live reservation enters that mode rather than
-        // exposing slots that would silently take a second hold.
-        return { ...state, step: 2, changingTime: true };
+        // Date and time are only meaningful with an explicit change in mind
+        // once a slot is held, so reaching either enters change mode rather
+        // than exposing slots that would silently take a second hold.
+        //
+        // The requested step itself is honoured. Forcing it to 2 was the bug
+        // behind "Change date" doing nothing: every route to the date step
+        // goes through this action, so a held reservation made the date
+        // picker unreachable and the only way out was cancelling.
+        return { ...state, step: action.step, changingTime: true };
       }
       return { ...state, step: action.step };
     }

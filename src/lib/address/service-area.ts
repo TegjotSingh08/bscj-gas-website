@@ -1,6 +1,6 @@
 import "server-only";
 
-import { serviceAreas } from "@/lib/business";
+import { serviceRadiusMiles } from "@/lib/business";
 import { haversineMiles, isValidCoordinates, type Coordinates } from "./geo";
 import type { ValidatedPostcode } from "./types";
 
@@ -31,7 +31,12 @@ import type { ValidatedPostcode } from "./types";
  */
 const DEFAULT_LATITUDE = 52.594;
 const DEFAULT_LONGITUDE = -2.145;
-const DEFAULT_RADIUS_MILES = 12;
+
+/**
+ * The radius the public copy advertises, so the site and the booking rule
+ * cannot drift apart. SERVICE_AREA_RADIUS_MILES overrides it at runtime.
+ */
+const DEFAULT_RADIUS_MILES = serviceRadiusMiles;
 
 function readNumber(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -85,11 +90,4 @@ export function checkServiceArea(
   return distanceMiles <= radius
     ? { covered: true, distanceMiles }
     : { covered: false, reason: "outside_radius", distanceMiles };
-}
-
-/** Human-readable list of the towns covered, for customer-facing copy. */
-export function serviceAreaSummary(): string {
-  const areas = [...serviceAreas];
-  const last = areas.pop();
-  return `${areas.join(", ")} and ${last}`;
 }

@@ -1,6 +1,7 @@
 # Project Handoff
 
-Written 21 August 2026, at commit `3b3b7d7`.
+Written 21 August 2026. Revised 22 August 2026 by the pre-terms correction
+milestone.
 
 This document exists so a fresh session with no memory of previous
 conversations can pick this project up accurately. It describes what the
@@ -98,13 +99,18 @@ Four steps at `/book`, driven by `BookingFlow.tsx` and a pure reducer in
    - *Change time* keeps the existing hold while alternatives are browsed. The
      replacement is acquired **before** the original is released, so a slot
      lost to someone else costs the customer nothing.
+   - *Change date* reaches the date picker with the reservation intact and its
+     countdown running on. The reservation bar, including **Keep this time**,
+     stays on screen throughout. Choosing a date holds nothing new; only
+     choosing a *time* acquires, and it acquires before it releases.
    - *Cancel booking* confirms, releases the hold and resets.
    - Leaving the page fires a best-effort `sendBeacon` release; correctness
      relies on the TTL, never on that.
 4. **Details** — name, email, mobile, postcode, address, customer type,
    appliance count, optional tenant contact and access notes.
    - **Postcode first.** `/api/address/postcode` validates it via Postcodes.io
-     and returns the canonical postcode, town and coordinates.
+     and returns the canonical postcode, the town and whether it is covered —
+     and nothing else. Coordinates and the measured distance stay server-side.
    - **Service area** is decided by distance (§7). Address fields only appear
      once the postcode is valid and in area.
    - **House number/name and street** are typed manually. The town comes from
@@ -134,9 +140,10 @@ preserve every one.
 1. **At most one active hold per booking attempt.** Never two.
 2. **When switching slots, the replacement is acquired before the original is
    released.** A failed switch must leave the original reservation intact.
+   This holds whether the alternative is on the same date or another one.
 3. **Hold expiry returns the customer to time selection and never books.**
    The Redis TTL is authoritative; the on-screen countdown is display only and
-   must never reset when moving between steps.
+   must never reset when moving between steps — the date step included.
 4. **Google free/busy is re-queried immediately before the event is written.**
    This check is never skipped, shortened or made conditional.
 5. **One successful booking produces exactly one calendar event.**
@@ -246,23 +253,41 @@ coordinates never reach the browser.
 **This is a straight-line radius, not a driving distance and not a travel
 time.** Never advertise a journey time based on it.
 
-### Implication that needs a decision
+### What the radius reaches — RESOLVED 22 August 2026
 
 Measured from the configured centre:
 
-| Place | Distance | Covered |
-| --- | --- | --- |
-| Wolverhampton, Bilston, Wednesfield, Willenhall | 0.9–3.8 mi | yes |
-| **Codsall** | 3.2 mi | **yes — not advertised** |
-| **Dudley** | 6.3 mi | **yes — not advertised** |
-| **Walsall** | 6.9 mi | **yes — not advertised** |
-| Bridgnorth | 12.2 mi | no |
-| Birmingham | 12.9 mi | no |
+| Place | Distance | Covered | Advertised |
+| --- | --- | --- | --- |
+| Wolverhampton | 0.9 mi | yes | yes |
+| Wednesfield | 2.8 mi | yes | yes |
+| Codsall | 3.2 mi | yes | yes |
+| Bilston | 3.6 mi | yes | yes |
+| Willenhall | 3.8 mi | yes | yes |
+| Dudley | 6.3 mi | yes | yes |
+| Walsall | 6.9 mi | yes | yes |
+| West Bromwich | 8.2 mi | yes | yes |
+| Cannock | 8.3 mi | yes | yes |
+| Stourbridge | 9.5 mi | yes | yes |
+| Bridgnorth | 12.2 mi | no | no |
+| Birmingham | 13.0 mi | no | no |
+| Telford | 13.9 mi | no | no |
+| Stafford | 14.7 mi | no | no |
+| Kidderminster | 14.9 mi | no | no |
 
-**Unresolved:** the site's "Areas we cover" and `business-details.md` still
-list only the four towns, but the booking form will accept Dudley and Walsall.
-Either widen the copy or reduce `SERVICE_AREA_RADIUS_MILES`. **This is the
-owner's commercial decision — do not change marketing copy unilaterally.**
+**Owner's decision: keep the 12 mile radius and widen the copy to match it.**
+The radius was not reduced. All ten covered towns are now named in the public
+copy, in `business-details.md` and in `areaServed` structured data — as
+*indicative* only, since eligibility is decided from the postcode at booking and
+BSCJ has no premises in any of them.
+
+Public positioning is "serves Wolverhampton and surrounding areas within our
+standard service area", paired with "enter your postcode when booking to
+confirm whether your property is within our standard online booking area".
+
+A property outside the radius is never told we do not serve it — work beyond the
+standard online area may still be accepted by arrangement, so the wording offers
+the phone and WhatsApp instead.
 
 ---
 
@@ -349,6 +374,14 @@ approved its appearance on desktop and mobile.
 an earlier, basic page that predates this research and does not implement what
 follows.
 
+> **Live and adverse.** Clause 4 of that page states that appointments *cannot
+> be cancelled* inside the 48-hour window. As written that purports to remove
+> the statutory 14-day distance-selling cancellation right, which CRA 2015 s57
+> does not permit. It was left in place deliberately — correcting it properly is
+> the terms milestone's job, not a patch — but the site **must not be published
+> while it stands**. Clause 7 was reworded on 22 August 2026 for service-area
+> accuracy only; no other clause was touched.
+
 Research completed 21 August 2026:
 
 - **Consumer Contracts (Information, Cancellation and Additional Charges)
@@ -401,7 +434,7 @@ Sources, accessed 21 August 2026:
 
 ## 12. Testing
 
-**346 tests across 58 suites, all passing.**
+**389 tests across 64 suites, all passing.**
 
 Covered: the availability engine (working hours, buffers, minimum notice,
 BST/GMT, daily cap), holds (exclusivity, expiry, switching, forged and
@@ -410,7 +443,10 @@ reducer (navigation never disturbs a reservation), the booking route's
 transaction order against the real handler, the Google client's fail-closed
 free/busy parsing, the email builder and transport, the confirmation notice,
 postcode normalisation and lookup, the haversine calculation and radius
-boundaries, and phone and email validation.
+boundaries, phone and email validation, the minimised postcode API response,
+the Change-date state model, and repository-level public-content rules (no
+engineer name, no VAT wording, no invented ratings, no promised journey time,
+and never telling a customer we do not serve them).
 
 ```bash
 npm test        # node --test, TypeScript run directly
@@ -430,18 +466,19 @@ Live checks during development should be few and deliberate.
 
 - Branch: **`main`**
 - Working tree: **clean**
-- `origin/main`: **`3b3b7d7`**, in sync — nothing ahead, nothing behind
+- In sync with `origin/main` — nothing ahead, nothing behind
 
 Recent commits:
 
 ```
+(this milestone)  Fix Change date, minimise the postcode response, widen the service area
+569f605  Add a project handoff for a fresh session
 3b3b7d7  Simplify address handling and replace the service area with a radius
 7408c37  Validate property addresses with free postcode and map data
 723724a  Make the confirmation email responsive and flag Junk/Spam on the success page
 41e78ed  Send a branded booking confirmation email after the appointment is written
 c36b1d5  Own the reservation at the attempt level, with an explicit Change time
 6083e21  Reserve a chosen appointment for 30 minutes while the customer books
-9ad1a30  Make free/busy parsing fail closed, and tolerate clock skew in the JWT
 ```
 
 No credential value appears in any tracked file. `.env.local` is git-ignored
@@ -472,13 +509,20 @@ and untracked.
 10. **Contact validation** — one shared phone and email implementation.
 11. **Simplified manual address flow** — OSM verification removed, customer
     confirmation required.
+12. **Pre-terms correction milestone (22 August 2026)** — "Change date" now
+    reaches the date picker with the reservation intact; the postcode endpoint
+    returns only what the form renders; dead address-verification config
+    removed; the 12 mile radius kept and the public copy widened to match it;
+    the engineer's personal name removed from every customer-facing surface;
+    stale documentation corrected.
 
 ---
 
 ## 15. Outstanding pre-launch work, in order
 
-1. **Terms & Conditions / consumer-rights milestone** (§11) — the next task.
-2. **Service-area marketing-copy decision** (§7) — owner's call.
+1. **Terms & Conditions / consumer-rights milestone** (§11) — the next task,
+   and the only remaining blocker that is not deployment mechanics.
+2. ~~Service-area marketing-copy decision~~ — **resolved 22 August 2026** (§7).
 3. **Final integrated security and release audit.**
 4. **Vercel production setup.**
 5. **Add environment variables in Vercel** (§6) and redeploy — variables only
@@ -494,9 +538,11 @@ and untracked.
 
 ## 16. Known risks and open decisions
 
-- **Service area vs advertised towns** (§7) — needs an owner decision.
 - **Reg 36 express request** (§11) — the largest commercial exposure until the
-  terms milestone lands.
+  terms milestone lands. The live `/terms` clause 4 also states that
+  appointments cannot be cancelled inside 48 hours, which as written purports to
+  exclude a statutory right. Deliberately left for that milestone; **do not
+  launch on the current terms**.
 - **Rate limiting is per-window in Redis**, falling back to per-instance
   counting during an outage — weaker, but it still limits.
 - **No server-side observability.** Nothing is logged beyond email failure
@@ -510,7 +556,6 @@ and untracked.
 - **`src/components/BookingEmbed.tsx` is dead code**, retained as a marked
   rollback to the old iframe. Delete it once a real production booking has
   succeeded.
-- `business-details.md` still has three blank "Additional areas" lines.
 
 ---
 
@@ -532,7 +577,20 @@ Specifically:
   `24 Example Road`. A previous real address was purged from 96 places; do not
   undo that.
 - **Do not put the service-area origin in client code**, and never record it
-  as a street name.
+  as a street name. **Do not return coordinates or a measured distance from
+  `/api/address/postcode`** — a distance is enough to triangulate the centre.
+- **Do not publish the engineer's personal name.** It is not in
+  `src/lib/business.ts` at all, it is INTERNAL ONLY in `business-details.md`,
+  and `src/lib/public-content.test.ts` fails the build if it reappears under
+  `src/`. Describe work at business level, or as "a Gas Safe registered
+  engineer". Do not invent a different person's name either.
+- **Do not present a covered town as a guarantee**, and do not claim premises
+  in any town other than the registered office.
+- **Do not advertise a journey time** off the back of the radius; it is
+  straight-line distance, not road routing.
+- **Do not make "Change date" drop the reservation.** Reaching the date step
+  with a live hold is a change in progress: the hold, its countdown and the
+  "Keep this time" escape all stay.
 - **Do not add VAT wording** to any customer-facing surface.
 - **Do not invent business facts.** If something is not in
   `business-details.md`, ask rather than guess — no invented reviews, ratings,
@@ -560,7 +618,9 @@ Every previous session ended with an explicit instruction not to deploy.
 
 ## 19. Recommended first task for the next session
 
-**The Terms & Conditions / consumer-rights milestone.**
+**The Terms & Conditions / consumer-rights milestone.** Unchanged: it is still
+the next task, and the pre-terms correction milestone of 22 August 2026
+deliberately did not start any part of it.
 
 The technical booking work is done. What remains before launch is legal and
 commercial, and §11 has the research already completed.

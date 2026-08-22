@@ -21,7 +21,15 @@ export const business = {
   emailBooking: "admin@bscj-solutions.com",
 
   gasSafeNumber: "632741",
-  engineerName: "Jagjeet Singh",
+  /**
+   * The engineer's personal name is deliberately NOT held here.
+   *
+   * It must not appear on any customer-facing surface — page copy, metadata,
+   * structured data, the confirmation page or the confirmation email. Work is
+   * described at business level, or as "a Gas Safe registered engineer".
+   * The name stays in docs/business-details.md as an internal record only.
+   * See the assertion in src/lib/public-content.test.ts.
+   */
   yearsExperience: 10,
   familyRun: true,
   insured: true,
@@ -70,12 +78,55 @@ export const sameDayMessaging = {
   bookingNote: `Online slots need at least ${availability.minimumNoticeHours} hours' notice. Need someone sooner? Call or WhatsApp and we will do our best to fit you in today.`,
 } as const;
 
+/**
+ * The standard online booking radius, in miles.
+ *
+ * `SERVICE_AREA_RADIUS_MILES` overrides it in server-side configuration, and
+ * `lib/address/service-area.ts` uses this as its default so the advertised
+ * figure and the enforced rule cannot drift apart.
+ *
+ * Straight-line distance from a configured operating centre. **Never a
+ * driving distance and never a travel time** — no journey time may be
+ * advertised on the back of it.
+ */
+export const serviceRadiusMiles = 12;
+
+/**
+ * Towns that currently fall inside the standard radius, for page copy and
+ * `areaServed` structured data.
+ *
+ * Indicative only. Eligibility is decided at booking from the property's
+ * postcode coordinates, never from a town name, so this list must never be
+ * presented as a guarantee that a given town is accepted — nor does BSCJ have
+ * premises in any of them.
+ */
 export const serviceAreas = [
   "Wolverhampton",
   "Bilston",
   "Wednesfield",
   "Willenhall",
+  "Codsall",
+  "Dudley",
+  "Walsall",
+  "West Bromwich",
+  "Cannock",
+  "Stourbridge",
 ] as const;
+
+/**
+ * Service-area wording, in one place so every page says the same thing.
+ *
+ * `outsideArea` deliberately never says "we do not serve your area" — work
+ * beyond the standard online radius may still be accepted by arrangement.
+ */
+export const serviceAreaCopy = {
+  headline: `${business.name} serves Wolverhampton and surrounding areas within our standard service area.`,
+  radius: `Our standard online booking area is a ${serviceRadiusMiles} mile radius around Wolverhampton, which currently includes:`,
+  postcodeNote:
+    "Enter your postcode when booking to confirm whether your property is within our standard online booking area.",
+  outsideArea:
+    "This property is outside our standard online booking area. We may still be able to help — call or WhatsApp us and we'll confirm availability.",
+} as const;
 
 const calendarScheduleId =
   "AcZssZ12vkB90RMVqx2c9U0XF2RyD2UYpvhp4HzPD07IOlCEgJJT_5_mzGGO9jw8u2nLW8mVnrzM5vwS";

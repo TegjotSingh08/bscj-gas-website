@@ -120,6 +120,21 @@ to prove an address receives mail.
 
 ---
 
+## What the browser is told
+
+`/api/address/postcode` returns the minimum the form renders, and nothing else:
+
+```json
+{ "status": "valid", "postcode": "WV1 1AA", "areaName": "Wolverhampton", "covered": true }
+```
+
+No coordinates, no outcode, and **no distance**. The distance is deliberately
+withheld: publishing it would let anyone triangulate the operating centre from a
+handful of postcodes. The full `ValidatedPostcode` — coordinates included — stays
+server-side, which is where the haversine calculation happens.
+
+---
+
 ## Security
 
 - Coverage is decided from provider coordinates, never a town name the browser

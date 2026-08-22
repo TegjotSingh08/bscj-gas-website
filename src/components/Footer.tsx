@@ -1,5 +1,10 @@
 import Link from "next/link";
-import { availability, business, serviceAreas } from "@/lib/business";
+import {
+  availability,
+  business,
+  serviceAreaCopy,
+  serviceAreas,
+} from "@/lib/business";
 
 export function Footer() {
   return (
@@ -67,11 +72,14 @@ export function Footer() {
           <h2 className="text-sm font-bold uppercase tracking-wide text-white">
             Areas Covered
           </h2>
-          <ul className="mt-4 space-y-2 text-sm text-navy-200">
+          <ul className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2 text-sm text-navy-200">
             {serviceAreas.map((area) => (
               <li key={area}>{area}</li>
             ))}
           </ul>
+          <p className="mt-4 text-xs leading-relaxed text-navy-300">
+            {serviceAreaCopy.postcodeNote}
+          </p>
         </div>
 
         <div>
@@ -107,7 +115,7 @@ export function Footer() {
         <div className="mx-auto max-w-6xl px-4 py-6 text-xs leading-relaxed text-navy-200">
           <p>
             {business.name} is a trading name of {business.legalName}. Gas Safe
-            Register No. {business.gasSafeNumber}. Engineer: {business.engineerName}.
+            Register No. {business.gasSafeNumber}.
           </p>
           <p className="mt-2">
             © {new Date().getFullYear()} {business.legalName}. All rights reserved.
