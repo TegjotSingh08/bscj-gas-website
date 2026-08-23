@@ -31,24 +31,22 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Room for the sticky mobile action bar so it never covers page content. */
+/*
+  Room for the sticky mobile action bar so it never covers page content.
+
+  The bar is 3.5rem of cells plus the iPhone home-indicator inset, and the
+  reserve here has to match — a short viewport is exactly where the confirm
+  button or a validation error would otherwise end up underneath it.
+*/
 @media (max-width: 767px) {
   body {
-    padding-bottom: 4.5rem;
+    padding-bottom: calc(4rem + env(safe-area-inset-bottom));
   }
 }
 
 :focus-visible {
   outline: 3px solid var(--color-flame-500);
   outline-offset: 2px;
-}
-
-/* Mobile nav strip scrolls without showing a scrollbar. */
-.scrollbar-none {
-  scrollbar-width: none;
-}
-.scrollbar-none::-webkit-scrollbar {
-  display: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

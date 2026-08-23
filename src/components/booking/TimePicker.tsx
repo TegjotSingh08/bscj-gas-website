@@ -48,7 +48,12 @@ export function TimePicker({
         </button>
       </div>
       <p className="mt-1 text-sm text-navy-600">
-        {longDate(date)} · appointments take about {cp12.durationMinutes} minutes
+        <span className="font-semibold text-navy-800">{longDate(date)}</span>
+        <span className="hidden sm:inline">
+          {" "}
+          · appointments take about {cp12.durationMinutes} minutes
+        </span>
+        <span className="sm:hidden"> · about {cp12.durationMinutes} minutes</span>
         {busy && " · reserving your slot…"}
       </p>
       {changingTime && (
@@ -72,7 +77,7 @@ export function TimePicker({
           </button>
         </div>
       ) : (
-        <div className="mt-4 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4">
+        <div className="mt-3 grid grid-cols-2 gap-2 min-[380px]:grid-cols-3 sm:mt-4 sm:gap-2.5 lg:grid-cols-4">
           {slots.map((slot) => {
             const isReserved = reservedSlotStart === slot.startIso;
             return (

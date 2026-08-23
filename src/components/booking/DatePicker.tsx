@@ -97,13 +97,29 @@ export function DatePicker({
 
   if (loading) {
     return (
-      <div className="rounded-2xl border border-navy-100 bg-white p-6">
-        <p className="text-sm font-semibold text-navy-700">
-          Loading live availability…
+      <div
+        role="status"
+        aria-live="polite"
+        className="rounded-2xl border border-navy-100 bg-white p-4 sm:p-5"
+      >
+        <p className="flex items-center gap-2 text-sm font-semibold text-navy-700">
+          <span
+            aria-hidden="true"
+            className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-navy-200 border-t-flame-500"
+          />
+          Checking live availability…
         </p>
-        <div className="mt-5 grid grid-cols-7 gap-1.5" aria-hidden="true">
-          {Array.from({ length: 28 }).map((_, index) => (
-            <div key={index} className="h-12 animate-pulse rounded-lg bg-navy-50" />
+        {/*
+          Two rows, not four. A full 28-cell skeleton stood 300px tall — 53% of
+          a 320x568 viewport — for a wait measured locally at around half a
+          second. It suggested far more was loading than actually was.
+        */}
+        <div className="mt-3 grid grid-cols-7 gap-1" aria-hidden="true">
+          {Array.from({ length: 14 }).map((_, index) => (
+            <div
+              key={index}
+              className="h-10 animate-pulse rounded-lg bg-navy-50"
+            />
           ))}
         </div>
       </div>
@@ -127,7 +143,7 @@ export function DatePicker({
         </p>
       )}
 
-      <div className="mt-4 rounded-2xl border border-navy-100 bg-white p-4 shadow-sm sm:p-5">
+      <div className="mt-3 rounded-2xl border border-navy-100 bg-white p-3 shadow-sm sm:mt-4 sm:p-5">
         <div className="flex items-center justify-between gap-2">
           <button
             type="button"

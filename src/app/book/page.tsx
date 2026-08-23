@@ -1,4 +1,3 @@
-import Link from "next/link";
 import type { Metadata } from "next";
 import { BookingFlow } from "@/components/booking/BookingFlow";
 import { TrustRow } from "@/components/TrustRow";
@@ -19,31 +18,58 @@ export const metadata: Metadata = {
 export default function BookPage() {
   return (
     <>
-      <section className="bg-gradient-to-b from-navy-900 to-navy-800 pb-12 pt-12">
+      {/*
+        Transactional, not promotional. Someone who reached /book has already
+        decided; the job here is to get them to a date.
+
+        Measured before this change at 320px: the first booking control sat
+        912px down — 1.6 screens of hero, prose and trust cards. The compact
+        block below is ~180px, and the four trust cards are now one line on a
+        phone and the full row from `sm` up.
+      */}
+      <section className="bg-gradient-to-b from-navy-900 to-navy-800 pb-6 pt-6 sm:pb-12 sm:pt-12">
         <div className="mx-auto max-w-6xl px-4">
-          <h1 className="text-4xl font-extrabold text-white sm:text-5xl">
+          <h1 className="text-2xl font-extrabold leading-tight text-white sm:text-4xl lg:text-5xl">
             Book your gas safety certificate
           </h1>
-          <p className="mt-4 max-w-2xl text-lg leading-relaxed text-navy-100">
-            {cp12.priceTotalDisplay} · {cp12.payment}. Choose an available
-            appointment below and it goes straight into the engineer&rsquo;s
-            diary — confirmed on the spot, with nothing to pay now.
+
+          <p className="mt-2 text-base font-bold text-flame-400 sm:mt-4 sm:text-lg">
+            {cp12.priceTotalDisplay} · {cp12.payment}
+          </p>
+
+          {/* The reassurance a phone needs, in one line. */}
+          <p className="mt-1.5 text-sm text-navy-100 sm:hidden">
+            Gas Safe registered · {business.yearsExperience} years&rsquo;
+            experience · nothing to pay now
+          </p>
+
+          <p className="mt-4 hidden max-w-2xl text-lg leading-relaxed text-navy-100 sm:block">
+            Choose an available appointment below and it goes straight into the
+            engineer&rsquo;s diary — confirmed on the spot, with nothing to pay
+            now.
           </p>
         </div>
       </section>
 
-      <section className="border-b border-navy-100 bg-navy-50 py-8">
+      <section className="hidden border-b border-navy-100 bg-navy-50 py-8 sm:block">
         <div className="mx-auto max-w-6xl px-4">
           <TrustRow />
         </div>
       </section>
 
-      <section className="mx-auto max-w-3xl px-4 py-12">
+      <section className="mx-auto max-w-3xl px-4 py-6 sm:py-12">
         <BookingFlow />
       </section>
 
-      <section className="mx-auto max-w-5xl px-4 pb-16">
-        <div className="grid gap-6 md:grid-cols-3">
+      {/* Kept for phones, below the booking interface rather than ahead of it. */}
+      <section className="border-y border-navy-100 bg-navy-50 py-8 sm:hidden">
+        <div className="mx-auto max-w-6xl px-4">
+          <TrustRow />
+        </div>
+      </section>
+
+      <section className="mx-auto max-w-5xl px-4 pb-12 pt-8 sm:pb-16">
+        <div className="grid gap-4 sm:gap-6 md:grid-cols-3">
           <div className="rounded-2xl border border-navy-100 bg-white p-6">
             <h2 className="text-lg font-bold text-navy-900">
               Before you book
@@ -74,13 +100,21 @@ export default function BookPage() {
               <li>
                 Booking online also gives you a statutory right to cancel within
                 14 days — see the{" "}
-                <Link
+                {/*
+                  New tab, like the one on the review step. This link sits on
+                  the booking page, so a customer holding a reservation could
+                  tap it mid-booking; navigating away fires the abandonment
+                  beacon and releases their slot.
+                */}
+                <a
                   href="/terms"
+                  target="_blank"
+                  rel="noopener noreferrer"
                   className="font-semibold text-flame-600 underline underline-offset-4"
                 >
                   Terms &amp; Conditions
-                </Link>
-                .
+                </a>{" "}
+                <span className="text-navy-600">(opens in a new tab)</span>.
               </li>
               <li>
                 You can book up to {availability.maximumAdvanceDays} days ahead.

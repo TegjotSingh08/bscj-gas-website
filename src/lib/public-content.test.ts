@@ -286,6 +286,192 @@ describe("the review step's confirmations", () => {
   });
 });
 
+/**
+ * The mobile shell.
+ *
+ * Asserted against source structure rather than class strings, so restyling
+ * stays free while the rules that made the phone experience usable do not
+ * quietly regress.
+ */
+describe("the mobile header", () => {
+  const header = readFileSync(
+    path.resolve(SOURCE_ROOT, "components/Header.tsx"),
+    "utf8",
+  );
+
+  test("navigation is not a horizontally scrolling strip", () => {
+    // The old pattern measured 462px of pills inside a 320px viewport, with
+    // About and Contact entirely off-screen. No navigation may hide behind a
+    // sideways swipe again.
+    assert.equal(/overflow-x-auto/.test(header), false);
+    assert.equal(/scrollbar-none/.test(header), false);
+  });
+
+  test("no stylesheet still carries the hidden-scrollbar helper", () => {
+    const css = readFileSync(path.resolve(SOURCE_ROOT, "app/globals.css"), "utf8");
+    assert.equal(css.includes("scrollbar-none"), false);
+  });
+
+  test("the menu is a labelled, controllable disclosure", () => {
+    assert.match(header, /aria-expanded=\{open\}/);
+    assert.match(header, /aria-controls=\{menuId\}/);
+    assert.match(header, /aria-label=\{open \? "Close menu" : "Open menu"\}/);
+  });
+
+  test("Escape closes the menu and returns focus to the toggle", () => {
+    assert.match(header, /event\.key !== "Escape"/);
+    assert.match(header, /toggleRef\.current\?\.focus\(\)/);
+  });
+
+  test("the menu reaches every page a customer might want", () => {
+    for (const href of [
+      "/",
+      "/book",
+      "/gas-safety-certificate-wolverhampton",
+      "/#areas",
+      "/about",
+      "/contact",
+      "/terms",
+    ]) {
+      assert.ok(
+        header.includes(`href: "${href}"`),
+        `the mobile menu should link to ${href}`,
+      );
+    }
+  });
+
+  test("the areas link points at a section that exists", () => {
+    const home = readFileSync(path.resolve(SOURCE_ROOT, "app/page.tsx"), "utf8");
+    assert.match(home, /id="areas"/);
+  });
+
+  test("the header carries no booking state", () => {
+    // Presentation only. Nothing here may touch a reservation, a hold token or
+    // the booking attempt.
+    const code = withoutComments(header);
+    for (const forbidden of ["hold", "reservation", "slotStart", "idempotency"]) {
+      assert.equal(
+        new RegExp(forbidden, "i").test(code),
+        false,
+        `the header must not reference ${forbidden}`,
+      );
+    }
+  });
+});
+
+describe("the fixed mobile action bar", () => {
+  const bar = readFileSync(
+    path.resolve(SOURCE_ROOT, "components/StickyMobileCTA.tsx"),
+    "utf8",
+  );
+
+  test("its three destinations are the phone, WhatsApp and booking", () => {
+    assert.match(bar, /business\.phoneHref/);
+    assert.match(bar, /business\.whatsappHref/);
+    assert.match(bar, /href="\/book"/);
+  });
+
+  test("every action is labelled for a screen reader", () => {
+    assert.equal((bar.match(/aria-label=/g) ?? []).length, 3);
+  });
+
+  test("icons are inline SVG, not emoji", () => {
+    // Emoji render differently per platform and cannot be recoloured.
+    // Comments are stripped first: the note explaining the change names the
+    // emoji it replaced.
+    assert.match(bar, /<svg/);
+    assert.equal(/[\u{1F300}-\u{1FAFF}]/u.test(withoutComments(bar)), false);
+  });
+
+  test("it respects the iPhone home-indicator inset", () => {
+    assert.match(bar, /env\(safe-area-inset-bottom\)/);
+  });
+
+  test("the page reserves room for it, so it covers nothing", () => {
+    const css = readFileSync(path.resolve(SOURCE_ROOT, "app/globals.css"), "utf8");
+    assert.match(css, /padding-bottom:\s*calc\([^)]*safe-area-inset-bottom/);
+  });
+});
+
+describe("the booking flow is not reshaped by presentation", () => {
+  const stepIndicator = readFileSync(
+    path.resolve(SOURCE_ROOT, "components/booking/StepIndicator.tsx"),
+    "utf8",
+  );
+
+  test("the step indicator only reports and navigates", () => {
+    // It may call onGoTo for a completed step. It may not know about holds.
+    assert.match(stepIndicator, /state === "done" && onGoTo\(step\.number\)/);
+    const code = withoutComments(stepIndicator);
+    for (const forbidden of ["hold", "reservation", "fetch(", "useState"]) {
+      assert.equal(
+        code.includes(forbidden),
+        false,
+        `the step indicator must not use ${forbidden}`,
+      );
+    }
+  });
+
+  test("upcoming steps stay unreachable", () => {
+    assert.match(stepIndicator, /disabled=\{state !== "done"\}/);
+  });
+
+  test("the date picker never claims availability it does not have", () => {
+    const datePicker = readFileSync(
+      path.resolve(SOURCE_ROOT, "components/booking/DatePicker.tsx"),
+      "utf8",
+    );
+    // The loading branch returns before any date can be rendered as bookable.
+    assert.match(datePicker, /if \(loading\)/);
+    assert.match(datePicker, /Checking live availability/);
+    assert.match(datePicker, /aria-live="polite"/);
+  });
+});
+
+describe("the booking architecture stays where it was left", () => {
+  test("no Google Calendar iframe returns to the customer journey", () => {
+    const offenders = [...copy]
+      .filter(([file, contents]) =>
+        /<iframe/i.test(contents) && !file.includes("BookingEmbed"),
+      )
+      .map(([file]) => file);
+    assert.deepEqual(offenders, []);
+  });
+
+  test("no OpenStreetMap or Nominatim verification returns", () => {
+    assert.deepEqual(
+      filesContaining(["nominatim", "openstreetmap", "/api/address/verify"]),
+      [],
+    );
+  });
+
+  test("the service-area origin stays server-only", () => {
+    const serviceArea = readFileSync(
+      path.resolve(SOURCE_ROOT, "lib/address/service-area.ts"),
+      "utf8",
+    );
+    assert.match(serviceArea, /^import "server-only";/m);
+
+    // No client component may import it, directly or by naming its helpers.
+    const clientFiles = [...copy].filter(([, contents]) =>
+      contents.includes('"use client"'),
+    );
+    for (const [file, contents] of clientFiles) {
+      assert.equal(
+        /serviceAreaCentre|SERVICE_AREA_LAT|SERVICE_AREA_LNG|address\/service-area/.test(
+          contents,
+        ),
+        false,
+        `${file} must not reach the service-area origin`,
+      );
+    }
+  });
+
+  test("no NEXT_PUBLIC variable exists to leak configuration", () => {
+    assert.deepEqual(filesContaining(["NEXT_PUBLIC_"]), []);
+  });
+});
+
 describe("no invented facts reach the public site", () => {
   test("no review or rating markup exists, because no reviews are verified", () => {
     assert.equal(schemaSource.includes("aggregateRating"), false);

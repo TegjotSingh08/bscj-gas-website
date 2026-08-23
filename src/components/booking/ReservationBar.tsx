@@ -82,7 +82,7 @@ export function ReservationBar({
     <section
       aria-labelledby="reservation-heading"
       className={[
-        "mt-6 rounded-2xl border-2 p-4 sm:p-5",
+        "mt-4 rounded-2xl border-2 p-3.5 sm:mt-6 sm:p-5",
         isEndingSoon
           ? "border-flame-500 bg-flame-400/15"
           : "border-trust-600 bg-trust-50",
@@ -96,7 +96,7 @@ export function ReservationBar({
           >
             Your appointment is reserved
           </h2>
-          <p className="mt-1 text-lg font-extrabold text-navy-900">
+          <p className="mt-0.5 text-base font-extrabold leading-tight text-navy-900 sm:mt-1 sm:text-lg">
             {longDate(reservation.dateIso)}
           </p>
           <p className="text-base font-bold text-navy-800">

@@ -35,24 +35,38 @@ const steps = [
 export default function HomePage() {
   return (
     <>
-      <section className="bg-gradient-to-b from-navy-900 to-navy-800 pb-14 pt-8 sm:pb-16 sm:pt-16">
+      <section className="bg-gradient-to-b from-navy-900 to-navy-800 pb-8 pt-5 sm:pb-16 sm:pt-16">
         <div className="mx-auto max-w-6xl px-4">
-          <p className="inline-flex items-center gap-2 rounded-full bg-white/10 px-4 py-1.5 text-xs font-bold uppercase tracking-wider text-flame-400">
+          <p className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-flame-400 sm:px-4 sm:py-1.5 sm:text-xs">
             Gas Safe Registered
           </p>
 
-          <h1 className="mt-4 max-w-3xl text-[2rem] font-extrabold leading-[1.15] text-white sm:text-5xl lg:text-6xl">
-            Gas Safety Certificate Wolverhampton —{" "}
+          {/*
+            Balanced wrapping keeps "fixed £45" off a line of its own at
+            320-430px without hard-coding a break point.
+          */}
+          <h1 className="mt-3 max-w-3xl text-[1.75rem] font-extrabold leading-[1.15] text-balance text-white sm:mt-4 sm:text-5xl lg:text-6xl">
+            {/*
+              Non-breaking space before the dash: left to itself the line broke
+              as "Wolverhampton" / "— fixed £45", stranding the dash at the
+              start of a line.
+            */}
+            Gas Safety Certificate Wolverhampton{"\u00a0\u2014"}{" "}
             <span className="text-flame-400">fixed {cp12.priceDisplay}</span>
           </h1>
 
-          <p className="mt-4 max-w-2xl text-base leading-relaxed text-navy-100 sm:text-lg">
+          {/* Shorter on a phone; the full proposition from `sm` up. */}
+          <p className="mt-3 max-w-2xl text-base leading-relaxed text-navy-100 sm:hidden">
+            Booked online in about a minute with a local, family-run Gas Safe
+            engineer. Nothing to pay until the work is done.
+          </p>
+          <p className="mt-4 hidden max-w-2xl text-lg leading-relaxed text-navy-100 sm:block">
             Booked online in about a minute with a local, family-run Gas Safe
             engineer. No account to create, no waiting on a quote, and nothing
             to pay until the work is done.
           </p>
 
-          <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+          <div className="mt-5 flex flex-col gap-2.5 sm:mt-6 sm:flex-row sm:gap-3">
             <Link
               href="/book"
               data-analytics-id="hero-book"
@@ -71,9 +85,12 @@ export default function HomePage() {
             </a>
           </div>
 
-          <p className="mt-5 text-sm text-navy-200">
-            {cp12.priceTotalDisplay} · {sameDayMessaging.short} ·{" "}
-            {availability.workingDays}, {availability.workingHours}
+          <p className="mt-4 text-sm leading-relaxed text-navy-200 sm:mt-5">
+            {cp12.priceTotalDisplay} · {cp12.payment} · {sameDayMessaging.short}
+            <span className="hidden sm:inline">
+              {" "}
+              · {availability.workingDays}, {availability.workingHours}
+            </span>
           </p>
         </div>
       </section>
@@ -295,12 +312,12 @@ export default function HomePage() {
         </div>
       </section>
 
-      <section className="bg-navy-50 py-16">
+      <section id="areas" className="scroll-mt-20 bg-navy-50 py-12 sm:py-16">
         <div className="mx-auto max-w-6xl px-4">
-          <h2 className="text-center text-3xl font-extrabold text-navy-900 sm:text-4xl">
+          <h2 className="text-center text-2xl font-extrabold text-navy-900 sm:text-4xl">
             Areas we cover
           </h2>
-          <div className="mt-8">
+          <div className="mt-6 sm:mt-8">
             <AreasCovered />
           </div>
         </div>
