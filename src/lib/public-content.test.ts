@@ -13,6 +13,7 @@ import {
 } from "./business";
 import { faqs } from "./faqs";
 import { calculatePrice } from "./booking/pricing";
+import { buildPropertyAddress } from "./address/format";
 
 /**
  * Rules about what the public site is allowed to say.
@@ -358,6 +359,44 @@ describe("the mobile header", () => {
         `the header must not reference ${forbidden}`,
       );
     }
+  });
+});
+
+describe("the confirmation page shows the address once", () => {
+  const confirmation = withoutComments(
+    readFileSync(
+      path.resolve(SOURCE_ROOT, "components/booking/Confirmation.tsx"),
+      "utf8",
+    ),
+  );
+
+  test("the postcode is not appended to an address that already ends in it", () => {
+    // Found on the first real booking: `propertyAddress` is the canonical
+    // formatted address and already ends with the postcode, so rendering
+    // `{propertyAddress}, {postcode}` produced
+    // "24 Example Road, Wolverhampton, WV1 1AA, WV1 1AA".
+    assert.equal(
+      /\{booking\.propertyAddress\}\s*,\s*\{booking\.postcode\}/.test(confirmation),
+      false,
+    );
+  });
+
+  test("the formatted address already carries the postcode", () => {
+    // The reason the concatenation was wrong in the first place.
+    const address = buildPropertyAddress({
+      houseOrName: "24",
+      street: "Example Road",
+      postcode: {
+        postcode: "WV99 1AA",
+        outcode: "WV99",
+        areaName: "Wolverhampton",
+        latitude: 52.6,
+        longitude: -2.12,
+      },
+      confirmedByCustomer: true,
+    });
+    assert.ok(address.formattedAddress.endsWith("WV99 1AA"));
+    assert.equal(address.formattedAddress.match(/WV99 1AA/g)?.length, 1);
   });
 });
 

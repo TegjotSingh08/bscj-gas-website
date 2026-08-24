@@ -107,8 +107,14 @@ export function Confirmation({ booking }: { booking: ConfirmedBooking }) {
           </div>
           <div>
             <dt className="text-sm font-semibold text-navy-600">Where</dt>
+            {/*
+              `propertyAddress` is the canonical formatted address and already
+              ends with the postcode. Appending `postcode` printed it twice —
+              "24 Example Road, Wolverhampton, WV1 1AA, WV1 1AA" — which only
+              showed up on a real confirmation.
+            */}
             <dd className="text-base font-bold text-navy-900">
-              {booking.propertyAddress}, {booking.postcode}
+              {booking.propertyAddress}
             </dd>
           </div>
           <div>
