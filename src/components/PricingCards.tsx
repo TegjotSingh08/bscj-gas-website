@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { cp12 } from "@/lib/business";
+import { cp12, inspectionScope } from "@/lib/business";
 
 /** Derived from the CP12 price and extra-appliance rate — never hardcoded. */
 const priceTiers = [
@@ -35,6 +35,10 @@ export function PricingCards() {
           <li className="flex gap-2">
             <span aria-hidden="true" className="text-trust-600">✓</span>
             Full safety check by a Gas Safe registered engineer
+          </li>
+          <li className="flex gap-2">
+            <span aria-hidden="true" className="text-trust-600">✓</span>
+            No separate CP12 call-out charge
           </li>
           <li className="flex gap-2">
             <span aria-hidden="true" className="text-trust-600">✓</span>
@@ -104,6 +108,25 @@ export function PricingCards() {
           runs on gas — a gas hob, gas oven, gas fire or gas water heater. Tell
           us when you book, or ask us and we will work it out with you.
         </p>
+
+        {/*
+          The inspection/repair distinction, made before booking rather than on
+          the doorstep. Framed as what the price buys, not as a warning.
+        */}
+        <div className="mt-6 border-t border-navy-200 pt-5">
+          <h4 className="text-sm font-bold text-navy-900">
+            If the inspection finds a problem
+          </h4>
+          <p className="mt-2 text-xs leading-relaxed text-navy-700">
+            {inspectionScope.chargeAppliesRegardless}
+          </p>
+          <p className="mt-2 text-xs leading-relaxed text-navy-700">
+            {inspectionScope.repairsExcluded} {inspectionScope.remedialOffer}
+          </p>
+          <p className="mt-2 text-xs font-semibold leading-relaxed text-navy-800">
+            {inspectionScope.noObligation}
+          </p>
+        </div>
       </div>
     </div>
   );

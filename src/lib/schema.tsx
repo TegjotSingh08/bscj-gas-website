@@ -117,14 +117,17 @@ export function breadcrumbSchema(
   };
 }
 
-/** Renders a JSON-LD block. */
+/**
+ * Renders a JSON-LD block.
+ *
+ * Every value here originates in developer-authored constants, so nothing
+ * customer-supplied reaches it. The `<` escaping is belt and braces: a literal
+ * `</script>` inside a JSON string would otherwise close the tag early, and
+ * this is the one place in the codebase that writes raw HTML.
+ */
 export function JsonLd({ data }: { data: object }) {
-  return (
-    <script
-      type="application/ld+json"
-      dangerouslySetInnerHTML={{ __html: JSON.stringify(data) }}
-    />
-  );
+  const json = JSON.stringify(data).replace(/</g, "\\u003c");
+  return <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: json }} />;
 }
 
 export const openingHoursText = `${availability.workingDays}, ${availability.workingHours}`;

@@ -42,6 +42,12 @@ describe("the terms version", () => {
     assert.equal(isCurrentTermsVersion("2020-01-01"), false);
   });
 
+  test("the immediately previous version is rejected too", () => {
+    // The bump on 24 August 2026 added the inspection/remedial-work clause.
+    // A tab still holding 2026-08-22 accepted wording that no longer stands.
+    assert.equal(isCurrentTermsVersion("2026-08-22"), false);
+  });
+
   test("a future-looking version is not, because only one is current", () => {
     assert.equal(isCurrentTermsVersion("2099-12-31"), false);
   });

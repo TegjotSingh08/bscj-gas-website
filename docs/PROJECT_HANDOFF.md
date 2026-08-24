@@ -1,7 +1,8 @@
 # Project Handoff
 
-Written 21 August 2026. Revised 22 August 2026 by the pre-terms correction
-milestone and then by the Terms & Conditions / consumer-rights milestone.
+Written 21 August 2026. Revised through the pre-terms correction, Terms &
+Conditions, mobile UX and final pre-launch audit milestones. Last revised
+24 August 2026 by the final audit.
 
 This document exists so a fresh session with no memory of previous
 conversations can pick this project up accurately. It describes what the
@@ -350,6 +351,19 @@ From `business-details.md` via `lib/business.ts`:
 - Appointments are 45 minutes with a 15-minute buffer, 12 hours' minimum
   notice, up to 30 days ahead, maximum 8 per day.
 
+**Inspection versus remedial work — added by the final audit (24 August 2026):**
+
+- The £45 is the charge for **carrying out the inspection**, so it applies
+  whether the property passes or not. The site says so before booking.
+- **Repairs, parts and remedial work are excluded** and are a separate service,
+  quoted and invoiced separately, never started without agreement.
+- **No obligation to use BSCJ** for any repair, and a record is never withheld
+  for declining the work.
+- One source: `inspectionScope` in `src/lib/business.ts`, surfaced on the
+  pricing cards, the CP12 page, three FAQs and /terms §5a.
+- The old `priceSentence` claimed "nothing else is added on the day", which
+  contradicted both the extra-appliance charge and the repairs position. Fixed.
+
 **Cancellation and rescheduling — now published in the terms (§11):**
 
 - **No cancellation charge of any kind**, whatever notice is given.
@@ -395,7 +409,7 @@ approved its appearance on desktop and mobile.
 research, with primary sources and access dates, is in
 `docs/CONSUMER_RIGHTS.md`. Read that before changing any wording here.
 
-**Terms version in force: `2026-08-22`**, defined once in
+**Terms version in force: `2026-08-24`**, defined once in
 `src/lib/booking/terms.ts` and rendered on `/terms`. Bump it whenever the page
 changes in substance.
 
@@ -470,7 +484,7 @@ over-protecting. Do not add a classification questionnaire. See
 
 ## 12. Testing
 
-**455 tests across 73 suites, all passing.**
+**484 tests across 78 suites, all passing.**
 
 Covered: the availability engine (working hours, buffers, minimum notice,
 BST/GMT, daily cap), holds (exclusivity, expiry, switching, forged and
@@ -610,9 +624,9 @@ and untracked.
 - **No Google Business Profile yet** — the biggest local-SEO gap.
 - **No reviews yet**, so no review markup. Do not add either until genuine
   reviews exist.
-- **`src/components/BookingEmbed.tsx` is dead code**, retained as a marked
-  rollback to the old iframe. Delete it once a real production booking has
-  succeeded.
+- ~~`BookingEmbed.tsx` dead code~~ — **deleted in the final audit** on
+  24 August 2026, once nothing referenced it. `calendarEmbedUrl` went with it.
+  Git history is the rollback. The iframe guard test now has no exemption.
 
 ---
 

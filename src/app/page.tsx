@@ -85,8 +85,32 @@ export default function HomePage() {
             </a>
           </div>
 
-          <p className="mt-4 text-sm leading-relaxed text-navy-200 sm:mt-5">
-            {cp12.priceTotalDisplay} · {cp12.payment} · {sameDayMessaging.short}
+          {/*
+            The value stack, as one scannable line rather than seven rows. A
+            landlord should be able to answer "what does it cost, what do I
+            get, when do I pay" without scrolling. Every item is a fact about
+            BSCJ — no comparative claim, because the competitor evidence in
+            docs/COMPETITOR_PRICING.md does not support one.
+          */}
+          <ul className="mt-4 flex flex-wrap gap-x-3 gap-y-1.5 text-sm font-semibold text-navy-100 sm:mt-5">
+            {[
+              `${cp12.priceTotalDisplay} — up to 3 appliances`,
+              "No separate call-out fee",
+              "No deposit",
+              cp12.payment,
+              "Same-day digital copy",
+            ].map((point) => (
+              <li key={point} className="flex items-center gap-1.5">
+                <span aria-hidden="true" className="text-flame-400">
+                  ✓
+                </span>
+                {point}
+              </li>
+            ))}
+          </ul>
+
+          <p className="mt-3 text-sm leading-relaxed text-navy-200">
+            {sameDayMessaging.short}
             <span className="hidden sm:inline">
               {" "}
               · {availability.workingDays}, {availability.workingHours}

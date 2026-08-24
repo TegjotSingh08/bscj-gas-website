@@ -5,7 +5,12 @@ import { PricingCards } from "@/components/PricingCards";
 import { FAQ } from "@/components/FAQ";
 import { AreasCovered } from "@/components/AreasCovered";
 import { CTABand } from "@/components/CTABand";
-import { business, cp12, sameDayMessaging } from "@/lib/business";
+import {
+  business,
+  cp12,
+  inspectionScope,
+  sameDayMessaging,
+} from "@/lib/business";
 import {
   JsonLd,
   breadcrumbSchema,
@@ -126,13 +131,23 @@ export default function GasSafetyCertificateWolverhamptonPage() {
         </p>
 
         <h2 className="mt-12 text-3xl font-extrabold text-navy-900">
-          If something fails
+          If the inspection finds a problem
         </h2>
         <p className="mt-4 text-base leading-relaxed text-navy-800">
-          You will be told exactly what the problem is and why it failed, in
-          plain terms. If an appliance is unsafe it will be turned off with your
-          permission, and you will be told what needs putting right. Nobody
-          leaves you with a failed certificate and no explanation.
+          You will be told exactly what the problem is and why, in plain terms.
+          If an appliance is unsafe it will be turned off with your permission,
+          and you will be told what needs putting right. Nobody leaves you with a
+          failed record and no explanation.
+        </p>
+        <p className="mt-4 text-base leading-relaxed text-navy-800">
+          <strong>{inspectionScope.chargeAppliesRegardless}</strong>
+        </p>
+        <p className="mt-4 text-base leading-relaxed text-navy-800">
+          {inspectionScope.repairsExcluded} {inspectionScope.remedialOffer}{" "}
+          {inspectionScope.separateInvoice}
+        </p>
+        <p className="mt-4 rounded-xl bg-navy-50 px-5 py-4 text-base leading-relaxed text-navy-800">
+          {inspectionScope.noObligation}
         </p>
 
         <h2 className="mt-12 text-3xl font-extrabold text-navy-900">

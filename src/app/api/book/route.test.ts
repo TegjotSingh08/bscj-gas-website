@@ -536,10 +536,23 @@ describe("terms and cancellation rights are enforced server-side", () => {
     assert.equal(calls.includes("google:create-event"), false);
   });
 
-  test("the gate closes before the hold and the calendar are touched", async () => {
-    await POST(bookingRequest({ termsAccepted: false }));
-    // Nothing beyond the cheap duplicate lookup should have run.
+  test("the gate closes before the postcode service and the calendar are touched", async () => {
+    // Deliberately a stale *version* rather than termsAccepted:false. The
+    // schema types acceptance as a literal true, so `false` never reaches the
+    // gate at all — it is rejected at parse time, and a test using it would
+    // pass without proving anything about ordering. A stale version parses
+    // cleanly and can only be caught by the gate itself.
+    await POST(bookingRequest({ termsVersion: "2020-01-01" }));
+
+    assert.equal(calls.includes("postcodes:lookup"), false);
     assert.equal(calls.includes("google:freebusy"), false);
+    assert.equal(calls.includes("google:create-event"), false);
+  });
+
+  test("a rejected booking never reaches the free postcode service", async () => {
+    // Postcodes.io is donated public infrastructure. A request that cannot
+    // succeed should not consume a lookup.
+    await POST(bookingRequest({ earlyPerformanceRequested: false }));
     assert.equal(calls.includes("postcodes:lookup"), false);
   });
 });

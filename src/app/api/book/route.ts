@@ -137,6 +137,35 @@ export async function POST(request: Request) {
   // before holds existed. That check is never skipped.
 
   // ---------------------------------------------------------------
+  // The contractual gate.
+  //
+  // Whether the appointment falls inside the statutory cancellation period is
+  // recomputed here from the slot and the current time. The browser sends
+  // whether the customer *ticked* the request, never whether one was needed —
+  // so editing client state cannot make the requirement disappear.
+  // ---------------------------------------------------------------
+  const contractMadeAt = new Date();
+  const terms = checkTermsAcceptance({
+    termsVersion: data.termsVersion,
+    termsAccepted: data.termsAccepted,
+    earlyPerformanceRequested: data.earlyPerformanceRequested,
+    slotStart: new Date(data.slotStart),
+    contractMadeAt,
+    timeZone: bookingConfig.timeZone,
+  });
+
+  if (!terms.ok) {
+    return NextResponse.json(
+      {
+        error: "terms_required",
+        problem: terms.problem,
+        message: termsProblemMessage(terms.problem),
+      },
+      { status: 400 },
+    );
+  }
+
+  // ---------------------------------------------------------------
   // The address is re-established here from the postcode provider and the
   // server's own verification record. Nothing about the address is taken on
   // the browser's word — a request claiming a verified address proves nothing.
@@ -166,35 +195,6 @@ export async function POST(request: Request) {
   if (!checkServiceArea(postcodeLookup.postcode).covered) {
     return NextResponse.json(
       { error: "outside_area", message: serviceAreaCopy.outsideArea },
-      { status: 400 },
-    );
-  }
-
-  // ---------------------------------------------------------------
-  // The contractual gate.
-  //
-  // Whether the appointment falls inside the statutory cancellation period is
-  // recomputed here from the slot and the current time. The browser sends
-  // whether the customer *ticked* the request, never whether one was needed —
-  // so editing client state cannot make the requirement disappear.
-  // ---------------------------------------------------------------
-  const contractMadeAt = new Date();
-  const terms = checkTermsAcceptance({
-    termsVersion: data.termsVersion,
-    termsAccepted: data.termsAccepted,
-    earlyPerformanceRequested: data.earlyPerformanceRequested,
-    slotStart: new Date(data.slotStart),
-    contractMadeAt,
-    timeZone: bookingConfig.timeZone,
-  });
-
-  if (!terms.ok) {
-    return NextResponse.json(
-      {
-        error: "terms_required",
-        problem: terms.problem,
-        message: termsProblemMessage(terms.problem),
-      },
       { status: 400 },
     );
   }

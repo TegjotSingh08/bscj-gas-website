@@ -1,6 +1,6 @@
 # Launch Checklist
 
-Status as of 22 August 2026.
+Status as of 24 August 2026, after the final pre-launch audit.
 
 Version 1 = fixed-price CP12 booking site for Wolverhampton and the surrounding
 area. Bookings are taken through the **BSCJ-branded booking flow built into the
@@ -20,7 +20,7 @@ Things that genuinely stop the site going up.
 
 - [x] **Terms & Conditions / Consumer Contracts milestone — done
       22 August 2026.** `/terms` rewritten from primary sources as version
-      `2026-08-22`, with the 14-day statutory cancellation right, the
+      `2026-08-24`, with the 14-day statutory cancellation right, the
       regulation 36 express request and acknowledgement, the regulation 13(1)(b)
       cancellation form, versioned acceptance and server-side enforcement. The
       old "appointments cannot be cancelled" wording is gone. See
@@ -54,7 +54,7 @@ Things that genuinely stop the site going up.
 - [x] No review/rating structured data (there are no verified reviews yet)
 - [x] Custom BSCJ booking flow replaces the Google iframe (no Google branding,
       no customer sign-in)
-- [x] Full suite green — 455 tests across 73 suites covering the availability
+- [x] Full suite green — 484 tests across 78 suites covering the availability
       engine, holds, the attempt reducer, the booking route's transaction order,
       the Google client, the email builder and transport, address handling,
       contact validation, the terms and cancellation-period rules, and the
@@ -118,6 +118,20 @@ Things that genuinely stop the site going up.
       follow `docs/GOOGLE_CALENDAR_SETUP.md`. Working locally against the live
       calendar. Still to be added in Vercel; until then a deployment would show
       the booking fallback screen.
+- [x] **Inspection vs remedial work made explicit before booking** — the £45
+      applies whether or not the property passes, repairs are excluded and
+      separately agreed, and there is no obligation to use BSCJ for them
+- [x] Misleading "nothing else is added on the day" wording removed
+- [x] Security headers set (nosniff, DENY framing, strict-origin-when-cross-origin,
+      restrictive Permissions-Policy) and `x-powered-by` disabled
+- [x] JSON-LD escapes `<`, so no injected value could close the script tag
+- [x] Competitor pricing evidence recorded in `docs/COMPETITOR_PRICING.md`; no
+      comparative superiority claim is published anywhere
+- [x] Terms gate moved ahead of the postcode lookup, so a rejected booking never
+      consumes a call to the free Postcodes.io service
+- [ ] **Content-Security-Policy** — deliberately not added pre-launch. It needs
+      nonces for Next's inline bootstrap and testing against the real
+      deployment. Add it shortly after launch (P2)
 - [x] Phone and WhatsApp links verified identical on every page
 - [x] No horizontal overflow at 375 / 390 / 430 / 768 / 1280 px
 - [x] 404 page returns a real 404 status
@@ -197,9 +211,8 @@ Must be checked by a human on the live site, after deployment.
 
 Genuinely useful, but none of it should delay going live.
 
-- [ ] Delete `src/components/BookingEmbed.tsx` once a real booking has been
-      made through the new flow on the live site — it is the rollback path to
-      the old Google iframe and is not rendered anywhere
+- [x] `src/components/BookingEmbed.tsx` deleted in the final audit — nothing
+      referenced it, and git history is the rollback
 - [ ] Create and verify a Google Business Profile for Wolverhampton — this is
       the single biggest local-SEO win available and is currently missing
 - [ ] Start collecting reviews. Once there are genuine ones, they can be shown

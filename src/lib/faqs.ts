@@ -1,6 +1,7 @@
 import {
   cancellationPolicy,
   cp12,
+  inspectionScope,
   sameDayMessaging,
   serviceAreaCopy,
   serviceAreas,
@@ -27,7 +28,7 @@ export const faqs: Faq[] = [
   },
   {
     question: "How much does it cost?",
-    answer: `${cp12.priceTotalDisplay} covers ${cp12.includes}. Each additional appliance is ${cp12.extraApplianceDisplay}. That is the whole price — there is no separate callout fee, and you pay after the work is completed, so there is nothing to pay when you book.`,
+    answer: `${cp12.priceTotalDisplay} covers ${cp12.includes}. Each additional appliance is ${cp12.extraApplianceDisplay}. There is no separate call-out fee, and you pay after the work is completed, so there is nothing to pay when you book. Repairs are not part of the inspection price — if anything needs putting right we will explain it and agree the cost with you separately.`,
   },
   {
     question: "How long does the appointment take?",
@@ -41,6 +42,18 @@ export const faqs: Faq[] = [
     question: "What happens if an appliance fails the check?",
     answer:
       "The engineer will explain exactly what the problem is and why it failed. If an appliance is unsafe it will be turned off with your permission, and you will be told what needs putting right. You are never left without an explanation of what was found.",
+  },
+  {
+    question: "Do I still pay if something fails the inspection?",
+    answer: `Yes. ${inspectionScope.chargeAppliesRegardless} ${inspectionScope.repairsExcluded} ${inspectionScope.remedialOffer} ${inspectionScope.noObligation}`,
+  },
+  {
+    question: "Are repairs included in the £45?",
+    answer: `No. ${inspectionScope.covers} ${inspectionScope.repairsExcluded} ${inspectionScope.separateInvoice} Nothing extra is ever carried out without your agreement first.`,
+  },
+  {
+    question: "Is there a call-out fee?",
+    answer: `No — there is no separate CP12 call-out charge. ${cp12.priceTotalDisplay} covers ${cp12.includes}, and each additional appliance is ${cp12.extraApplianceDisplay}. You pay nothing upfront and nothing at all until the inspection has been carried out.`,
   },
   {
     question: "Can I get a same-day appointment?",

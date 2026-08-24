@@ -33,6 +33,18 @@ export const metadata: Metadata = {
  * lib/booking/terms.ts whenever anything here changes in substance.
  */
 
+/**
+ * The version is the effective date, so it is formatted rather than repeated.
+ * The page previously carried "in effect from 22 August 2026" as literal text
+ * in two places, which silently contradicted the version once it was bumped.
+ */
+const TERMS_EFFECTIVE_FROM = new Intl.DateTimeFormat("en-GB", {
+  day: "numeric",
+  month: "long",
+  year: "numeric",
+  timeZone: "UTC",
+}).format(new Date(`${TERMS_VERSION}T12:00:00Z`));
+
 function H2({ id, children }: { id: string; children: React.ReactNode }) {
   return (
     <h2
@@ -81,7 +93,7 @@ export default function TermsPage() {
         Terms &amp; Conditions
       </h1>
       <p className="mt-3 text-sm font-semibold text-navy-600">
-        Version {TERMS_VERSION} · in effect from 22 August 2026
+        Version {TERMS_VERSION} · in effect from {TERMS_EFFECTIVE_FROM}
       </p>
 
       <div className="mt-8 rounded-2xl border-2 border-navy-200 bg-navy-50 p-5 sm:p-6">
@@ -217,13 +229,64 @@ export default function TermsPage() {
       </P>
       <P>
         The price shown on the review screen before you confirm is the price you
-        pay. If the property turns out to have more appliances than you told us
-        about, the extra-appliance charge applies — but we will tell you what the
-        new total is before we do that extra work, and you can decline.
+        pay for the inspection. If the property turns out to have more appliances
+        than you told us about, the extra-appliance charge applies — but we will
+        tell you what the new total is before we do that extra work, and you can
+        decline.
       </P>
+
+      <H2 id="inspection-and-repairs">
+        5a. What the price covers, and what it does not
+      </H2>
       <P>
-        Any work beyond the safety check — repairs, parts or remedial work — is
-        quoted separately and only carried out with your agreement.
+        This is the part people most often ask about, so it is worth being
+        completely clear.
+      </P>
+      <Bullets
+        items={[
+          <>
+            <strong>
+              The {cp12.priceDisplay} is the charge for carrying out the gas
+              safety inspection and issuing your record.
+            </strong>{" "}
+            It is payable once we have carried out the inspection, whether every
+            appliance passes or we find something that needs attention. The
+            charge is for the work of inspecting, not for a particular result.
+          </>,
+          <>
+            A record showing a problem is still a completed inspection. We will
+            not refuse to give you your record because you have not asked us to
+            do any repair.
+          </>,
+          <>
+            <strong>
+              Repairs, replacement parts and remedial work are not included in
+              the {cp12.priceDisplay}.
+            </strong>{" "}
+            They are a separate service.
+          </>,
+          <>
+            Where the work is something we can do, we will explain what is needed
+            and give you a price for it. We will not start any additional work
+            until you have agreed to it, and separately agreed work is quoted and
+            invoiced separately from the inspection.
+          </>,
+          <>
+            <strong>You are under no obligation to use us for repairs.</strong>{" "}
+            You are free to use any Gas Safe registered engineer, or to do
+            nothing. Agreeing to a repair is never a condition of receiving your
+            gas safety record.
+          </>,
+          <>
+            If an appliance is immediately dangerous, the engineer will ask your
+            permission to disconnect it. That is a safety step, not a sales one,
+            and it does not commit you to any repair.
+          </>,
+        ]}
+      />
+      <P>
+        Nothing in this section affects your legal rights, including your right
+        to work carried out with reasonable care and skill.
       </P>
 
       {/* 6 */}
@@ -523,7 +586,8 @@ export default function TermsPage() {
       <div className="mt-12 rounded-2xl border border-navy-100 bg-white p-5 text-sm leading-relaxed text-navy-700">
         <p>
           <strong className="text-navy-900">Terms version {TERMS_VERSION}</strong>{" "}
-          · in effect from 22 August 2026. {business.name} is a trading name of{" "}
+          · in effect from {TERMS_EFFECTIVE_FROM}. {business.name} is a trading
+          name of{" "}
           {business.legalName}. Questions about these terms:{" "}
           {emailLink(business.emailGeneral)}.
         </p>

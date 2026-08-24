@@ -7,10 +7,12 @@ import {
   business,
   cancellationPolicy,
   cp12,
+  inspectionScope,
   serviceAreas,
   serviceRadiusMiles,
 } from "./business";
 import { faqs } from "./faqs";
+import { calculatePrice } from "./booking/pricing";
 
 /**
  * Rules about what the public site is allowed to say.
@@ -430,12 +432,9 @@ describe("the booking flow is not reshaped by presentation", () => {
 
 describe("the booking architecture stays where it was left", () => {
   test("no Google Calendar iframe returns to the customer journey", () => {
-    const offenders = [...copy]
-      .filter(([file, contents]) =>
-        /<iframe/i.test(contents) && !file.includes("BookingEmbed"),
-      )
-      .map(([file]) => file);
-    assert.deepEqual(offenders, []);
+    // No exemption any more: BookingEmbed.tsx, the last file that rendered a
+    // Google iframe, was deleted in the final audit once nothing referenced it.
+    assert.deepEqual(filesContaining(["<iframe"]), []);
   });
 
   test("no OpenStreetMap or Nominatim verification returns", () => {
@@ -469,6 +468,105 @@ describe("the booking architecture stays where it was left", () => {
 
   test("no NEXT_PUBLIC variable exists to leak configuration", () => {
     assert.deepEqual(filesContaining(["NEXT_PUBLIC_"]), []);
+  });
+});
+
+/**
+ * The commercial facts a customer decides on.
+ *
+ * These are not style rules. Each one is a statement the business has to be
+ * able to stand behind at the door, and each is deliberately loose enough that
+ * copy can still be improved without a test rewrite.
+ */
+describe("the commercial offer is stated accurately", () => {
+  test("the base price and what it covers stay together", () => {
+    assert.equal(cp12.price, 45);
+    assert.equal(cp12.includes, "one boiler and two additional appliances");
+    assert.equal(cp12.extraAppliancePrice, 15);
+    // Three appliances at the base price; the fourth is the first chargeable.
+    assert.equal(calculatePrice(3).total, 45);
+    assert.equal(calculatePrice(4).total, 60);
+  });
+
+  test("nothing claims the price is unconditional on the day", () => {
+    // The old priceSentence said "nothing else is added on the day", which
+    // contradicted the extra-appliance charge and the repairs position.
+    assert.deepEqual(filesContaining(["nothing else is added on the day"]), []);
+  });
+
+  test("the inspection charge is stated as payable whatever is found", () => {
+    assert.match(inspectionScope.chargeAppliesRegardless, /whether everything passes/i);
+    // And it reaches customers, not just the constants file.
+    const surfaced = [...copy].filter(([, contents]) =>
+      contents.includes("inspectionScope.chargeAppliesRegardless"),
+    );
+    assert.ok(
+      surfaced.length >= 2,
+      "the inspection-charge position should appear on more than one surface",
+    );
+  });
+
+  test("repairs are never presented as included in the price", () => {
+    assert.match(inspectionScope.repairsExcluded, /not included/i);
+    // Affirmative claims only. Asking the question — the FAQ is literally
+    // "Are repairs included in the £45?" — is exactly how a customer phrases
+    // it, and the answer there is "No".
+    assert.deepEqual(
+      filesContaining([
+        "repairs are included",
+        "repairs are covered",
+        "price includes repairs",
+        "including any repairs",
+        "free repairs",
+        "repairs at no extra",
+      ]),
+      [],
+    );
+  });
+
+  test("the customer is told they need not use us for repairs", () => {
+    assert.match(inspectionScope.noObligation, /no obligation/i);
+    assert.match(inspectionScope.noObligation, /any Gas Safe registered engineer/i);
+  });
+
+  test("no call-out fee is claimed as a contrast with other firms", () => {
+    // Two of the three competitors with published terms also state no call-out
+    // fee, so a comparison would create a false impression.
+    assert.deepEqual(
+      filesContaining([
+        "unlike other",
+        "unlike competitors",
+        "unlike most",
+        "other engineers charge",
+      ]),
+      [],
+    );
+  });
+
+  test("no unsupported market-superiority claim appears anywhere", () => {
+    // docs/COMPETITOR_PRICING.md records eleven named firms and four
+    // aggregators. That is a sample, not a market, and supports no absolute.
+    assert.deepEqual(
+      filesContaining([
+        "cheapest",
+        "lowest price",
+        "best price",
+        "best value in",
+        "price guarantee",
+        "guaranteed cheapest",
+        "beat any quote",
+        "unbeatable",
+        "number one",
+      ]),
+      [],
+    );
+  });
+
+  test("the offer is not positioned as budget work", () => {
+    assert.deepEqual(
+      filesContaining(["cut-price", "bargain", "discount gas", "cheap certificate"]),
+      [],
+    );
   });
 });
 

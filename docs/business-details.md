@@ -34,6 +34,14 @@
 - Typical appointment duration: 45 minutes
 - Certificate delivery time: Physical Certificate completed at property - digital certificate emailed same day free of charge
 - Payment method: Pay after completion
+- What the £45 covers (CONFIRMED 24 August 2026): the gas safety inspection and
+  the resulting record. The charge is for CARRYING OUT the inspection, so it is
+  payable whether the property passes or a defect is found. Repairs, replacement
+  parts and remedial work are NOT included — they are a separate service, quoted
+  and agreed before any extra work starts, and invoiced separately. Customers are
+  under no obligation to use BSCJ for repairs and the record is never withheld
+  for declining. Wording lives in `inspectionScope` in `src/lib/business.ts`.
+- No separate CP12 call-out fee.
 - Same-day service available: Yes - by phone/WhatsApp only (see Availability Messaging below)
 
 ## Availability Messaging

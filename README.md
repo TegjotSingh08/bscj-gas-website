@@ -64,7 +64,7 @@ replaced by fakes or module mocks.
 | `src/lib/schema.tsx` | JSON-LD structured data |
 | `src/components/booking/` | The booking flow |
 | `src/components/` | Shared UI |
-| `docs/` | Business details, setup guides, roadmap, launch checklist |
+| `docs/` | Business details, setup guides, roadmap, launch checklist, consumer-rights research, competitor pricing evidence |
 | `research/` | Competitor research (strategy input, not for copying) |
 
 Start with `docs/PROJECT_HANDOFF.md` — it describes what the repository

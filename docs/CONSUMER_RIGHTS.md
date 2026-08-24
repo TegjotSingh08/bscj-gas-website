@@ -8,8 +8,17 @@ Why the booking flow asks what it asks, and where each rule comes from.
 > should review the wording before the business relies on it — particularly the
 > regulation 36 acknowledgement and the regulation 14 button labelling.
 
-Terms version in force: **2026-08-22** (`TERMS_VERSION` in
+Terms version in force: **2026-08-24** (`TERMS_VERSION` in
 `src/lib/booking/terms.ts`).
+
+**Version history.** `2026-08-22` was the first version under this research.
+`2026-08-24` added §5a, the inspection-versus-remedial-work clause: the £45 is
+the charge for carrying out the inspection and applies whatever it finds;
+repairs, parts and remedial work are excluded, separately agreed and separately
+invoiced; and the customer is under no obligation to use BSCJ for them. That is
+a change of substance to the contract, so the version was bumped and stale
+versions are rejected server-side. Nothing about the cancellation regime, the
+regulation 36 mechanism or the reg 14 button labelling changed.
 
 ---
 

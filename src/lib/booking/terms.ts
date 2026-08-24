@@ -21,7 +21,7 @@ import { getPartsInZone, zonedTimeToUtc } from "./time";
  * without a lookup table. **Bump this whenever /terms changes in substance**,
  * and update `TERMS_EFFECTIVE_FROM` on the page to match.
  */
-export const TERMS_VERSION = "2026-08-22";
+export const TERMS_VERSION = "2026-08-24";
 
 /** Shape check only — the current version is the single source of truth. */
 const VERSION_PATTERN = /^\d{4}-\d{2}-\d{2}$/;

@@ -48,8 +48,14 @@ export const cp12 = {
    */
   priceTotalDisplay: "£45 total",
   totalNote: "total",
+  /**
+   * The old wording ended "and nothing else is added on the day", which was not
+   * true: the extra-appliance charge applies if the property turns out to have
+   * more appliances than we were told about, and remedial work is separate.
+   * Saying otherwise was a misleading omission, and it contradicted /terms.
+   */
   priceSentence:
-    "That is the total price for the certificate. There is no separate callout fee and nothing else is added on the day.",
+    "That is the total price for the inspection and your certificate, and there is no separate call-out fee. If we find more gas appliances than you told us about, or anything that needs repair, we will explain the cost and agree it with you before doing any extra work.",
   durationMinutes: 45,
   payment: "Pay after completion",
   certificateDelivery:
@@ -106,6 +112,46 @@ export const sameDayMessaging = {
 } as const;
 
 /**
+ * What the £45 buys, and what it does not.
+ *
+ * One place, because it has to read identically on the pricing cards, the CP12
+ * page, the FAQs and /terms. The distinction it draws is commercial, not
+ * decorative: the charge is for **carrying out the inspection**, so it is
+ * payable whether or not the property passes. Leaving that unsaid until the
+ * engineer is standing in the kitchen would be a misleading omission, and the
+ * kind of thing that turns into a dispute rather than a repeat customer.
+ *
+ * Presented as clarity, never as a warning. Repairs are a separate service the
+ * customer is free to decline — see `noObligation`.
+ */
+export const inspectionScope = {
+  /** The headline, for a pricing block. */
+  covers: `The ${cp12.priceDisplay} covers the gas safety inspection and your certificate — whatever the inspection finds.`,
+
+  /**
+   * The point the site previously never made. Deliberately phrased around the
+   * work done rather than around the customer's misfortune.
+   */
+  chargeAppliesRegardless:
+    "The price is for carrying out the inspection, so it applies whether everything passes or we find something that needs attention. Either way you get the engineer's time and a completed record.",
+
+  repairsExcluded:
+    "Repairs, replacement parts and remedial work are not included in the inspection price.",
+
+  /** The secondary commercial opportunity, offered as convenience. */
+  remedialOffer:
+    "If we do find something, we will explain it in plain terms. Where it is work we can do, we can quote you for it separately at a competitive price — agreed with you before we start.",
+
+  /** Trust matters more here than the upsell. */
+  noObligation:
+    "There is no obligation to use us for any repair. You are free to use any Gas Safe registered engineer, and your certificate does not depend on giving us the work.",
+
+  /** Matches the actual process: no card on file, invoiced separately. */
+  separateInvoice:
+    "Any additional work you agree to is quoted and invoiced separately from the inspection.",
+} as const;
+
+/**
  * The standard online booking radius, in miles.
  *
  * `SERVICE_AREA_RADIUS_MILES` overrides it in server-side configuration, and
@@ -157,9 +203,6 @@ export const serviceAreaCopy = {
 
 const calendarScheduleId =
   "AcZssZ12vkB90RMVqx2c9U0XF2RyD2UYpvhp4HzPD07IOlCEgJJT_5_mzGGO9jw8u2nLW8mVnrzM5vwS";
-
-/** Embedded inside /book. */
-export const calendarEmbedUrl = `https://calendar.google.com/calendar/appointments/schedules/${calendarScheduleId}?gv=true`;
 
 /** Standalone Google booking page — the fallback if the embed fails to load. */
 export const calendarDirectUrl = `https://calendar.google.com/calendar/appointments/schedules/${calendarScheduleId}`;
