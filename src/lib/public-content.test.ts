@@ -33,12 +33,6 @@ import { buildPropertyAddress } from "./address/format";
 
 const SOURCE_ROOT = path.resolve(process.cwd(), "src");
 
-/**
- * The engineer's personal name. Held here only so the check can be made; it
- * must appear nowhere else under `src/`, which is what these tests assert.
- */
-const ENGINEER_PERSONAL_NAME = "Jagjeet";
-
 function sourceFiles(directory: string): string[] {
   const found: string[] = [];
   for (const entry of readdirSync(directory)) {
@@ -100,21 +94,54 @@ function filesContaining(phrases: string[]): string[] {
   return offenders;
 }
 
-describe("the engineer's personal name is never published", () => {
-  test("it appears nowhere in the site's source", () => {
-    // Comments included here: the name must not be recorded in the site's
-    // source at all, not merely kept out of the rendered strings.
-    const offenders = files.filter((file) =>
-      readFileSync(file, "utf8")
-        .toLowerCase()
-        .includes(ENGINEER_PERSONAL_NAME.toLowerCase()),
-    );
+/**
+ * The engineer's identity is maintained privately, outside this repository.
+ *
+ * These checks are deliberately **structural** rather than a search for the
+ * name. An exact-string test would have to hold the name to compare against,
+ * which is the very thing that must not be in a tracked file — so the guard
+ * targets the shapes a personal identity takes instead: a field to render it
+ * from, a schema.org Person node, or an "Engineer: Name" byline.
+ */
+describe("no engineer identity is published", () => {
+  test("there is no field to render a personal name from", () => {
+    // Nothing can accidentally print what does not exist.
+    assert.equal("engineerName" in business, false);
+    assert.equal("engineer" in business, false);
 
-    assert.deepEqual(
-      offenders.map((file) => path.relative(process.cwd(), file)),
-      [],
-      "the engineer's name must not appear in page copy, metadata, structured data, the confirmation page or the confirmation email",
-    );
+    for (const [key, value] of Object.entries(business)) {
+      assert.equal(
+        /engineer.*name|name.*engineer/i.test(key),
+        false,
+        `business.${key} looks like it holds a personal name`,
+      );
+      // A two-word capitalised value would be a personal name smuggled into
+      // some other field.
+      if (typeof value === "string" && key !== "name" && key !== "legalName") {
+        assert.equal(
+          /^[A-Z][a-z]+ [A-Z][a-z]+$/.test(value),
+          false,
+          `business.${key} = ${value} looks like a personal name`,
+        );
+      }
+    }
+  });
+
+  test("no source file carries an engineer byline", () => {
+    // The footer used to read "Engineer: {business.engineerName}". The label
+    // itself is what to forbid — matching on a capitalised value missed both
+    // that JSX form and a quoted literal. Nothing legitimate uses the label,
+    // so any "Engineer:" followed by content is a byline coming back.
+    const offenders = [...copy]
+      .filter(([, contents]) => /Engineer:\s*\S/.test(contents))
+      .map(([file]) => file);
+    assert.deepEqual(offenders, []);
+  });
+
+  test("no personal-identity field reaches the booking payload or the event", () => {
+    const route = copy.get("src/app/api/book/route.ts");
+    assert.ok(route);
+    assert.equal(/engineerName|engineerIdentity/i.test(route), false);
   });
 
   test("the business facts carry no engineer name to render", () => {

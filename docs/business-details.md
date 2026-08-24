@@ -15,14 +15,15 @@
 - WhatsApp number: 07494949648
 - Public email: hello@bscj-solutions.com
 - Gas Safe registration number:632741
-- Engineer name (INTERNAL ONLY, do not publish): Jagjeet Singh. Decided 22 August
-  2026 that the engineer's personal name must not appear on any customer-facing
-  surface — page copy, metadata, structured data, the booking flow, the
-  confirmation page or the confirmation email. Work is described at business
-  level, or as "a Gas Safe registered engineer". The name is therefore NOT held
-  in `src/lib/business.ts` at all, and `src/lib/public-content.test.ts` fails the
-  build if it reappears anywhere under `src/`. It is recorded here because this
-  file is the internal business record.
+- Engineer identity: maintained privately outside this repository.
+  Decided 22 August 2026, and tightened on 24 August 2026 to remove the name
+  from the repository altogether. The engineer's personal name must not appear
+  on any customer-facing surface — page copy, metadata, structured data, the
+  booking flow, the confirmation page or the confirmation email — and it is no
+  longer recorded in any tracked file either. Work is described at business
+  level, or as "a Gas Safe registered engineer". The application never needs
+  the name, so it is not held in `src/lib/business.ts`, not in configuration
+  and not in an environment variable.
 - Verified years of experience: 10 Years in the industry
 
 ## CP12 Service
