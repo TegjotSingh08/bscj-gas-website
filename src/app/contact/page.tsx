@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { Metadata } from "next";
+import { pageOpenGraph } from "@/lib/metadata";
 import { AreasCovered } from "@/components/AreasCovered";
 import { availability, business, legal, sameDayMessaging } from "@/lib/business";
 import { JsonLd, breadcrumbSchema } from "@/lib/schema";
@@ -8,6 +9,7 @@ export const metadata: Metadata = {
   title: "Contact Us",
   description: `Call, WhatsApp or email ${business.name} in Wolverhampton. Phone ${business.phoneDisplay}. ${availability.workingDays}, ${availability.workingHours}.`,
   alternates: { canonical: "/contact" },
+  openGraph: pageOpenGraph("/contact"),
 };
 
 const methods = [

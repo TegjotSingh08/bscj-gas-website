@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pageOpenGraph } from "@/lib/metadata";
 import { BookingFlow } from "@/components/booking/BookingFlow";
 import { TrustRow } from "@/components/TrustRow";
 import {
@@ -13,6 +14,7 @@ export const metadata: Metadata = {
   title: "Book a Gas Safety Certificate Online",
   description: `Book your ${cp12.priceDisplay} CP12 gas safety certificate in Wolverhampton. Pick a slot from the engineer's live calendar — confirmed instantly, ${cp12.payment.toLowerCase()}.`,
   alternates: { canonical: "/book" },
+  openGraph: pageOpenGraph("/book"),
 };
 
 export default function BookPage() {

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pageOpenGraph } from "@/lib/metadata";
 import { TrustRow } from "@/components/TrustRow";
 import { CTABand } from "@/components/CTABand";
 import { AreasCovered } from "@/components/AreasCovered";
@@ -9,6 +10,7 @@ export const metadata: Metadata = {
   title: "About Us — Gas Safe Registered Engineers in Wolverhampton",
   description: `${business.name} is a family-run, Gas Safe registered gas engineering business in Wolverhampton. ${business.yearsExperience} years in the industry.`,
   alternates: { canonical: "/about" },
+  openGraph: pageOpenGraph("/about"),
 };
 
 export default function AboutPage() {

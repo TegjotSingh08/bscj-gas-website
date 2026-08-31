@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pageOpenGraph } from "@/lib/metadata";
 import Link from "next/link";
 import { PendingDetail } from "@/components/PendingDetail";
 import {
@@ -19,6 +20,7 @@ export const metadata: Metadata = {
   title: "Terms & Conditions",
   description: `The terms on which ${business.name} provides gas safety certificates, including your right to cancel a booking made online.`,
   alternates: { canonical: "/terms" },
+  openGraph: pageOpenGraph("/terms"),
 };
 
 /**

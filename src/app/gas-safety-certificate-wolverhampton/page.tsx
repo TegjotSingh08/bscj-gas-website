@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { Metadata } from "next";
+import { pageOpenGraph } from "@/lib/metadata";
 import { TrustRow } from "@/components/TrustRow";
 import { PricingCards } from "@/components/PricingCards";
 import { FAQ } from "@/components/FAQ";
@@ -23,9 +24,9 @@ export const metadata: Metadata = {
   description: `Fixed-price ${cp12.priceDisplay} gas safety certificate (CP12) in Wolverhampton. Gas Safe registered engineer, ${cp12.payment.toLowerCase()}, digital certificate emailed the same day. Book online.`,
   alternates: { canonical: "/gas-safety-certificate-wolverhampton" },
   openGraph: {
+    ...pageOpenGraph("/gas-safety-certificate-wolverhampton"),
     title: `Gas Safety Certificate Wolverhampton ${cp12.priceDisplay} | CP12`,
     description: `Fixed-price CP12 gas safety certificates in Wolverhampton and the surrounding areas within our standard service area. Gas Safe registered.`,
-    url: "/gas-safety-certificate-wolverhampton",
   },
 };
 

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pageOpenGraph } from "@/lib/metadata";
 import { PendingDetail } from "@/components/PendingDetail";
 import { business, lastUpdated, legal } from "@/lib/business";
 
@@ -6,6 +7,7 @@ export const metadata: Metadata = {
   title: "Privacy Policy",
   description: `How ${business.name} collects, uses and protects your personal information.`,
   alternates: { canonical: "/privacy" },
+  openGraph: pageOpenGraph("/privacy"),
   robots: { index: true, follow: true },
 };
 
