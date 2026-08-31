@@ -220,6 +220,7 @@ Workspace MX records.
 | `RESEND_API_KEY` | Sends the confirmation email |
 | `BOOKING_EMAIL_FROM` | Sender identity |
 | `BOOKING_EMAIL_REPLY_TO` | Optional; defaults to the booking inbox |
+| `BOOKING_NOTIFICATION_EMAIL` | Where the internal new-booking alert is sent. Unset means no alert is attempted; the booking still succeeds |
 | `SERVICE_AREA_LAT` | Operating-centre latitude |
 | `SERVICE_AREA_LNG` | Operating-centre longitude |
 | `SERVICE_AREA_RADIUS_MILES` | Coverage radius; defaults to `12` |
@@ -392,6 +393,11 @@ single bearer header).
   contact buttons on phones. Outlook desktop ignores the media query and
   renders the inline desktop values, which is intentional.
 - **Full plain-text alternative** carrying every essential detail.
+- **Two emails per booking.** The customer's confirmation, then an internal
+  alert to `BOOKING_NOTIFICATION_EMAIL` so a same-day booking is not missed.
+  Both go through the same transport; neither can fail a booking. The alert
+  carries no token, key or terms evidence, and replying to it reaches the
+  customer.
 - **Junk/Spam guidance lives on the website confirmation page, not in the
   email** — the reader has already found the email.
 - **On failure:** the booking stays confirmed and the page shows an amber

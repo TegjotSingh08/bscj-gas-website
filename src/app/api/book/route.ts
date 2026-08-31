@@ -29,7 +29,14 @@ import { PostcodesIoProvider } from "@/lib/address/postcodes-io";
 import { checkServiceArea } from "@/lib/address/service-area";
 import { formatLongDate, isoDateInZone, timeLabelInZone } from "@/lib/booking/time";
 import { renderBookingConfirmationEmail } from "@/lib/email/booking-confirmation";
-import { sendBookingConfirmation } from "@/lib/email/send";
+import {
+  isSameDay,
+  renderBookingNotificationEmail,
+} from "@/lib/email/booking-notification";
+import {
+  sendBookingConfirmation,
+  sendBookingNotification,
+} from "@/lib/email/send";
 import {
   buildEventId,
   CalendarApiError,
@@ -330,6 +337,43 @@ export async function POST(request: Request) {
       to: data.email,
       email: confirmationEmail,
       reference,
+    });
+
+    // ---------------------------------------------------------------
+    // Internal alert.
+    //
+    // A booking otherwise only appears quietly in the calendar, which is not
+    // good enough when someone can book a slot for later the same day. Sent
+    // after the customer's own confirmation, and — like it — unable to fail
+    // the booking: the transport returns every failure as a value.
+    //
+    // The customer is never told whether this succeeded. It is not their
+    // problem, and a warning about our own alerting would only worry them.
+    // ---------------------------------------------------------------
+    const sameDay = isSameDay(start, now, bookingConfig.timeZone);
+
+    await sendBookingNotification({
+      reference,
+      customerEmail: data.email,
+      email: renderBookingNotificationEmail({
+        reference,
+        dateLabel,
+        subjectDateLabel: formatSubjectDate(dateIso, bookingConfig.timeZone),
+        startLabel,
+        endLabel,
+        addressLines: formatAddressLines(property),
+        postcode: property.postcode,
+        customerName: clean(data.fullName),
+        customerPhone: clean(data.phone),
+        customerEmail: data.email,
+        customerType: customerTypeLabels[data.customerType],
+        applianceCount: price.applianceCount,
+        priceTotal: price.total,
+        sameDay,
+        accessNotes: clean(data.accessNotes || ""),
+        tenantName: clean(data.tenantName || ""),
+        tenantPhone: clean(data.tenantPhone || ""),
+      }),
     });
 
     return NextResponse.json({

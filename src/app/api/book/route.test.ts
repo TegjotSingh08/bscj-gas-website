@@ -32,6 +32,20 @@ let lastEmail: {
   reference: string;
 } | null = null;
 
+/** The internal alert to BSCJ, and how the transport behaves for it. */
+let notificationBehaviour: "sent" | "failed" | "not_configured" = "sent";
+let lastNotification: {
+  email: { subject: string; html: string; text: string };
+  reference: string;
+  customerEmail: string;
+} | null = null;
+
+/** The rendered internal notification, for the last booking. */
+function notificationEmail(): { subject: string; html: string; text: string } {
+  assert.ok(lastNotification, "no internal notification was sent");
+  return lastNotification.email;
+}
+
 /** The description written into the calendar event, for the last booking. */
 function eventDescription(): string {
   assert.ok(lastEvent, "no calendar event was created");
@@ -142,7 +156,21 @@ mock.module("@/lib/email/send", {
       if (emailBehaviour === "not_configured") return { status: "not_configured" };
       return { status: "failed", reason: "rejected" };
     },
+    sendBookingNotification: async (input: {
+      email: { subject: string; html: string; text: string };
+      reference: string;
+      customerEmail: string;
+    }) => {
+      calls.push("resend:notify");
+      lastNotification = input;
+      if (notificationBehaviour === "sent") return { status: "sent", id: "resend-2" };
+      if (notificationBehaviour === "not_configured") {
+        return { status: "not_configured" };
+      }
+      return { status: "failed", reason: "rejected" };
+    },
     isEmailConfigured: () => true,
+    isBookingNotificationConfigured: () => notificationBehaviour !== "not_configured",
   },
 });
 
@@ -226,6 +254,8 @@ beforeEach(() => {
   postcodeBehaviour = "valid";
   lastEvent = null;
   lastEmail = null;
+  lastNotification = null;
+  notificationBehaviour = "sent";
 });
 
 describe("transaction order", () => {
@@ -709,5 +739,201 @@ describe("required customer details are enforced at the API", () => {
     const response = await POST(bookingRequest());
     assert.equal(response.status, 200);
     assert.equal((await response.json()).ok, true);
+  });
+});
+
+/**
+ * The internal alert to BSCJ.
+ *
+ * A booking otherwise only appears quietly in the calendar, which is unsafe
+ * when a customer can book a slot for later the same day. It is operational,
+ * not contractual: it must always follow a successful booking, must never
+ * precede one, and must never be able to undo one.
+ */
+describe("BSCJ is notified when a booking is created", () => {
+  test("a successful booking sends one customer email and one internal alert", async () => {
+    await POST(bookingRequest());
+
+    assert.equal(calls.filter((c) => c === "resend:send").length, 1);
+    assert.equal(calls.filter((c) => c === "resend:notify").length, 1);
+  });
+
+  test("the alert is sent only after the calendar event exists", async () => {
+    await POST(bookingRequest());
+    assert.ok(
+      calls.indexOf("google:create-event") < calls.indexOf("resend:notify"),
+      `notification must follow the event, got: ${calls.join(" → ")}`,
+    );
+  });
+
+  test("the customer's confirmation goes first", async () => {
+    // The customer is the one waiting on a screen.
+    await POST(bookingRequest());
+    assert.ok(calls.indexOf("resend:send") < calls.indexOf("resend:notify"));
+  });
+
+  test("it carries the reference, date, time and address", async () => {
+    await POST(bookingRequest());
+    const { text } = notificationEmail();
+
+    assert.match(text, /BSCJ-/);
+    assert.ok(text.includes("14:00"));
+    assert.ok(text.includes("14:45"));
+    assert.ok(text.includes("24 Example Road"));
+    assert.ok(text.includes("WV99 1AA"));
+  });
+
+  test("it carries the customer's name, normalised mobile and email", async () => {
+    await POST(bookingRequest({ phone: "07700 900 123" }));
+    const { text } = notificationEmail();
+
+    assert.ok(text.includes("Jane Smith"));
+    assert.ok(text.includes("+447700900123"));
+    assert.ok(text.includes("jane@example.com"));
+  });
+
+  test("it carries the customer type, appliance count and server-derived price", async () => {
+    await POST(bookingRequest({ applianceCount: 5 }));
+    const { text } = notificationEmail();
+
+    assert.ok(text.includes("Landlord"));
+    assert.match(text, /Appliances:\s+5/);
+    // 45 base + 2 extra at 15 — the figure the server calculated, not a
+    // number the browser could have sent.
+    assert.match(text, /£75/);
+  });
+
+  test("replying to the alert reaches the customer", async () => {
+    await POST(bookingRequest());
+    assert.equal(lastNotification?.customerEmail, "jane@example.com");
+  });
+
+  test("a future booking gets the normal subject", async () => {
+    // SLOT_START is three days out.
+    assert.equal((await POST(bookingRequest())).status, 200);
+    assert.match(notificationEmail().subject, /^NEW CP12 BOOKING —/);
+    assert.equal(/URGENT/.test(notificationEmail().subject), false);
+  });
+
+  test("the same-day flag is derived from the slot, not from the request", async () => {
+    /*
+      The urgent subject itself is proved deterministically in
+      booking-notification.test.ts, which drives `isSameDay` across the
+      awkward cases directly. It is not asserted through the route because a
+      same-day slot is only bookable in the early hours: the 12-hour minimum
+      notice means that by mid-morning no slot later today is offered at all,
+      so a route-level test would pass or fail depending on the clock.
+
+      What the route owes is that the flag is computed server-side. A booking
+      three days out must never be labelled same-day, whatever is sent.
+    */
+    await POST(
+      bookingRequest({ sameDay: true, urgent: true } as Record<string, unknown>),
+    );
+    assert.match(notificationEmail().subject, /^NEW CP12 BOOKING —/);
+    assert.equal(/URGENT|SAME-DAY/.test(notificationEmail().subject), false);
+    assert.equal(/SAME-DAY/.test(notificationEmail().text), false);
+  });
+
+  test("a missing BOOKING_NOTIFICATION_EMAIL does not break the booking", async () => {
+    notificationBehaviour = "not_configured";
+    const response = await POST(bookingRequest());
+
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).ok, true);
+    assert.ok(calls.includes("google:create-event"));
+  });
+
+  test("a failed alert does not fail the booking", async () => {
+    notificationBehaviour = "failed";
+    const response = await POST(bookingRequest());
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.ok, true);
+    assert.ok(body.booking.reference);
+  });
+
+  test("a failed alert is not reported to the customer", async () => {
+    // Our alerting is not their problem, and `emailSent` is about their own
+    // confirmation only.
+    notificationBehaviour = "failed";
+    const body = await (await POST(bookingRequest())).json();
+    assert.equal(body.booking.emailSent, true);
+    assert.equal("notificationSent" in body.booking, false);
+  });
+
+  test("a failed alert creates no second calendar event", async () => {
+    notificationBehaviour = "failed";
+    await POST(bookingRequest());
+    assert.equal(calls.filter((c) => c === "google:create-event").length, 1);
+  });
+
+  test("a duplicate submission sends no second alert", async () => {
+    completedMarker = "event-abc123";
+    const response = await POST(bookingRequest());
+
+    assert.equal(response.status, 409);
+    assert.equal(calls.includes("resend:notify"), false);
+    assert.equal(calls.includes("google:create-event"), false);
+  });
+
+  test("a rejected booking sends no alert at all", async () => {
+    const rejected: Record<string, unknown>[] = [
+      { fullName: "" },
+      { email: "not-an-email" },
+      { phone: "" },
+      { termsAccepted: false },
+      { termsVersion: "2020-01-01" },
+      { earlyPerformanceRequested: false },
+    ];
+
+    for (const overrides of rejected) {
+      calls = [];
+      await POST(bookingRequest(overrides));
+      assert.equal(
+        calls.includes("resend:notify"),
+        false,
+        `${JSON.stringify(overrides)} must not notify`,
+      );
+    }
+  });
+
+  test("a booking that fails at the calendar sends no alert", async () => {
+    calendarBehaviour = "fails";
+    await POST(bookingRequest());
+    assert.equal(calls.includes("resend:notify"), false);
+  });
+
+  test("a slot taken during the hold sends no alert", async () => {
+    calendarBehaviour = "slot_busy";
+    await POST(bookingRequest());
+    assert.equal(calls.includes("resend:notify"), false);
+  });
+
+  test("customer-controlled values are escaped in the alert", async () => {
+    await POST(
+      bookingRequest({
+        fullName: '<script>alert(1)</script>',
+        accessNotes: 'Gate <img src=x onerror="steal()">',
+      }),
+    );
+    const { html } = notificationEmail();
+
+    assert.equal(html.includes("<script"), false);
+    assert.equal(html.includes("<img"), false);
+    assert.ok(html.includes("&lt;script&gt;"));
+  });
+
+  test("no internal identifier reaches the alert", async () => {
+    await POST(bookingRequest());
+    const { html, text } = notificationEmail();
+
+    for (const body of [html, text]) {
+      assert.equal(body.includes(HOLD_TOKEN), false);
+      assert.equal(body.includes("attempt-0001"), false);
+      assert.equal(body.includes("event-abc123"), false);
+      assert.equal(/terms accepted/i.test(body), false);
+    }
   });
 });

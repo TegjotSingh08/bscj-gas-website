@@ -129,6 +129,7 @@ Optional:
 
 ```
 BOOKING_EMAIL_REPLY_TO=admin@bscj-solutions.com
+BOOKING_NOTIFICATION_EMAIL=admin@bscj-solutions.com
 ```
 
 No quotes needed, no spaces around the `=`.
@@ -165,6 +166,13 @@ a real slot.
 | `RESEND_API_KEY` | Yes, to send | `re_...` |
 | `BOOKING_EMAIL_FROM` | Yes, to send | `BSCJ Gas & Heating <bookings@bscj-solutions.com>` |
 | `BOOKING_EMAIL_REPLY_TO` | Optional | `admin@bscj-solutions.com` |
+
+`BOOKING_NOTIFICATION_EMAIL` is where the **internal** new-booking alert goes.
+It is separate from the customer's reply-to on purpose: one is an operational
+address the engineer watches, the other is where customers' replies land, and
+they may not be the same inbox. Leave it unset and bookings still succeed —
+they simply appear only in the calendar, which is the situation this alert
+exists to fix.
 
 All server-side only. None has a `NEXT_PUBLIC_` prefix, so the key can never
 reach the browser.

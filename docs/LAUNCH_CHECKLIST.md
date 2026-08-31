@@ -164,6 +164,11 @@ Must be checked by a human on the live site, after deployment.
 - [x] Live test booking made: email delivered, renders correctly on desktop
       and phone, with the right date, time, property, price and reference
 - [x] Reply-to confirmed reaching a monitored inbox
+- [ ] Add `BOOKING_NOTIFICATION_EMAIL` in Vercel — the address that receives
+      the internal new-booking alert. Without it bookings still succeed, but
+      nobody is told about them except through the calendar
+- [ ] Send a test booking and confirm the internal alert arrives, and that a
+      same-day one arrives with the URGENT subject
 - [ ] Add `RESEND_API_KEY` and `BOOKING_EMAIL_FROM` in Vercel and redeploy
 - [ ] Confirm Google Workspace email still sends and receives after the DNS
       changes

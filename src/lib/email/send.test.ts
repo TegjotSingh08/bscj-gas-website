@@ -1,7 +1,12 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 
-import { isEmailConfigured, sendBookingConfirmation } from "./send";
+import {
+  isBookingNotificationConfigured,
+  isEmailConfigured,
+  sendBookingConfirmation,
+  sendBookingNotification,
+} from "./send";
 import { renderBookingConfirmationEmail } from "./booking-confirmation";
 
 const EMAIL = renderBookingConfirmationEmail({
@@ -27,8 +32,13 @@ const originalWarn = console.warn;
 let lastRequest: { url: string; init: RequestInit } | null = null;
 let warnings: string[] = [];
 
-function stubFetch(handler: (init: RequestInit) => Promise<Response> | Response) {
-  globalThis.fetch = (async (url: string | URL | Request, init: RequestInit) => {
+function stubFetch(
+  handler: (init: RequestInit) => Promise<Response> | Response,
+) {
+  globalThis.fetch = (async (
+    url: string | URL | Request,
+    init: RequestInit,
+  ) => {
     lastRequest = { url: String(url), init };
     return handler(init);
   }) as typeof fetch;
@@ -116,7 +126,10 @@ describe("a successful send", () => {
     await send();
 
     const headers = lastRequest?.init.headers as Record<string, string>;
-    assert.equal(headers["Idempotency-Key"], "booking-confirmation-BSCJ-A1B2C3");
+    assert.equal(
+      headers["Idempotency-Key"],
+      "booking-confirmation-BSCJ-A1B2C3",
+    );
   });
 
   test("the idempotency key is not the customer's email address", async () => {
@@ -142,17 +155,30 @@ describe("a successful send", () => {
 
 describe("failures never throw", () => {
   const cases: [string, () => void, string][] = [
-    ["the provider rejects the request", () => stubFetch(() => json({ message: "bad" }, 422)), "rejected"],
-    ["the api key is wrong", () => stubFetch(() => json({}, 401)), "unauthorised"],
-    ["access is forbidden", () => stubFetch(() => json({}, 403)), "unauthorised"],
-    ["the account is rate limited", () => stubFetch(() => json({}, 429)), "rate_limited"],
+    [
+      "the provider rejects the request",
+      () => stubFetch(() => json({ message: "bad" }, 422)),
+      "rejected",
+    ],
+    [
+      "the api key is wrong",
+      () => stubFetch(() => json({}, 401)),
+      "unauthorised",
+    ],
+    [
+      "access is forbidden",
+      () => stubFetch(() => json({}, 403)),
+      "unauthorised",
+    ],
+    [
+      "the account is rate limited",
+      () => stubFetch(() => json({}, 429)),
+      "rate_limited",
+    ],
     ["the provider errors", () => stubFetch(() => json({}, 500)), "rejected"],
     [
       "the response is malformed",
-      () =>
-        stubFetch(
-          () => new Response("not json at all", { status: 200 }),
-        ),
+      () => stubFetch(() => new Response("not json at all", { status: 200 })),
       "malformed_response",
     ],
     [
@@ -202,7 +228,9 @@ describe("secrets never escape", () => {
   });
 
   test("the api key is never logged on failure", async () => {
-    stubFetch(() => json({ message: "invalid api key re_test_secret_key_value" }, 401));
+    stubFetch(() =>
+      json({ message: "invalid api key re_test_secret_key_value" }, 401),
+    );
     await send();
 
     assert.ok(warnings.length > 0, "a failure should be logged");
@@ -229,7 +257,69 @@ describe("secrets never escape", () => {
     stubFetch(() => json({}, 500));
     await send();
     assert.equal(warnings.length, 1);
-    assert.match(warnings[0], /\[booking-email\] send failed \(rejected\) for reference BSCJ-A1B2C3/);
+    // The tag names which of the two emails failed — the customer's
+    // confirmation or the internal alert — so a log line is actionable
+    // without guessing. The reference is an opaque label that grants nothing.
+    assert.match(
+      warnings[0],
+      /\[booking-confirmation\] send failed \(rejected\) for reference BSCJ-A1B2C3/,
+    );
+  });
+
+  test("the internal alert logs under its own tag and its own key", async () => {
+    // Separate idempotency key from the customer's confirmation, so one
+    // cannot de-duplicate the other at the provider.
+    process.env.BOOKING_NOTIFICATION_EMAIL = "ops@example.com";
+    stubFetch(() => json({}, 500));
+    await sendBookingNotification({
+      email: EMAIL,
+      reference: "BSCJ-A1B2C3",
+      customerEmail: "jane@example.com",
+    });
+
+    const headers = lastRequest?.init.headers as Record<string, string>;
+    assert.equal(
+      headers["Idempotency-Key"],
+      "booking-notification-BSCJ-A1B2C3",
+    );
+    assert.match(
+      warnings[0],
+      /\[booking-notification\] send failed \(rejected\)/,
+    );
+  });
+
+  test("the alert goes only to the configured internal address", async () => {
+    process.env.BOOKING_NOTIFICATION_EMAIL = "ops@example.com";
+    stubFetch(() => json({ id: "resend-2" }));
+    await sendBookingNotification({
+      email: EMAIL,
+      reference: "BSCJ-A1B2C3",
+      customerEmail: "jane@example.com",
+    });
+
+    const body = JSON.parse(String(lastRequest?.init.body));
+    assert.deepEqual(body.to, ["ops@example.com"]);
+    // Replying reaches the customer, which is the point of an ops alert.
+    assert.equal(body.reply_to, "jane@example.com");
+  });
+
+  test("with no internal address configured, nothing is sent", async () => {
+    delete process.env.BOOKING_NOTIFICATION_EMAIL;
+    let called = false;
+    stubFetch(() => {
+      called = true;
+      return json({ id: "resend-2" });
+    });
+
+    const result = await sendBookingNotification({
+      email: EMAIL,
+      reference: "BSCJ-A1B2C3",
+      customerEmail: "jane@example.com",
+    });
+
+    assert.equal(result.status, "not_configured");
+    assert.equal(called, false);
+    assert.equal(isBookingNotificationConfigured(), false);
   });
 
   test("nothing is logged on success", async () => {
@@ -244,7 +334,9 @@ describe("secrets never escape", () => {
 
     const headers = lastRequest?.init.headers as Record<string, string>;
     assert.equal(headers.Authorization, "Bearer re_test_secret_key_value");
-    assert.ok(!String(lastRequest?.init.body).includes("re_test_secret_key_value"));
+    assert.ok(
+      !String(lastRequest?.init.body).includes("re_test_secret_key_value"),
+    );
     assert.ok(!String(lastRequest?.url).includes("re_test_secret_key_value"));
   });
 });

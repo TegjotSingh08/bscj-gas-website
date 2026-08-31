@@ -59,22 +59,41 @@ function replyTo(): string {
   return process.env.BOOKING_EMAIL_REPLY_TO || business.emailBooking;
 }
 
-/** Logs a failure category only — never the key, the payload or the customer. */
-function reportFailure(reason: EmailFailureReason, reference: string): void {
-  console.warn(
-    `[booking-email] send failed (${reason}) for reference ${reference}`,
-  );
+/**
+ * Logs a failure category and the booking reference only — never the key, the
+ * payload, the recipient or anything else about the customer. The reference is
+ * an opaque label that grants nothing, so it is safe to put in a log and is
+ * enough to find the booking.
+ */
+function reportFailure(
+  kind: EmailKind,
+  reason: EmailFailureReason,
+  reference: string,
+): void {
+  console.warn(`[${kind}] send failed (${reason}) for reference ${reference}`);
 }
 
-export async function sendBookingConfirmation({
+/** Which of the two emails a send belongs to, for logs and idempotency keys. */
+type EmailKind = "booking-confirmation" | "booking-notification";
+
+/**
+ * The one place an email is actually sent.
+ *
+ * Both callers share it so the timeout, the failure categories and the
+ * never-throw guarantee cannot drift apart between them.
+ */
+async function deliver({
+  kind,
   to,
   email,
-  /** Used as the provider idempotency key and in failure logs. */
   reference,
+  replyToAddress,
 }: {
+  kind: EmailKind;
   to: string;
   email: RenderedEmail;
   reference: string;
+  replyToAddress: string;
 }): Promise<EmailResult> {
   const credentials = readCredentials();
   if (!credentials) return { status: "not_configured" };
@@ -91,12 +110,12 @@ export async function sendBookingConfirmation({
         // Resend de-duplicates on this, so a retry of the same booking cannot
         // produce a second email even if our first attempt timed out after
         // the provider had already accepted it.
-        "Idempotency-Key": `booking-confirmation-${reference}`,
+        "Idempotency-Key": `${kind}-${reference}`,
       },
       body: JSON.stringify({
         from: credentials.from,
         to: [to],
-        reply_to: replyTo(),
+        reply_to: replyToAddress,
         subject: email.subject,
         html: email.html,
         text: email.text,
@@ -106,15 +125,15 @@ export async function sendBookingConfirmation({
     });
 
     if (response.status === 401 || response.status === 403) {
-      reportFailure("unauthorised", reference);
+      reportFailure(kind, "unauthorised", reference);
       return { status: "failed", reason: "unauthorised" };
     }
     if (response.status === 429) {
-      reportFailure("rate_limited", reference);
+      reportFailure(kind, "rate_limited", reference);
       return { status: "failed", reason: "rate_limited" };
     }
     if (!response.ok) {
-      reportFailure("rejected", reference);
+      reportFailure(kind, "rejected", reference);
       return { status: "failed", reason: "rejected" };
     }
 
@@ -125,7 +144,7 @@ export async function sendBookingConfirmation({
       // Accepted but unreadable. The message is very likely on its way, so
       // this is reported as a failure only for the customer-facing warning —
       // it never affects the booking.
-      reportFailure("malformed_response", reference);
+      reportFailure(kind, "malformed_response", reference);
       return { status: "failed", reason: "malformed_response" };
     }
   } catch (error) {
@@ -133,9 +152,81 @@ export async function sendBookingConfirmation({
       error instanceof Error && error.name === "AbortError"
         ? "timeout"
         : "network";
-    reportFailure(reason, reference);
+    reportFailure(kind, reason, reference);
     return { status: "failed", reason };
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * The customer's booking confirmation.
+ *
+ * Replies go to the booking inbox, because the customer is the recipient.
+ */
+export async function sendBookingConfirmation({
+  to,
+  email,
+  /** Used as the provider idempotency key and in failure logs. */
+  reference,
+}: {
+  to: string;
+  email: RenderedEmail;
+  reference: string;
+}): Promise<EmailResult> {
+  return deliver({
+    kind: "booking-confirmation",
+    to,
+    email,
+    reference,
+    replyToAddress: replyTo(),
+  });
+}
+
+/**
+ * Where the internal alert goes. Server-side only, and deliberately its own
+ * variable rather than reusing the booking inbox — the operational alert and
+ * the address customers reply to are different jobs and may want different
+ * destinations.
+ *
+ * Unset means no internal notification is attempted. That is a deployment
+ * gap, not a booking failure, so it is reported as `not_configured` exactly
+ * like a missing API key.
+ */
+function notificationRecipient(): string | null {
+  return process.env.BOOKING_NOTIFICATION_EMAIL || null;
+}
+
+export function isBookingNotificationConfigured(): boolean {
+  return isEmailConfigured() && notificationRecipient() !== null;
+}
+
+/**
+ * The internal alert to BSCJ that a booking has been made.
+ *
+ * Never throws, exactly like the customer email: by the time this runs the
+ * calendar event already exists, and nothing here may undo it.
+ *
+ * `replyToAddress` is the customer's own address, so replying to the alert
+ * reaches them directly. That is the whole point of an operational email.
+ */
+export async function sendBookingNotification({
+  email,
+  reference,
+  customerEmail,
+}: {
+  email: RenderedEmail;
+  reference: string;
+  customerEmail: string;
+}): Promise<EmailResult> {
+  const to = notificationRecipient();
+  if (!to) return { status: "not_configured" };
+
+  return deliver({
+    kind: "booking-notification",
+    to,
+    email,
+    reference,
+    replyToAddress: customerEmail,
+  });
 }

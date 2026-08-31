@@ -1,4 +1,5 @@
 import { business, cancellationPolicy, cp12, legal } from "@/lib/business";
+import { escapeHtml } from "./escape";
 
 /**
  * Booking confirmation email.
@@ -72,16 +73,6 @@ export type RenderedEmail = {
   html: string;
   text: string;
 };
-
-/** Escapes text before it is placed into the HTML body. */
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
 
 function appliancesLabel(count: number): string {
   return `${count} ${count === 1 ? "appliance" : "appliances"}`;
