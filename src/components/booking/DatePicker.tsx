@@ -2,6 +2,8 @@
 
 import { useMemo, useState } from "react";
 
+import { initialCalendarMonth } from "@/lib/booking/calendar-month";
+import { bookingConfig } from "@/lib/booking/config";
 import type { DayAvailability } from "./BookingFlow";
 
 const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -49,16 +51,40 @@ export function DatePicker({
   const firstBookable = bookableRange[0];
   const lastBookable = bookableRange[bookableRange.length - 1];
 
-  const initialMonth = useMemo(() => {
-    const source = selectedDate ?? firstBookable;
-    if (!source) {
-      const now = new Date();
-      return { year: now.getUTCFullYear(), month: now.getUTCMonth() + 1 };
-    }
-    const [year, month] = source.split("-").map(Number);
-    return { year, month };
-  }, [selectedDate, firstBookable]);
+  /*
+    Which month to open on.
 
+    This used to read the browser's UTC fields when nothing had loaded yet,
+    which is the state every customer is in: availability is fetched after
+    mount, so the fallback decides what they see first. Britain is an hour
+    ahead of UTC from late March to late October, so between 00:00 and 01:00
+    the UTC date is still yesterday — and on 1 September the picker opened on
+    August, on every refresh, because it was arithmetic rather than stale
+    state. In winter UTC and London agree, which is why it took a summer month
+    boundary to surface it.
+
+    The month a customer sees is now the month it is in Wolverhampton. See
+    lib/booking/calendar-month.ts.
+  */
+  const initialMonth = useMemo(
+    () =>
+      initialCalendarMonth({
+        selectedDate,
+        firstBookable,
+        now: new Date(),
+        timeZone: bookingConfig.timeZone,
+      }),
+    [selectedDate, firstBookable],
+  );
+
+  /*
+    Seeded once, deliberately. `initialMonth` is recomputed when availability
+    arrives, but re-syncing `view` to it would drag a customer who had paged
+    forward to October back to September every time availability refreshed.
+    It does not need to: the fallback and the server's first offered date are
+    both derived in Europe/London, so they agree by construction — which is
+    asserted directly in calendar-month.test.ts.
+  */
   const [view, setView] = useState(initialMonth);
 
   const availableSet = useMemo(() => new Set(availableDates), [availableDates]);

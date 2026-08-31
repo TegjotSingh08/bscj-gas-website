@@ -471,3 +471,110 @@ describe("appointment length versus the working-hours boundary", () => {
     assert.equal(open.includes("16:00"), true);
   });
 });
+
+/**
+ * The rest of the date path, at the boundary that broke the picker.
+ *
+ * The month bug was in the browser. These are the server-side rules that share
+ * the same "what day is it" question, checked at the same instants so the fix
+ * is not left resting on the assumption that they were fine.
+ */
+describe("date boundaries elsewhere in the booking path", () => {
+  /** 00:30 on 1 September 2026 in London — BST, so 31 August in UTC. */
+  const JUST_AFTER_MIDNIGHT_BST = new Date("2026-08-31T23:30:00.000Z");
+  /** 00:01 on 1 January 2027 in London — GMT, so UTC agrees. */
+  const NEW_YEAR = new Date("2027-01-01T00:01:00.000Z");
+
+  test("the first bookable date is today in London, not yesterday in UTC", () => {
+    assert.equal(bookableDates(JUST_AFTER_MIDNIGHT_BST)[0], "2026-09-01");
+    assert.equal(bookableDates(NEW_YEAR)[0], "2027-01-01");
+  });
+
+  test("the horizon still runs the configured number of days", () => {
+    const dates = bookableDates(JUST_AFTER_MIDNIGHT_BST);
+    assert.equal(dates.length, bookingConfig.maximumAdvanceDays + 1);
+    assert.equal(dates.at(-1), "2026-10-01");
+  });
+
+  test("yesterday never reappears as bookable", () => {
+    for (const now of [JUST_AFTER_MIDNIGHT_BST, NEW_YEAR]) {
+      const dates = bookableDates(now);
+      const today = isoDateInZone(now, bookingConfig.timeZone);
+      assert.ok(
+        dates.every((date) => date >= today),
+        "a past date was offered",
+      );
+    }
+  });
+
+  test("a slot earlier today is not resurrected by the UTC date lagging", () => {
+    // 10:00 on 31 August is comfortably in the past at 00:30 on 1 September,
+    // even though UTC still reads 31 August at that moment.
+    const yesterdayMorning = at("2026-08-31", 10).toISOString();
+    assert.equal(
+      isSlotStillAvailable(yesterdayMorning, [], JUST_AFTER_MIDNIGHT_BST),
+      false,
+    );
+  });
+
+  test("the 12-hour notice measures elapsed time, so it cannot drift", () => {
+    /*
+      The notice compares two instants. It never asks what day it is, so the
+      offset that broke the picker cannot reach it — proved here rather than
+      assumed.
+    */
+    const candidates = candidateSlotsForDate("2026-09-01");
+    const free = filterAvailableSlots(candidates, [], JUST_AFTER_MIDNIGHT_BST);
+    const labels = free.map((s) => timeLabelInZone(s.start, bookingConfig.timeZone));
+
+    // 00:30 + 12h = 12:30, so 12:00 is too soon and 13:00 is the first offer.
+    assert.equal(labels.includes("12:00"), false);
+    assert.equal(labels[0], "13:00");
+    assert.equal(labels.at(-1), "19:00");
+  });
+
+  test("19:00 survives the boundary for every product", () => {
+    for (const id of ["cp12", "boiler-service", "cp12-boiler-service"] as const) {
+      const config = bookingConfigFor(id);
+      const last = candidateSlotsForDate("2026-09-01", config).at(-1);
+      assert.ok(last);
+
+      assert.equal(timeLabelInZone(last.start, config.timeZone), "19:00");
+      assert.equal(
+        isSlotStillAvailable(
+          last.start.toISOString(),
+          [],
+          JUST_AFTER_MIDNIGHT_BST,
+          config,
+        ),
+        true,
+        `${id} lost its 19:00 slot at the month boundary`,
+      );
+    }
+  });
+
+  test("same-day urgency reads the London date, not the UTC one", async () => {
+    const { isSameDay } = await import("@/lib/email/booking-notification");
+
+    // Booked at 00:30 on 1 September for 19:00 that same evening: same day.
+    assert.equal(
+      isSameDay(
+        at("2026-09-01", 19),
+        JUST_AFTER_MIDNIGHT_BST,
+        bookingConfig.timeZone,
+      ),
+      true,
+      "a booking for tonight was not flagged as same-day",
+    );
+
+    // And a slot on 31 August is not "today" any more, though UTC still says so.
+    assert.equal(
+      isSameDay(
+        at("2026-08-31", 19),
+        JUST_AFTER_MIDNIGHT_BST,
+        bookingConfig.timeZone,
+      ),
+      false,
+    );
+  });
+});
