@@ -5,6 +5,12 @@ import { useState } from "react";
 import { customerTypeLabels, customerTypes } from "@/lib/booking/schema";
 import { calculatePrice, MAX_APPLIANCES } from "@/lib/booking/pricing";
 import { cp12 } from "@/lib/business";
+import {
+  firstInvalidField,
+  hasErrors,
+  validateDetails,
+  type DetailsErrors,
+} from "@/lib/booking/details";
 import { AddressFields } from "./AddressFields";
 import { PhoneField } from "./PhoneField";
 
@@ -56,6 +62,11 @@ export function DetailsForm({
   onContinue: () => void;
 }) {
   const [addressReady, setAddressReady] = useState(false);
+  /**
+   * Set by a failed Continue. Until then the form stays quiet — nobody wants a
+   * red "enter your name" before they have had the chance to type one.
+   */
+  const [attempted, setAttempted] = useState(false);
   const price = calculatePrice(values.applianceCount);
   const showTenantFields =
     values.customerType === "landlord" || values.customerType === "letting-agent";
@@ -64,12 +75,54 @@ export function DetailsForm({
     onPatch({ [key]: value } as Partial<DetailsValues>);
   }
 
+  /**
+   * Everything wrong with the form right now.
+   *
+   * `addressReady` is the postcode's own verdict — it is only true once the
+   * postcode has been looked up and found to be inside the service area, which
+   * this module cannot determine on its own.
+   */
+  function currentErrors(): DetailsErrors {
+    const errors = validateDetails({ ...values, tenantPhone: values.tenantPhone });
+    if (!errors.postcode && !addressReady) {
+      errors.postcode =
+        "Check your postcode so we can confirm the property is in our area.";
+    }
+    return errors;
+  }
+
+  /**
+   * Live once a submit has been attempted, so a message disappears as soon as
+   * the field is put right rather than lingering until the next press.
+   * Server-side field errors show underneath until the customer edits.
+   */
+  const liveErrors = attempted ? currentErrors() : {};
+  const shownErrors: Record<string, string> = { ...fieldErrors, ...liveErrors };
+
+  function handleSubmit() {
+    setAttempted(true);
+    const errors = currentErrors();
+
+    if (hasErrors(errors)) {
+      // Stay on this step, and send the customer to the first thing to fix.
+      const field = firstInvalidField(errors);
+      if (field) {
+        const el = document.getElementById(field);
+        el?.scrollIntoView({ block: "center", behavior: "smooth" });
+        (el as HTMLElement | null)?.focus({ preventScroll: true });
+      }
+      return;
+    }
+
+    onContinue();
+  }
+
   return (
     <form
       noValidate
       onSubmit={(event) => {
         event.preventDefault();
-        onContinue();
+        handleSubmit();
       }}
       aria-labelledby="your-details"
     >
@@ -94,7 +147,7 @@ export function DetailsForm({
             onChange={(event) => set("fullName", event.target.value)}
             className={fieldClass}
           />
-          <FieldError message={fieldErrors.fullName} />
+          <FieldError message={shownErrors.fullName} />
         </div>
 
         <div>
@@ -111,14 +164,14 @@ export function DetailsForm({
             onChange={(event) => set("email", event.target.value)}
             className={fieldClass}
           />
-          <FieldError message={fieldErrors.email} />
+          <FieldError message={shownErrors.email} />
         </div>
 
         <PhoneField
           id="phone"
           label="Mobile number"
           value={values.phone}
-          serverError={fieldErrors.phone}
+          serverError={shownErrors.phone}
           hint="So the engineer can reach you on the day."
           onChange={(value) => set("phone", value)}
         />
@@ -130,7 +183,7 @@ export function DetailsForm({
             town: values.town,
             postcode: values.postcode,
           }}
-          fieldErrors={fieldErrors}
+          fieldErrors={shownErrors}
           onPatch={onPatch}
           onReadyChange={setAddressReady}
         />
@@ -153,7 +206,7 @@ export function DetailsForm({
               </option>
             ))}
           </select>
-          <FieldError message={fieldErrors.customerType} />
+          <FieldError message={shownErrors.customerType} />
         </div>
 
         <div className="sm:col-span-2">
@@ -189,7 +242,7 @@ export function DetailsForm({
               </span>
             )}
           </p>
-          <FieldError message={fieldErrors.applianceCount} />
+          <FieldError message={shownErrors.applianceCount} />
         </div>
 
         {showTenantFields && (
@@ -211,7 +264,7 @@ export function DetailsForm({
               label="Tenant phone"
               optional
               value={values.tenantPhone}
-              serverError={fieldErrors.tenantPhone}
+              serverError={shownErrors.tenantPhone}
               hint="So we can arrange access directly with them."
               onChange={(value) => set("tenantPhone", value)}
             />
@@ -247,10 +300,15 @@ export function DetailsForm({
       </div>
 
       <div className="mt-7 flex flex-col gap-3 sm:flex-row-reverse">
+        {/*
+          Deliberately not disabled. A greyed-out button with no explanation is
+          how the original defect hid: it gated on the address alone, so with a
+          valid postcode it looked ready while the contact fields were empty.
+          Pressing it now says exactly what is missing.
+        */}
         <button
           type="submit"
-          disabled={!addressReady}
-          className="rounded-xl bg-flame-500 px-8 py-4 text-base font-bold text-white hover:bg-flame-600 disabled:cursor-not-allowed disabled:opacity-50 sm:flex-1"
+          className="rounded-xl bg-flame-500 px-8 py-4 text-base font-bold text-white hover:bg-flame-600 sm:flex-1"
         >
           Review booking
         </button>

@@ -661,3 +661,53 @@ describe("the confirmation carries the cancellation information", () => {
     );
   });
 });
+
+/**
+ * The client can now be trusted to catch blank contact details, but it is not
+ * the thing that matters. A request posted straight at the API must be refused
+ * before anything is written.
+ */
+describe("required customer details are enforced at the API", () => {
+  const missing: [string, Record<string, unknown>][] = [
+    ["a blank name", { fullName: "" }],
+    ["a whitespace-only name", { fullName: "   " }],
+    ["a one-character name", { fullName: "J" }],
+    ["a missing name field", { fullName: undefined }],
+    ["a blank email", { email: "" }],
+    ["a malformed email", { email: "not-an-email" }],
+    ["a missing email field", { email: undefined }],
+    ["a blank mobile", { phone: "" }],
+    ["a landline", { phone: "01902123456" }],
+    ["a missing mobile field", { phone: undefined }],
+    ["an unknown customer type", { customerType: "something-else" }],
+    ["a blank house number", { houseOrName: "" }],
+    ["a blank street", { street: "" }],
+    ["a malformed postcode", { postcode: "ZZZ" }],
+    ["all three contact fields blank", { fullName: "", email: "", phone: "" }],
+  ];
+
+  for (const [label, overrides] of missing) {
+    test(`${label} is rejected with 400`, async () => {
+      const response = await POST(bookingRequest(overrides));
+      assert.equal(response.status, 400);
+      assert.equal((await response.json()).error, "validation_failed");
+    });
+
+    test(`${label} creates no calendar event`, async () => {
+      await POST(bookingRequest(overrides));
+      assert.equal(calls.includes("google:create-event"), false);
+      assert.equal(calls.includes("resend:send"), false);
+    });
+  }
+
+  test("the mobile is normalised before it reaches the calendar", async () => {
+    await POST(bookingRequest({ phone: "07700 900 123" }));
+    assert.ok(eventDescription().includes("Phone: +447700900123"));
+  });
+
+  test("a complete submission still books normally", async () => {
+    const response = await POST(bookingRequest());
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).ok, true);
+  });
+});
