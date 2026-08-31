@@ -317,3 +317,65 @@ describe("the client and the server agree on what is required", () => {
     assert.equal(bookingSchema.safeParse(serverPayload({})).success, true);
   });
 });
+
+/**
+ * The appliance question is only asked where the answer changes something.
+ *
+ * The form hides it for a standalone boiler service, so the validator must not
+ * be able to fail a customer on a field they were never shown.
+ */
+describe("appliance validation follows the product", () => {
+  test("a certificate booking still has to answer it", () => {
+    assert.ok(withValues({ applianceCount: 0 }).applianceCount);
+    assert.ok(
+      withValues({ applianceCount: 0, appliancePricing: true }).applianceCount,
+    );
+  });
+
+  test("a standalone service is not judged on a field it never showed", () => {
+    for (const applianceCount of [0, -1, 2.5, Number.NaN]) {
+      assert.equal(
+        validateDetails({
+          ...VALID,
+          applianceCount,
+          appliancePricing: false,
+        }).applianceCount,
+        undefined,
+        `appliance count ${applianceCount} blocked a boiler service`,
+      );
+    }
+  });
+
+  test("an absent flag still means a certificate, as it always did", () => {
+    // Every caller written before the standalone service existed was asking
+    // about a certificate, so the default must not change behaviour.
+    assert.ok(
+      validateDetails({ ...VALID, applianceCount: 0 }).applianceCount,
+    );
+  });
+
+  test("everything else is required for a boiler service too", () => {
+    // Only the appliance count is CP12-specific. Contact, address, customer
+    // type and tenant details are needed for any visit.
+    const errors = validateDetails({
+      ...VALID,
+      fullName: "",
+      email: "nope",
+      phone: "",
+      houseOrName: "",
+      street: "",
+      postcode: "ZZZ",
+      appliancePricing: false,
+    });
+    for (const field of [
+      "fullName",
+      "email",
+      "phone",
+      "houseOrName",
+      "street",
+      "postcode",
+    ] as const) {
+      assert.ok(errors[field], `${field} stopped being required`);
+    }
+  });
+});

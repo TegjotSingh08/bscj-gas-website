@@ -18,10 +18,21 @@ import { getPartsInZone, zonedTimeToUtc } from "./time";
  * The version of the terms a customer accepted.
  *
  * Date-based, so a record of "accepted v2026-08-22" is meaningful years later
- * without a lookup table. **Bump this whenever /terms changes in substance**,
- * and update `TERMS_EFFECTIVE_FROM` on the page to match.
+ * without a lookup table. **Bump this whenever /terms changes in substance**;
+ * the page derives its effective date from this value.
+ *
+ * Bumped to 2026-08-31 for the boiler service: two further services are now
+ * being contracted — the bundle and the standalone Annual Boiler Service — so
+ * section 5 states three prices, and the sections about what the price covers
+ * and about performance inside the cancellation period had to stop assuming
+ * the work is only an inspection.
+ *
+ * Not bumped again for the standalone service, deliberately: 2026-08-31 has
+ * never been in force publicly, so there is no earlier wording under that
+ * version for a customer to have accepted. The version that goes live is the
+ * one that describes all three services.
  */
-export const TERMS_VERSION = "2026-08-24";
+export const TERMS_VERSION = "2026-08-31";
 
 /** Shape check only — the current version is the single source of truth. */
 const VERSION_PATTERN = /^\d{4}-\d{2}-\d{2}$/;

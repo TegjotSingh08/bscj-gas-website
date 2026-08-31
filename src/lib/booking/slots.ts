@@ -9,7 +9,7 @@
  *   = offered slots
  */
 
-import { bookingConfig, blockMinutes } from "./config";
+import { bookingConfig } from "./config";
 import {
   getPartsInZone,
   isoDateInZone,
@@ -45,7 +45,17 @@ function overlaps(a: Interval, b: Interval): boolean {
 
 /**
  * Candidate start times for one local date, before any busy/notice filtering.
- * A slot only counts if the appointment *and* its buffer finish within hours.
+ *
+ * A slot counts if the **appointment** finishes within working hours. The
+ * 15-minute buffer is internal scheduling protection, not part of what the
+ * customer books, so it is allowed to run past closing time on the last job of
+ * the day — which is what makes 19:00–20:00 a valid 60-minute bundle. Between
+ * two bookings the buffer is still enforced in full, by `filterAvailableSlots`
+ * widening every busy period on both sides.
+ *
+ * Because the boundary is the appointment rather than the block, a 45-minute
+ * CP12 still ends at a 19:00 last start and a 60-minute bundle also ends at
+ * 19:00 — and neither product ever offers 20:00.
  */
 export function candidateSlotsForDate(
   isoDate: string,
@@ -61,7 +71,7 @@ export function candidateSlotsForDate(
   const slots: Interval[] = [];
   for (
     let minutes = config.workingHours.startMinutes;
-    minutes + blockMinutes <= config.workingHours.endMinutes;
+    minutes + config.appointmentMinutes <= config.workingHours.endMinutes;
     minutes += config.slotIntervalMinutes
   ) {
     const start = zonedTimeToUtc(

@@ -2,6 +2,7 @@
 
 import { z } from "zod";
 import { MAX_APPLIANCES } from "./pricing";
+import { DEFAULT_PRODUCT_ID, PRODUCT_IDS } from "./products";
 import {
   emailProblemMessage,
   normaliseEmail,
@@ -80,6 +81,19 @@ export const customerTypeLabels: Record<(typeof customerTypes)[number], string> 
 export const bookingSchema = z.object({
   /** ISO instant of the chosen slot start. Re-validated against availability. */
   slotStart: z.string().datetime({ message: "Please choose an appointment." }),
+
+  /**
+   * Which service is being booked.
+   *
+   * An identifier and nothing more: the name, the price, the extra-appliance
+   * rate and the appointment length are all read from the server's registry,
+   * so a request cannot state its own total or its own duration. Anything
+   * outside the registry is refused here; an absent value is the £45 CP12, so
+   * a payload written before products existed still books exactly what it did.
+   */
+  productId: z.enum(PRODUCT_IDS, {
+    message: "Please choose a service.",
+  }).default(DEFAULT_PRODUCT_ID),
 
   fullName: trimmed(2, 80, "your full name"),
   email: z

@@ -48,9 +48,17 @@ flagged thin duplicated location pages as a competitor weakness worth avoiding.
 Agents book in volume and are a different buyer to a single landlord. Wants:
 multi-property booking, consolidated invoicing, a named contact.
 
-### Service bundles
-Research shows competitors selling CP12 + boiler service bundles at £79–£85.
-Needs a confirmed BSCJ price before it can be advertised.
+### ~~Service bundles~~ — SHIPPED 31 August 2026
+Research showed competitors selling CP12 + boiler service bundles at £79–£85.
+BSCJ's price was confirmed at **£90 total** on 31 August 2026 and the bundle is
+now a second bookable product in the same flow: server-derived pricing and a 60
+minute appointment, alongside the unchanged £45 CP12. See "CP12 + Annual Boiler
+Service" in `business-details.md`.
+
+Still outstanding, and deliberately not invented: **what the annual boiler
+service includes**. Only the name and the price are confirmed, so no page,
+email or structured-data description says more than that. Publishing a genuine
+inclusions list is the next step, and needs the engineer to specify it.
 
 ---
 
@@ -103,3 +111,6 @@ Do not build these for one engineer.
   only if travel time in practice argues for a different radius.
 - **Booking data** currently lives only in Google Calendar. That is the right
   call for Version 1, but it is not a long-term customer record.
+- **The daily cap counts bookings, not minutes.** Eight bundles is eight hours
+  of appointments; eight CP12s is six. Revisit if bundle volume makes the cap
+  the wrong unit.

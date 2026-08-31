@@ -45,6 +45,104 @@
 - No separate CP12 call-out fee.
 - Same-day service available: Yes - by phone/WhatsApp only (see Availability Messaging below)
 
+## Annual Boiler Service (CONFIRMED 31 August 2026)
+
+A third bookable product, sold standalone. The £45 CP12 and the £90 bundle both
+remain available and unchanged.
+
+- Product name: Annual Boiler Service
+- Price: £60 fixed
+- Calendar allocation: 60 minutes
+- Extra appliances: NOT APPLICABLE. This is one boiler at a fixed price
+  whatever else the property runs on gas. The £15 extra-appliance rule belongs
+  to the certificate and must never be applied here.
+- Payment method: Pay after completion
+- 19:00 start: PERMITTED, on the same boundary rule as the bundle - a 60 minute
+  appointment runs 19:00-20:00 and finishes exactly at the end of the day.
+
+**The 60 minutes is a calendar allocation, not a statement of how long the work
+takes.** No standalone duration has ever been measured or confirmed. The
+combined visit allocates 60 minutes for a 45 minute CP12 *plus* the service,
+which implies the service element is well under an hour when the two are done
+together. Sixty was chosen deliberately as the generous end: over-allocating
+protects the diary, under-allocating oversells it. Nothing customer-facing says
+the service takes an hour. Revisit once real jobs have been timed.
+
+**What the service includes has NOT been specified.** Only the name and the
+price are confirmed. Do not publish, imply or invent any description of the
+checks, procedures or parts involved.
+
+## Bundle saving (CONFIRMED 31 August 2026)
+
+Now that the boiler service has its own published price, the bundle saving is
+real arithmetic on real prices rather than a marketing claim:
+
+```
+CP12 separately            £45
+Annual Boiler Service      £60
+                          ----
+Separate total            £105
+CP12 + Annual Boiler Service (bundle)   £90
+Customer saving           £15
+```
+
+The site may therefore say **"Best value"**, **"Save £15"** and
+**"£105 separately · £90 together"**, because all three figures are published,
+bookable prices.
+
+It may NOT invent a higher crossed-out price, imply a temporary discount, or
+suggest scarcity. The saving is **derived in code** from the component prices
+(`bundleSavingFor` in `src/lib/booking/products.ts`), so it cannot drift if any
+of the three prices ever changes.
+
+## CP12 + Annual Boiler Service (CONFIRMED 31 August 2026)
+
+A second bookable product, sold alongside the £45 CP12. The £45 CP12 remains
+available and unchanged.
+
+- Product name: CP12 + Annual Boiler Service
+- Price: £90 total
+- Appointment duration: 60 minutes
+- Appliances included in £90: one boiler and two appliances — the same rule as
+  the standalone CP12 (the certificate element; the boiler service element is
+  one boiler)
+- Additional appliance price: £15/appliance — the same rate as the standalone
+  CP12, applied on top of the £90 base
+- Worked examples: £90 base; £105 with one chargeable extra appliance; £120 with
+  two
+- Payment method: Pay after completion, as with the CP12
+- 19:00 start: PERMITTED. A 19:00 booking runs 19:00-20:00, finishing exactly at
+  the end of the working day. See "Appointment duration vs scheduling buffer".
+
+**What the annual boiler service includes has NOT been specified.** Only the
+product name and the price are confirmed. Do not publish, imply or invent any
+description of the checks, procedures or parts involved. The website says the
+customer has booked a CP12 plus an annual boiler service, and nothing more.
+
+## Appointment duration vs scheduling buffer
+
+DECIDED 31 August 2026, when the 60 minute bundle was confirmed.
+
+These are two different things and the booking engine now treats them
+separately:
+
+- **Appointment duration** is customer-facing. It must finish within the
+  published working hours. A slot is only offered if the appointment itself
+  ends at or before 20:00.
+- **The 15 minute buffer** is internal scheduling protection — travel and
+  overrun time between jobs. It is not part of the customer's appointment and
+  it is allowed to extend past the end of the working day for the last
+  appointment.
+
+Consequences:
+
+- The last CP12 start remains 19:00 (19:00-19:45).
+- The last bundle start is also 19:00 (19:00-20:00), with the buffer running
+  internally to 20:15.
+- No appointment of either product is offered starting after 19:00.
+- Between two bookings the 15 minute buffer is still enforced in full, so a
+  19:00-20:00 bundle blocks any other job from 18:45 to 20:15.
+
 ## Availability Messaging
 
 DECIDED 19 August 2026. Chosen approach: Option C.
@@ -64,9 +162,13 @@ Any change must be made here first, then reflected on the site.
 
 - Working days: Monday - Friday + Sunday
 - Working hours: 10:00 - 20:00
-- Appointment length: 45 minutes
-- Buffer between appointments: 15 minutes
-- Maximum CP12 bookings per day: 8
+- Appointment length: 45 minutes for a CP12, 60 minutes for CP12 + Annual
+  Boiler Service, 60 minutes allocated for a standalone Annual Boiler Service.
+  Set per product, never globally.
+- Buffer between appointments: 15 minutes. Internal only - see "Appointment
+  duration vs scheduling buffer".
+- Maximum bookings per day: 8. Counted as bookings, not as minutes, so a day
+  of bundles is a longer day than a day of CP12s.
 - Minimum booking notice: 12 hours	
 - Maximum advance booking period: 30 days
 
@@ -123,8 +225,14 @@ the phone and WhatsApp instead.
   writes the confirmed appointment directly into the engineer's Google Calendar.
   Google Calendar is the backend availability source and appointment
   destination — it is not the customer-facing booking interface.
+- Product selection: the customer chooses CP12 or CP12 + Annual Boiler Service
+  before picking a time. The browser sends only a product identifier; the
+  server derives the name, price, extra-appliance rate and duration from its
+  own registry. A submitted price or duration is ignored.
 - Appointment holds: a chosen time is reserved for the customer for 30 minutes
-  while they complete the form.
+  while they complete the form. A hold covers every hourly start the
+  appointment and its buffer run across, so a 60 minute bundle held at 10:00
+  also reserves 11:00 and nobody else is offered a conflicting time.
 - Property address: postcode validated against Postcodes.io, then house
   number/name and street entered manually. The customer explicitly confirms the
   assembled address before the booking is written. Nothing claims to prove a
@@ -152,8 +260,9 @@ the phone and WhatsApp instead.
 The customer-facing wording of all of the above now lives in one place:
 `cancellationPolicy` in `src/lib/business.ts`, rendered on /terms, /book, the
 FAQs, the confirmation page and the confirmation email. Terms version in force:
-**2026-08-22**. Change the policy here first, then in `business.ts`, then bump
-`TERMS_VERSION`.
+**2026-08-31**, bumped when the CP12 + Annual Boiler Service bundle was added and
+/terms had to describe a second contracted service. Change the policy here
+first, then in `business.ts`, then bump `TERMS_VERSION`.
 
 ## Customer Contact
 

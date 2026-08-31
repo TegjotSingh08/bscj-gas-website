@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { pageOpenGraph } from "@/lib/metadata";
 import { TrustRow } from "@/components/TrustRow";
 import { PricingCards } from "@/components/PricingCards";
+import { bundleSavingFor, products } from "@/lib/booking/products";
 import { FAQ } from "@/components/FAQ";
 import { AreasCovered } from "@/components/AreasCovered";
 import { CTABand } from "@/components/CTABand";
@@ -31,6 +32,10 @@ export const metadata: Metadata = {
 };
 
 export default function GasSafetyCertificateWolverhamptonPage() {
+  const service = products["boiler-service"];
+  const bundle = products["cp12-boiler-service"];
+  const saving = bundleSavingFor(bundle.id);
+
   return (
     <>
       <section className="bg-gradient-to-b from-navy-900 to-navy-800 pb-14 pt-12">
@@ -44,10 +49,25 @@ export default function GasSafetyCertificateWolverhamptonPage() {
           <h1 className="mt-5 max-w-3xl text-4xl font-extrabold leading-tight text-white sm:text-5xl">
             Gas Safety Certificate (CP12) in Wolverhampton
           </h1>
-          <p className="mt-5 max-w-2xl text-lg leading-relaxed text-navy-100">
-            A fixed {cp12.priceDisplay} covering {cp12.includes}, carried out by
-            a Gas Safe registered engineer based in Wolverhampton. Book a slot
-            online and pay once the work is done.
+          {/*
+            The price ahead of the prose, and at a size that matches how much
+            it matters. This is the page Google sends CP12 searches to, so the
+            figure should land before anything has to be read.
+          */}
+          <p className="mt-5 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <span className="text-6xl font-extrabold leading-none tracking-tight text-flame-400 sm:text-7xl">
+              {cp12.priceDisplay}
+            </span>
+            <span className="text-base font-bold text-white sm:text-lg">
+              total &middot; up to 3 appliances
+            </span>
+          </p>
+
+          <p className="mt-4 max-w-2xl text-lg leading-relaxed text-navy-100">
+            Covering {cp12.includes}, carried out by a Gas Safe registered
+            engineer based in Wolverhampton. Extra appliances are{" "}
+            {cp12.extraApplianceDisplay} each. Book a slot online and pay once
+            the work is done.
           </p>
           <div className="mt-8 flex flex-col gap-3 sm:flex-row">
             <Link
@@ -55,7 +75,7 @@ export default function GasSafetyCertificateWolverhamptonPage() {
               data-analytics-id="cp12hero-book"
               className="rounded-xl bg-flame-500 px-8 py-4 text-center text-base font-bold text-white hover:bg-flame-600"
             >
-              Check available dates
+              Book your CP12 — {cp12.priceDisplay}
             </Link>
             <a
               href={business.phoneHref}
@@ -195,6 +215,29 @@ export default function GasSafetyCertificateWolverhamptonPage() {
           If you are a landlord and you only need to meet your legal duty, the
           CP12 is the job you are looking for.
         </p>
+        {/*
+          The honest end of a section about not being sold the bigger job: we
+          do offer both, the price is stated here rather than discovered later,
+          and the CP12 on its own is still presented as the complete answer to
+          the legal duty.
+        */}
+        <p className="mt-4 text-base leading-relaxed text-navy-800">
+          We book them separately or together. An {service.name} on its own is{" "}
+          <strong>{service.priceTotalDisplay}</strong>. Both in the same visit
+          is <strong>{bundle.priceTotalDisplay}</strong>
+          {saving
+            ? ` — ${saving.separateTotalDisplay} separately, so you save ${saving.savingDisplay}`
+            : ""}
+          . One appointment, your gas safety check completed and your boiler
+          serviced for the year ahead.{" "}
+          <Link
+            href="/book"
+            data-analytics-id="cp12compare-book-bundle"
+            className="font-bold text-flame-600 underline underline-offset-4"
+          >
+            Book CP12 + Service — {bundle.priceDisplay}
+          </Link>
+        </p>
 
         <h2 className="mt-12 text-3xl font-extrabold text-navy-900">
           Booking and availability
@@ -214,6 +257,11 @@ export default function GasSafetyCertificateWolverhamptonPage() {
           <h2 className="text-center text-3xl font-extrabold text-navy-900 sm:text-4xl">
             Wolverhampton CP12 pricing
           </h2>
+          <p className="mx-auto mt-4 max-w-2xl text-center text-base leading-relaxed text-navy-700">
+            A certificate, a boiler service, or both in the same visit. All
+            three are fixed totals, and all three are payable after the work is
+            done.
+          </p>
           <div className="mt-10">
             <PricingCards />
           </div>

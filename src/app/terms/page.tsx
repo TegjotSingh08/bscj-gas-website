@@ -11,6 +11,7 @@ import {
   serviceAreaCopy,
   serviceRadiusMiles,
 } from "@/lib/business";
+import { products } from "@/lib/booking/products";
 import {
   CANCELLATION_PERIOD_DAYS,
   TERMS_VERSION,
@@ -107,7 +108,12 @@ export default function TermsPage() {
             <>
               A gas safety certificate is{" "}
               <strong>{cp12.priceTotalDisplay}</strong>, covering {cp12.includes}
-              . Each extra appliance is {cp12.extraApplianceDisplay}.
+              . An annual boiler service on its own is{" "}
+              <strong>{products["boiler-service"].priceTotalDisplay}</strong>.
+              The two together are{" "}
+              <strong>{products["cp12-boiler-service"].priceTotalDisplay}</strong>
+              . Each extra appliance is {cp12.extraApplianceDisplay} on the
+              services that include a certificate.
             </>,
             <>
               You pay after the check is done. We never ask for card details to
@@ -133,8 +139,8 @@ export default function TermsPage() {
       <H2 id="about">1. About these terms</H2>
       <P>
         These are the terms on which we provide gas safety checks and
-        certificates. They apply when you book with us — through this website,
-        by phone or on WhatsApp.
+        certificates, and boiler servicing where you have booked it. They apply
+        when you book with us — through this website, by phone or on WhatsApp.
       </P>
       <P>
         We have tried to write them in plain English. If anything here is
@@ -225,13 +231,40 @@ export default function TermsPage() {
       {/* 5 */}
       <H2 id="price">5. Price</H2>
       <P>
-        A gas safety certificate is {cp12.priceTotalDisplay}, covering{" "}
-        {cp12.includes}. Each additional gas appliance is{" "}
-        {cp12.extraApplianceDisplay}. {cp12.priceSentence}
+        We offer two services, and you choose which one you are booking before
+        you pick a time. The price you see on the review screen is the price for
+        the service you selected.
+      </P>
+      <Bullets
+        items={[
+          <>
+            <strong>{products.cp12.name}</strong> —{" "}
+            {cp12.priceTotalDisplay}, covering {cp12.includes}.
+          </>,
+          <>
+            <strong>{products["boiler-service"].name}</strong> —{" "}
+            {products["boiler-service"].priceTotalDisplay}: an annual service of
+            your boiler, booked on its own without a gas safety check.
+          </>,
+          <>
+            <strong>{products["cp12-boiler-service"].name}</strong> —{" "}
+            {products["cp12-boiler-service"].priceTotalDisplay}: the gas safety
+            inspection and certificate, plus an annual service of your boiler,
+            carried out in the same visit.
+          </>,
+        ]}
+      />
+      <P>
+        Each additional gas appliance is {cp12.extraApplianceDisplay} on the two
+        services that include a gas safety certificate. The{" "}
+        {products["boiler-service"].name} is{" "}
+        {products["boiler-service"].priceTotalDisplay} whatever other gas
+        appliances the property has, because it covers your boiler.{" "}
+        {cp12.priceSentence}
       </P>
       <P>
         The price shown on the review screen before you confirm is the price you
-        pay for the inspection. If the property turns out to have more appliances
+        pay for the service you booked. If the property turns out to have more appliances
         than you told us about, the extra-appliance charge applies — but we will
         tell you what the new total is before we do that extra work, and you can
         decline.
@@ -242,18 +275,20 @@ export default function TermsPage() {
       </H2>
       <P>
         This is the part people most often ask about, so it is worth being
-        completely clear.
+        completely clear. It applies to all three services: where it says the
+        inspection, the same applies to the boiler service if you booked one.
       </P>
       <Bullets
         items={[
           <>
             <strong>
-              The {cp12.priceDisplay} is the charge for carrying out the gas
-              safety inspection and issuing your record.
+              The price is the charge for carrying out the work you booked —
+              the gas safety inspection and your record, the annual boiler
+              service, or both together, depending on which you chose.
             </strong>{" "}
-            It is payable once we have carried out the inspection, whether every
+            It is payable once we have carried out that work, whether every
             appliance passes or we find something that needs attention. The
-            charge is for the work of inspecting, not for a particular result.
+            charge is for the work done, not for a particular result.
           </>,
           <>
             A record showing a problem is still a completed inspection. We will
@@ -263,7 +298,7 @@ export default function TermsPage() {
           <>
             <strong>
               Repairs, replacement parts and remedial work are not included in
-              the {cp12.priceDisplay}.
+              either price.
             </strong>{" "}
             They are a separate service.
           </>,
@@ -294,11 +329,11 @@ export default function TermsPage() {
       {/* 6 */}
       <H2 id="payment">6. Payment</H2>
       <P>
-        {cp12.payment}. Payment is due once the check has been carried out. We
+        {cp12.payment}. Payment is due once the work has been carried out. We
         do not take a deposit, and we do not ask for card details when you book.
       </P>
       <P>
-        Confirming a booking does create an obligation to pay for the check once
+        Confirming a booking does create an obligation to pay for the work once
         we have carried it out. That is why the confirm button on the booking
         page says so.
       </P>
@@ -415,18 +450,18 @@ export default function TermsPage() {
       </P>
 
       {/* 13 */}
-      <H2 id="fully-performed">13. Once the check has been carried out</H2>
+      <H2 id="fully-performed">13. Once the work has been carried out</H2>
       <P>
         If you asked us to go ahead inside the cancellation period and we then
-        carry out the check in full, your right to cancel that check comes to an
-        end — you have had the service you asked for. This only applies because
-        you asked, and because we told you clearly, before you confirmed, that
-        it would happen.
+        carry out the work in full, your right to cancel it comes to an end —
+        you have had the service you asked for. This only applies because you
+        asked, and because we told you clearly, before you confirmed, that it
+        would happen.
       </P>
       <P>
         If you cancel <em>part-way</em> through — after we have started but before
         we finish — you pay a proportionate amount for the work actually done,
-        not the whole {cp12.priceDisplay}.
+        not the whole price of the service you booked.
       </P>
       <P>
         Simply choosing an appointment date does not, on its own, take away your

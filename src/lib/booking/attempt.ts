@@ -11,11 +11,15 @@
  * Pure and dependency-free, so every navigation rule is directly testable.
  */
 
+import type { ProductId } from "./products";
+
 export type Step = 1 | 2 | 3 | 4;
 
 export type Reservation = {
   /** Opaque hold token. Null in degraded mode, when there is no hold store. */
   token: string | null;
+  /** The service this time was reserved for. Decides how long it runs. */
+  productId: ProductId;
   slotStart: string;
   slotEnd: string;
   /** "17:00" */
@@ -38,6 +42,7 @@ export type AttemptState = {
 export type AttemptAction =
   | { type: "select-date"; date: string }
   | { type: "reserved"; reservation: Reservation }
+  | { type: "reservation-updated"; reservation: Reservation }
   | { type: "start-change-time" }
   | { type: "cancel-change-time" }
   | { type: "go-to-step"; step: Step }
@@ -73,6 +78,14 @@ export function attemptReducer(
         changingTime: false,
         step: 3,
       };
+
+    case "reservation-updated":
+      // The same reservation, re-stated — the customer switched service and
+      // the server re-reserved their time for the new length. Deliberately
+      // does not move the step: changing service is not navigation, and it
+      // must not fling someone on the date picker forward to the form.
+      if (!state.reservation) return state;
+      return { ...state, reservation: action.reservation };
 
     case "start-change-time":
       // The existing hold stays exactly as it is while alternatives are shown.
@@ -133,10 +146,16 @@ export function attemptReducer(
  */
 export function previousHoldFor(
   state: AttemptState,
-): { slotStart: string; token: string } | undefined {
+): { slotStart: string; token: string; productId: ProductId } | undefined {
   const reservation = state.reservation;
   if (!reservation?.token) return undefined;
-  return { slotStart: reservation.slotStart, token: reservation.token };
+  return {
+    slotStart: reservation.slotStart,
+    token: reservation.token,
+    // The product travels with it: which keys the old reservation occupied
+    // depends on how long it was, and the server has to know to give them back.
+    productId: reservation.productId,
+  };
 }
 
 /** Whether a slot should be shown as the customer's own reservation. */

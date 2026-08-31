@@ -118,7 +118,7 @@ beforeEach(() => {
 
 describe("acquiring a hold", () => {
   test("the first customer gets the slot", async () => {
-    const result = await acquireHold(SLOT_A, undefined, kv);
+    const result = await acquireHold(SLOT_A, "cp12", undefined, kv);
     assert.equal(result.status, "acquired");
     if (result.status === "acquired") {
       assert.equal(result.slotStart, SLOT_A);
@@ -127,17 +127,17 @@ describe("acquiring a hold", () => {
   });
 
   test("a second customer cannot take the same slot", async () => {
-    const first = await acquireHold(SLOT_A, undefined, kv);
+    const first = await acquireHold(SLOT_A, "cp12", undefined, kv);
     assert.equal(first.status, "acquired");
 
-    const second = await acquireHold(SLOT_A, undefined, kv);
+    const second = await acquireHold(SLOT_A, "cp12", undefined, kv);
     assert.equal(second.status, "taken");
   });
 
   test("the first customer's hold is unaffected by the second attempt", async () => {
-    const first = await acquireHold(SLOT_A, undefined, kv);
+    const first = await acquireHold(SLOT_A, "cp12", undefined, kv);
     assert.equal(first.status, "acquired");
-    await acquireHold(SLOT_A, undefined, kv);
+    await acquireHold(SLOT_A, "cp12", undefined, kv);
 
     if (first.status !== "acquired") return;
     const check = await checkHold(SLOT_A, first.token, kv);
@@ -146,7 +146,7 @@ describe("acquiring a hold", () => {
 
   test("the hold lasts exactly thirty minutes", async () => {
     assert.equal(HOLD_DURATION_SECONDS, 1800);
-    const result = await acquireHold(SLOT_A, undefined, kv);
+    const result = await acquireHold(SLOT_A, "cp12", undefined, kv);
     assert.equal(result.status, "acquired");
     assert.equal(await kv.ttl(`booking-hold:${SLOT_A}`), 1800);
   });
@@ -161,17 +161,17 @@ describe("acquiring a hold", () => {
 
 describe("hold expiry", () => {
   test("a slot becomes available again once the hold expires", async () => {
-    const first = await acquireHold(SLOT_A, undefined, kv);
+    const first = await acquireHold(SLOT_A, "cp12", undefined, kv);
     assert.equal(first.status, "acquired");
 
     kv.advanceSeconds(HOLD_DURATION_SECONDS + 1);
 
-    const second = await acquireHold(SLOT_A, undefined, kv);
+    const second = await acquireHold(SLOT_A, "cp12", undefined, kv);
     assert.equal(second.status, "acquired");
   });
 
   test("an expired token is rejected at confirmation", async () => {
-    const result = await acquireHold(SLOT_A, undefined, kv);
+    const result = await acquireHold(SLOT_A, "cp12", undefined, kv);
     assert.equal(result.status, "acquired");
     if (result.status !== "acquired") return;
 
@@ -182,7 +182,7 @@ describe("hold expiry", () => {
   });
 
   test("a hold is still valid one second before it expires", async () => {
-    const result = await acquireHold(SLOT_A, undefined, kv);
+    const result = await acquireHold(SLOT_A, "cp12", undefined, kv);
     if (result.status !== "acquired") return assert.fail();
 
     kv.advanceSeconds(HOLD_DURATION_SECONDS - 1);
@@ -194,11 +194,12 @@ describe("hold expiry", () => {
 
 describe("changing the chosen time", () => {
   test("choosing another slot releases the previous hold", async () => {
-    const first = await acquireHold(SLOT_A, undefined, kv);
+    const first = await acquireHold(SLOT_A, "cp12", undefined, kv);
     if (first.status !== "acquired") return assert.fail();
 
     const second = await acquireHold(
       SLOT_B,
+      "cp12",
       { slotStart: SLOT_A, token: first.token },
       kv,
     );
@@ -206,25 +207,26 @@ describe("changing the chosen time", () => {
 
     // The old slot is free for anyone else again.
     assert.equal(await kv.get(`booking-hold:${SLOT_A}`), null);
-    const other = await acquireHold(SLOT_A, undefined, kv);
+    const other = await acquireHold(SLOT_A, "cp12", undefined, kv);
     assert.equal(other.status, "acquired");
   });
 
   test("one session never ends up holding two slots", async () => {
-    const first = await acquireHold(SLOT_A, undefined, kv);
+    const first = await acquireHold(SLOT_A, "cp12", undefined, kv);
     if (first.status !== "acquired") return assert.fail();
-    await acquireHold(SLOT_B, { slotStart: SLOT_A, token: first.token }, kv);
+    await acquireHold(SLOT_B, "cp12", { slotStart: SLOT_A, token: first.token }, kv);
 
     const heldByAnyone = await findHeldSlots([SLOT_A, SLOT_B], undefined, kv);
     assert.deepEqual([...heldByAnyone], [SLOT_B]);
   });
 
   test("re-selecting the slot already held is not treated as a conflict", async () => {
-    const first = await acquireHold(SLOT_A, undefined, kv);
+    const first = await acquireHold(SLOT_A, "cp12", undefined, kv);
     if (first.status !== "acquired") return assert.fail();
 
     const again = await acquireHold(
       SLOT_A,
+      "cp12",
       { slotStart: SLOT_A, token: first.token },
       kv,
     );
@@ -233,10 +235,10 @@ describe("changing the chosen time", () => {
   });
 
   test("someone else's token cannot release a hold", async () => {
-    const first = await acquireHold(SLOT_A, undefined, kv);
+    const first = await acquireHold(SLOT_A, "cp12", undefined, kv);
     if (first.status !== "acquired") return assert.fail();
 
-    const released = await releaseHold(SLOT_A, generateHoldToken(), kv);
+    const released = await releaseHold(SLOT_A, generateHoldToken(), "cp12", kv);
     assert.equal(released, false);
     assert.equal((await checkHold(SLOT_A, first.token, kv)).status, "valid");
   });
@@ -244,13 +246,13 @@ describe("changing the chosen time", () => {
 
 describe("token validation", () => {
   test("a forged token is rejected", async () => {
-    await acquireHold(SLOT_A, undefined, kv);
+    await acquireHold(SLOT_A, "cp12", undefined, kv);
     const check = await checkHold(SLOT_A, generateHoldToken(), kv);
     assert.equal(check.status, "mismatch");
   });
 
   test("a token for the wrong slot is rejected", async () => {
-    const first = await acquireHold(SLOT_A, undefined, kv);
+    const first = await acquireHold(SLOT_A, "cp12", undefined, kv);
     if (first.status !== "acquired") return assert.fail();
 
     const check = await checkHold(SLOT_B, first.token, kv);
@@ -274,14 +276,14 @@ describe("token validation", () => {
 
 describe("availability filtering", () => {
   test("slots held by others are reported as held", async () => {
-    await acquireHold(SLOT_A, undefined, kv);
+    await acquireHold(SLOT_A, "cp12", undefined, kv);
     const held = await findHeldSlots([SLOT_A, SLOT_B], undefined, kv);
     assert.ok(held.has(SLOT_A));
     assert.ok(!held.has(SLOT_B));
   });
 
   test("a customer still sees the slot they themselves hold", async () => {
-    const mine = await acquireHold(SLOT_A, undefined, kv);
+    const mine = await acquireHold(SLOT_A, "cp12", undefined, kv);
     if (mine.status !== "acquired") return assert.fail();
 
     const held = await findHeldSlots(
@@ -293,7 +295,7 @@ describe("availability filtering", () => {
   });
 
   test("presenting the wrong token does not unhide someone else's slot", async () => {
-    await acquireHold(SLOT_A, undefined, kv);
+    await acquireHold(SLOT_A, "cp12", undefined, kv);
     const held = await findHeldSlots(
       [SLOT_A],
       { slotStart: SLOT_A, token: generateHoldToken() },
@@ -317,7 +319,7 @@ describe("completed bookings", () => {
 
 describe("store outage cannot bypass the calendar safety net", () => {
   test("acquiring reports unavailable rather than success", async () => {
-    const result = await acquireHold(SLOT_A, undefined, brokenKv);
+    const result = await acquireHold(SLOT_A, "cp12", undefined, brokenKv);
     assert.equal(result.status, "unavailable");
   });
 
@@ -337,11 +339,14 @@ describe("store outage cannot bypass the calendar safety net", () => {
   });
 
   test("releasing during an outage fails quietly and relies on TTL", async () => {
-    assert.equal(await releaseHold(SLOT_A, generateHoldToken(), brokenKv), false);
+    assert.equal(
+      await releaseHold(SLOT_A, generateHoldToken(), "cp12", brokenKv),
+      false,
+    );
   });
 
   test("with no store configured at all, holds report unavailable", async () => {
-    assert.equal((await acquireHold(SLOT_A, undefined, null)).status, "unavailable");
+    assert.equal((await acquireHold(SLOT_A, "cp12", undefined, null)).status, "unavailable");
     assert.equal(
       (await checkHold(SLOT_A, generateHoldToken(), null)).status,
       "unavailable",
@@ -412,7 +417,7 @@ describe("a hold never outranks Google Calendar", () => {
   );
 
   test("the slot is bookable when the calendar is clear and the hold is valid", async () => {
-    const held = await acquireHold(slotIso, undefined, kv);
+    const held = await acquireHold(slotIso, "cp12", undefined, kv);
     assert.equal(held.status, "acquired");
     if (held.status !== "acquired") return;
 
@@ -421,7 +426,7 @@ describe("a hold never outranks Google Calendar", () => {
   });
 
   test("a valid hold does not make a slot bookable once Google shows it busy", async () => {
-    const held = await acquireHold(slotIso, undefined, kv);
+    const held = await acquireHold(slotIso, "cp12", undefined, kv);
     if (held.status !== "acquired") return assert.fail();
 
     // The engineer accepts something else into the diary mid-hold.
@@ -446,10 +451,10 @@ describe("double-clicking confirm creates one booking", () => {
     const attempt = "attempt-double-click";
 
     // First click: books, records completion, releases the hold.
-    const held = await acquireHold(slotIso, undefined, kv);
+    const held = await acquireHold(slotIso, "cp12", undefined, kv);
     if (held.status !== "acquired") return assert.fail();
     await markBookingCompleted(attempt, "event-xyz", kv);
-    await releaseHold(slotIso, held.token, kv);
+    await releaseHold(slotIso, held.token, "cp12", kv);
 
     // Second click arrives with the same attempt key. The completed marker is
     // checked before the hold, so the now-released hold is not mistaken for an
@@ -470,11 +475,12 @@ describe("double-clicking confirm creates one booking", () => {
 
 describe("switching slots never costs the customer their reservation", () => {
   test("the replacement is taken before the original is released", async () => {
-    const first = await acquireHold(SLOT_A, undefined, kv);
+    const first = await acquireHold(SLOT_A, "cp12", undefined, kv);
     if (first.status !== "acquired") return assert.fail();
 
     const switched = await acquireHold(
       SLOT_B,
+      "cp12",
       { slotStart: SLOT_A, token: first.token },
       kv,
     );
@@ -491,11 +497,12 @@ describe("switching slots never costs the customer their reservation", () => {
     // original given up.
     const anotherDate = "2026-08-27T13:00:00.000Z";
 
-    const first = await acquireHold(SLOT_A, undefined, kv);
+    const first = await acquireHold(SLOT_A, "cp12", undefined, kv);
     if (first.status !== "acquired") return assert.fail();
 
     const switched = await acquireHold(
       anotherDate,
+      "cp12",
       { slotStart: SLOT_A, token: first.token },
       kv,
     );
@@ -508,14 +515,15 @@ describe("switching slots never costs the customer their reservation", () => {
   test("a failed switch to another date leaves the original date held", async () => {
     const anotherDate = "2026-08-27T13:00:00.000Z";
 
-    const mine = await acquireHold(SLOT_A, undefined, kv);
+    const mine = await acquireHold(SLOT_A, "cp12", undefined, kv);
     if (mine.status !== "acquired") return assert.fail();
 
     // Someone else takes the slot on the day being browsed.
-    assert.equal((await acquireHold(anotherDate, undefined, kv)).status, "acquired");
+    assert.equal((await acquireHold(anotherDate, "cp12", undefined, kv)).status, "acquired");
 
     const attempt = await acquireHold(
       anotherDate,
+      "cp12",
       { slotStart: SLOT_A, token: mine.token },
       kv,
     );
@@ -526,7 +534,7 @@ describe("switching slots never costs the customer their reservation", () => {
   test("browsing another date without choosing anything holds nothing new", async () => {
     // Browsing is pure navigation: no acquisition is attempted until a time is
     // actually chosen, so the attempt still owns exactly its original slot.
-    const mine = await acquireHold(SLOT_A, undefined, kv);
+    const mine = await acquireHold(SLOT_A, "cp12", undefined, kv);
     if (mine.status !== "acquired") return assert.fail();
 
     const held = await findHeldSlots(
@@ -541,25 +549,26 @@ describe("switching slots never costs the customer their reservation", () => {
   });
 
   test("the old slot is immediately available to someone else", async () => {
-    const first = await acquireHold(SLOT_A, undefined, kv);
+    const first = await acquireHold(SLOT_A, "cp12", undefined, kv);
     if (first.status !== "acquired") return assert.fail();
-    await acquireHold(SLOT_B, { slotStart: SLOT_A, token: first.token }, kv);
+    await acquireHold(SLOT_B, "cp12", { slotStart: SLOT_A, token: first.token }, kv);
 
     // No waiting for a TTL: another customer can take the vacated slot at once.
-    const someoneElse = await acquireHold(SLOT_A, undefined, kv);
+    const someoneElse = await acquireHold(SLOT_A, "cp12", undefined, kv);
     assert.equal(someoneElse.status, "acquired");
   });
 
   test("a failed switch leaves the original reservation intact", async () => {
-    const mine = await acquireHold(SLOT_A, undefined, kv);
+    const mine = await acquireHold(SLOT_A, "cp12", undefined, kv);
     if (mine.status !== "acquired") return assert.fail();
 
     // Someone else takes the slot I am about to switch to.
-    const theirs = await acquireHold(SLOT_B, undefined, kv);
+    const theirs = await acquireHold(SLOT_B, "cp12", undefined, kv);
     assert.equal(theirs.status, "acquired");
 
     const attempt = await acquireHold(
       SLOT_B,
+      "cp12",
       { slotStart: SLOT_A, token: mine.token },
       kv,
     );
@@ -570,18 +579,18 @@ describe("switching slots never costs the customer their reservation", () => {
   });
 
   test("a failed switch does not disturb the other customer's hold either", async () => {
-    const mine = await acquireHold(SLOT_A, undefined, kv);
-    const theirs = await acquireHold(SLOT_B, undefined, kv);
+    const mine = await acquireHold(SLOT_A, "cp12", undefined, kv);
+    const theirs = await acquireHold(SLOT_B, "cp12", undefined, kv);
     if (mine.status !== "acquired" || theirs.status !== "acquired") {
       return assert.fail();
     }
 
-    await acquireHold(SLOT_B, { slotStart: SLOT_A, token: mine.token }, kv);
+    await acquireHold(SLOT_B, "cp12", { slotStart: SLOT_A, token: mine.token }, kv);
     assert.equal((await checkHold(SLOT_B, theirs.token, kv)).status, "valid");
   });
 
   test("the new reservation gets a full fresh thirty minutes", async () => {
-    const first = await acquireHold(SLOT_A, undefined, kv);
+    const first = await acquireHold(SLOT_A, "cp12", undefined, kv);
     if (first.status !== "acquired") return assert.fail();
 
     // Most of the original reservation is used up before switching.
@@ -589,6 +598,7 @@ describe("switching slots never costs the customer their reservation", () => {
 
     const switched = await acquireHold(
       SLOT_B,
+      "cp12",
       { slotStart: SLOT_A, token: first.token },
       kv,
     );
@@ -598,7 +608,7 @@ describe("switching slots never costs the customer their reservation", () => {
 
   test("switching repeatedly still leaves exactly one hold", async () => {
     const slots = [SLOT_A, SLOT_B, "2026-08-20T15:00:00.000Z"];
-    let current = await acquireHold(slots[0], undefined, kv);
+    let current = await acquireHold(slots[0], "cp12", undefined, kv);
     if (current.status !== "acquired") return assert.fail();
 
     for (const slot of slots.slice(1)) {
@@ -606,6 +616,7 @@ describe("switching slots never costs the customer their reservation", () => {
       const previousToken = current.status === "acquired" ? current.token : "";
       current = await acquireHold(
         slot,
+        "cp12",
         { slotStart: previousSlot, token: previousToken },
         kv,
       );
@@ -618,15 +629,15 @@ describe("switching slots never costs the customer their reservation", () => {
   });
 
   test("cancelling a booking releases the slot for everyone else", async () => {
-    const mine = await acquireHold(SLOT_A, undefined, kv);
+    const mine = await acquireHold(SLOT_A, "cp12", undefined, kv);
     if (mine.status !== "acquired") return assert.fail();
 
-    assert.equal(await releaseHold(SLOT_A, mine.token, kv), true);
-    assert.equal((await acquireHold(SLOT_A, undefined, kv)).status, "acquired");
+    assert.equal(await releaseHold(SLOT_A, mine.token, "cp12", kv), true);
+    assert.equal((await acquireHold(SLOT_A, "cp12", undefined, kv)).status, "acquired");
   });
 
   test("another browser cannot see or take the actively held slot", async () => {
-    const mine = await acquireHold(SLOT_A, undefined, kv);
+    const mine = await acquireHold(SLOT_A, "cp12", undefined, kv);
     if (mine.status !== "acquired") return assert.fail();
 
     // What the other browser's availability call computes: no own-hold header.
@@ -634,7 +645,7 @@ describe("switching slots never costs the customer their reservation", () => {
     assert.ok(heldForOthers.has(SLOT_A));
 
     // And it cannot take it even by posting directly.
-    assert.equal((await acquireHold(SLOT_A, undefined, kv)).status, "taken");
+    assert.equal((await acquireHold(SLOT_A, "cp12", undefined, kv)).status, "taken");
 
     // While my own availability call still shows it as mine.
     const heldForMe = await findHeldSlots(
@@ -643,5 +654,471 @@ describe("switching slots never costs the customer their reservation", () => {
       kv,
     );
     assert.ok(!heldForMe.has(SLOT_A));
+  });
+});
+
+/**
+ * Reservations across two products of different lengths.
+ *
+ * SLOT_A and SLOT_B are consecutive hours, which is exactly the case a
+ * start-keyed hold could not express: a 60-minute bundle at 13:00 runs to
+ * 14:00 and its buffer to 14:15, so 14:00 must stop being offered. Google
+ * Calendar would still have refused the second booking at the pre-write
+ * re-check — but only after the customer had filled in the whole form.
+ */
+describe("holds across products of different lengths", () => {
+  const CP12 = "cp12" as const;
+  const BUNDLE = "cp12-boiler-service" as const;
+
+  test("a CP12 reserves only its own start, exactly as before", async () => {
+    const held = await acquireHold(SLOT_A, CP12, undefined, kv);
+    assert.equal(held.status, "acquired");
+
+    if (held.status !== "acquired") return assert.fail();
+    assert.equal(await kv.get(`booking-hold:${SLOT_A}`), held.token);
+    assert.equal(
+      await kv.get(`booking-hold:${SLOT_B}`),
+      null,
+      "a 45-minute job must not reserve the hour after it",
+    );
+  });
+
+  test("a bundle reserves the hour it runs into as well", async () => {
+    const held = await acquireHold(SLOT_A, BUNDLE, undefined, kv);
+    if (held.status !== "acquired") return assert.fail();
+
+    assert.equal(await kv.get(`booking-hold:${SLOT_A}`), held.token);
+    assert.equal(await kv.get(`booking-hold:${SLOT_B}`), held.token);
+  });
+
+  test("a bundle stops the next hour being offered to anyone else", async () => {
+    await acquireHold(SLOT_A, BUNDLE, undefined, kv);
+
+    const otherCustomer = await acquireHold(SLOT_B, CP12, undefined, kv);
+    assert.equal(otherCustomer.status, "taken");
+  });
+
+  test("the conflict is caught whichever customer arrives first", async () => {
+    // A CP12 at 14:00 first, then a bundle at 13:00 reaching over it. The
+    // bundle must be refused: its own start is free, but its span is not.
+    await acquireHold(SLOT_B, CP12, undefined, kv);
+
+    const bundle = await acquireHold(SLOT_A, BUNDLE, undefined, kv);
+    assert.equal(bundle.status, "taken");
+  });
+
+  test("a refused bundle leaves nothing of its own behind", async () => {
+    const theirs = await acquireHold(SLOT_B, CP12, undefined, kv);
+    if (theirs.status !== "acquired") return assert.fail();
+
+    await acquireHold(SLOT_A, BUNDLE, undefined, kv);
+
+    // The rollback: 13:00 was won before 14:00 was refused, and it must not
+    // be left reserved by a booking that never happened.
+    assert.equal(await kv.get(`booking-hold:${SLOT_A}`), null);
+    // And the other customer's reservation is untouched.
+    assert.equal(await kv.get(`booking-hold:${SLOT_B}`), theirs.token);
+    assert.equal((await checkHold(SLOT_B, theirs.token, kv)).status, "valid");
+  });
+
+  test("a rolled-back start is immediately bookable again", async () => {
+    await acquireHold(SLOT_B, CP12, undefined, kv);
+    assert.equal((await acquireHold(SLOT_A, BUNDLE, undefined, kv)).status, "taken");
+
+    // Nothing was left half-reserved, so a CP12 at 13:00 still fits.
+    const shorter = await acquireHold(SLOT_A, CP12, undefined, kv);
+    assert.equal(shorter.status, "acquired");
+  });
+
+  test("a bundle hides both its starts from other customers", async () => {
+    await acquireHold(SLOT_A, BUNDLE, undefined, kv);
+
+    const held = await findHeldSlots([SLOT_A, SLOT_B], undefined, kv);
+    assert.equal(held.has(SLOT_A), true);
+    assert.equal(held.has(SLOT_B), true);
+  });
+
+  test("but not from the customer who holds them", async () => {
+    const mine = await acquireHold(SLOT_A, BUNDLE, undefined, kv);
+    if (mine.status !== "acquired") return assert.fail();
+
+    // Including the spillover, so "change time" can still move them to 14:00.
+    const held = await findHeldSlots(
+      [SLOT_A, SLOT_B],
+      { slotStart: SLOT_A, token: mine.token },
+      kv,
+    );
+    assert.equal(held.size, 0);
+  });
+
+  test("releasing a bundle gives both starts back", async () => {
+    const held = await acquireHold(SLOT_A, BUNDLE, undefined, kv);
+    if (held.status !== "acquired") return assert.fail();
+
+    assert.equal(await releaseHold(SLOT_A, held.token, BUNDLE, kv), true);
+
+    assert.equal(await kv.get(`booking-hold:${SLOT_A}`), null);
+    assert.equal(await kv.get(`booking-hold:${SLOT_B}`), null);
+    assert.equal((await findHeldSlots([SLOT_A, SLOT_B], undefined, kv)).size, 0);
+  });
+
+  test("a released bundle frees the next hour for someone else", async () => {
+    const held = await acquireHold(SLOT_A, BUNDLE, undefined, kv);
+    if (held.status !== "acquired") return assert.fail();
+    await releaseHold(SLOT_A, held.token, BUNDLE, kv);
+
+    assert.equal(
+      (await acquireHold(SLOT_B, CP12, undefined, kv)).status,
+      "acquired",
+    );
+  });
+
+  test("only the owner can release a bundle's spillover", async () => {
+    const held = await acquireHold(SLOT_A, BUNDLE, undefined, kv);
+    if (held.status !== "acquired") return assert.fail();
+
+    await releaseHold(SLOT_A, generateHoldToken(), BUNDLE, kv);
+    assert.equal(await kv.get(`booking-hold:${SLOT_B}`), held.token);
+  });
+});
+
+describe("changing service on a reservation already held", () => {
+  const CP12 = "cp12" as const;
+  const BUNDLE = "cp12-boiler-service" as const;
+
+  test("lengthening keeps the time and reaches over the next hour", async () => {
+    const first = await acquireHold(SLOT_A, CP12, undefined, kv);
+    if (first.status !== "acquired") return assert.fail();
+
+    const upgraded = await acquireHold(
+      SLOT_A,
+      BUNDLE,
+      { slotStart: SLOT_A, token: first.token, productId: CP12 },
+      kv,
+    );
+    if (upgraded.status !== "acquired") return assert.fail();
+
+    // Re-selecting a time the attempt already owns is not a conflict.
+    assert.equal(upgraded.token, first.token);
+    assert.equal(await kv.get(`booking-hold:${SLOT_A}`), first.token);
+    assert.equal(await kv.get(`booking-hold:${SLOT_B}`), first.token);
+  });
+
+  test("shortening gives the spillover back", async () => {
+    const bundle = await acquireHold(SLOT_A, BUNDLE, undefined, kv);
+    if (bundle.status !== "acquired") return assert.fail();
+
+    await acquireHold(
+      SLOT_A,
+      CP12,
+      { slotStart: SLOT_A, token: bundle.token, productId: BUNDLE },
+      kv,
+    );
+
+    assert.equal(await kv.get(`booking-hold:${SLOT_A}`), bundle.token);
+    assert.equal(
+      await kv.get(`booking-hold:${SLOT_B}`),
+      null,
+      "the hour a CP12 does not need must be handed back",
+    );
+  });
+
+  test("a lengthening that cannot fit leaves the original untouched", async () => {
+    const mine = await acquireHold(SLOT_A, CP12, undefined, kv);
+    if (mine.status !== "acquired") return assert.fail();
+
+    // Somebody else takes the hour the bundle would need.
+    const theirs = await acquireHold(SLOT_B, CP12, undefined, kv);
+    if (theirs.status !== "acquired") return assert.fail();
+
+    const upgrade = await acquireHold(
+      SLOT_A,
+      BUNDLE,
+      { slotStart: SLOT_A, token: mine.token, productId: CP12 },
+      kv,
+    );
+
+    assert.equal(upgrade.status, "taken");
+    // The customer still has exactly what they had before they asked.
+    assert.equal((await checkHold(SLOT_A, mine.token, kv)).status, "valid");
+    assert.equal(await kv.get(`booking-hold:${SLOT_A}`), mine.token);
+    assert.equal(await kv.get(`booking-hold:${SLOT_B}`), theirs.token);
+  });
+
+  test("moving a bundle to another time releases every start it left", async () => {
+    const LATER = "2026-08-20T17:00:00.000Z";
+    const LATER_SPILL = "2026-08-20T18:00:00.000Z";
+
+    const first = await acquireHold(SLOT_A, BUNDLE, undefined, kv);
+    if (first.status !== "acquired") return assert.fail();
+
+    const moved = await acquireHold(
+      LATER,
+      BUNDLE,
+      { slotStart: SLOT_A, token: first.token, productId: BUNDLE },
+      kv,
+    );
+    assert.equal(moved.status, "acquired");
+
+    assert.equal(await kv.get(`booking-hold:${SLOT_A}`), null);
+    assert.equal(await kv.get(`booking-hold:${SLOT_B}`), null);
+    assert.notEqual(await kv.get(`booking-hold:${LATER}`), null);
+    assert.notEqual(await kv.get(`booking-hold:${LATER_SPILL}`), null);
+  });
+
+  test("a moved bundle can shift onto the hour it was itself blocking", async () => {
+    // 13:00 bundle holds 13:00 and 14:00. Moving to 14:00 must not be refused
+    // by the attempt's own spillover.
+    const first = await acquireHold(SLOT_A, BUNDLE, undefined, kv);
+    if (first.status !== "acquired") return assert.fail();
+
+    const moved = await acquireHold(
+      SLOT_B,
+      BUNDLE,
+      { slotStart: SLOT_A, token: first.token, productId: BUNDLE },
+      kv,
+    );
+    assert.equal(moved.status, "acquired");
+    assert.equal(await kv.get(`booking-hold:${SLOT_A}`), null);
+    assert.equal(await kv.get(`booking-hold:${SLOT_B}`), first.token);
+  });
+
+  test("a stranger's token cannot be presented to inherit a reservation", async () => {
+    const victim = await acquireHold(SLOT_A, BUNDLE, undefined, kv);
+    if (victim.status !== "acquired") return assert.fail();
+
+    // A token that does not hold what it claims to hold starts a fresh
+    // identity, so it collides with the real owner rather than adopting it.
+    const attacker = await acquireHold(
+      SLOT_A,
+      BUNDLE,
+      { slotStart: SLOT_B, token: generateHoldToken(), productId: BUNDLE },
+      kv,
+    );
+    assert.equal(attacker.status, "taken");
+    assert.equal(await kv.get(`booking-hold:${SLOT_A}`), victim.token);
+  });
+
+  test("an outage during a multi-key acquisition reports unavailable", async () => {
+    assert.equal(
+      (await acquireHold(SLOT_A, BUNDLE, undefined, brokenKv)).status,
+      "unavailable",
+    );
+  });
+});
+
+/**
+ * Every key a reservation occupies must die with the reservation.
+ *
+ * The primary start decides when a hold expires, so if a start added later —
+ * by lengthening the service — were given a fresh thirty minutes, it would go
+ * on blocking that hour after the reservation behind it had already gone.
+ */
+describe("a reservation's keys expire together", () => {
+  const CP12 = "cp12" as const;
+  const BUNDLE = "cp12-boiler-service" as const;
+
+  test("lengthening does not give the new start a longer life", async () => {
+    const first = await acquireHold(SLOT_A, CP12, undefined, kv);
+    if (first.status !== "acquired") return assert.fail();
+
+    // Most of the thirty minutes has already gone by the time they change.
+    kv.advanceSeconds(HOLD_DURATION_SECONDS - 120);
+
+    const upgraded = await acquireHold(
+      SLOT_A,
+      BUNDLE,
+      { slotStart: SLOT_A, token: first.token, productId: CP12 },
+      kv,
+    );
+    assert.equal(upgraded.status, "acquired");
+
+    const primary = await kv.ttl(`booking-hold:${SLOT_A}`);
+    const spillover = await kv.ttl(`booking-hold:${SLOT_B}`);
+    assert.equal(primary, 120, "re-selecting must not win a fresh thirty minutes");
+    assert.equal(
+      spillover,
+      primary,
+      "the added start must expire with the reservation, not outlive it",
+    );
+  });
+
+  test("the whole reservation is gone once its time is up", async () => {
+    const first = await acquireHold(SLOT_A, CP12, undefined, kv);
+    if (first.status !== "acquired") return assert.fail();
+
+    kv.advanceSeconds(HOLD_DURATION_SECONDS - 120);
+    await acquireHold(
+      SLOT_A,
+      BUNDLE,
+      { slotStart: SLOT_A, token: first.token, productId: CP12 },
+      kv,
+    );
+
+    // Past the reservation's own expiry, but well inside a fresh thirty.
+    kv.advanceSeconds(180);
+
+    assert.equal((await checkHold(SLOT_A, first.token, kv)).status, "expired");
+    assert.equal(
+      (await findHeldSlots([SLOT_A, SLOT_B], undefined, kv)).size,
+      0,
+      "an expired reservation must not go on blocking the hour it reached into",
+    );
+  });
+
+  test("moving to a different time still earns a fresh thirty minutes", async () => {
+    // The reset is only suppressed when re-selecting a time already held.
+    const first = await acquireHold(SLOT_A, BUNDLE, undefined, kv);
+    if (first.status !== "acquired") return assert.fail();
+
+    kv.advanceSeconds(HOLD_DURATION_SECONDS - 120);
+
+    const LATER = "2026-08-20T17:00:00.000Z";
+    const moved = await acquireHold(
+      LATER,
+      BUNDLE,
+      { slotStart: SLOT_A, token: first.token, productId: BUNDLE },
+      kv,
+    );
+    assert.equal(moved.status, "acquired");
+    assert.equal(await kv.ttl(`booking-hold:${LATER}`), HOLD_DURATION_SECONDS);
+  });
+});
+
+/**
+ * Reservations across all three products.
+ *
+ * Two of them are an hour long and one is forty-five minutes, so the same
+ * conflict has to be caught whichever pair meets and whichever arrives first.
+ */
+describe("holds across all three products", () => {
+  const CP12 = "cp12" as const;
+  const SERVICE = "boiler-service" as const;
+  const BUNDLE = "cp12-boiler-service" as const;
+
+  /** Every ordered pair of products, for the conflict matrix below. */
+  const pairs = [CP12, SERVICE, BUNDLE].flatMap((first) =>
+    [CP12, SERVICE, BUNDLE].map((second) => [first, second] as const),
+  );
+
+  test("a standalone service reserves the hour it runs into", async () => {
+    const held = await acquireHold(SLOT_A, SERVICE, undefined, kv);
+    if (held.status !== "acquired") return assert.fail();
+
+    // Sixty minutes plus the buffer spans the next start, exactly like the
+    // bundle — the two share a length.
+    assert.equal(await kv.get(`booking-hold:${SLOT_A}`), held.token);
+    assert.equal(await kv.get(`booking-hold:${SLOT_B}`), held.token);
+  });
+
+  test("an hour-long booking always blocks the following start", async () => {
+    for (const longProduct of [SERVICE, BUNDLE]) {
+      kv = new FakeKv();
+      await acquireHold(SLOT_A, longProduct, undefined, kv);
+      assert.equal(
+        (await acquireHold(SLOT_B, CP12, undefined, kv)).status,
+        "taken",
+        `${longProduct} at 13:00 left 14:00 bookable`,
+      );
+    }
+  });
+
+  test("the conflict is caught for every pairing, in both orders", async () => {
+    for (const [first, second] of pairs) {
+      kv = new FakeKv();
+      const held = await acquireHold(SLOT_A, first, undefined, kv);
+      if (held.status !== "acquired") return assert.fail();
+
+      // Whatever the second customer wants, SLOT_A itself is spoken for.
+      const same = await acquireHold(SLOT_A, second, undefined, kv);
+      assert.equal(same.status, "taken", `${first} then ${second} at 13:00`);
+
+      // And the next hour is only free when the first job is the short one.
+      const next = await acquireHold(SLOT_B, second, undefined, kv);
+      const firstIsShort = first === CP12;
+      assert.equal(
+        next.status,
+        firstIsShort ? "acquired" : "taken",
+        `${first} at 13:00 then ${second} at 14:00`,
+      );
+    }
+  });
+
+  test("a forty-five minute job still leaves the next hour bookable", async () => {
+    kv = new FakeKv();
+    await acquireHold(SLOT_A, CP12, undefined, kv);
+    for (const product of [CP12, SERVICE, BUNDLE]) {
+      const fresh = new FakeKv();
+      await acquireHold(SLOT_A, CP12, undefined, fresh);
+      assert.equal(
+        (await acquireHold(SLOT_B, product, undefined, fresh)).status,
+        "acquired",
+        `a CP12 at 13:00 wrongly blocked a ${product} at 14:00`,
+      );
+    }
+  });
+
+  test("a refused acquisition rolls back whichever product asked", async () => {
+    for (const product of [SERVICE, BUNDLE]) {
+      kv = new FakeKv();
+      const theirs = await acquireHold(SLOT_B, CP12, undefined, kv);
+      if (theirs.status !== "acquired") return assert.fail();
+
+      assert.equal(
+        (await acquireHold(SLOT_A, product, undefined, kv)).status,
+        "taken",
+      );
+      assert.equal(
+        await kv.get(`booking-hold:${SLOT_A}`),
+        null,
+        `${product} left its own first key behind`,
+      );
+      assert.equal(await kv.get(`booking-hold:${SLOT_B}`), theirs.token);
+    }
+  });
+
+  test("switching between any two services keeps exactly one reservation", async () => {
+    for (const [from, to] of pairs) {
+      if (from === to) continue;
+      kv = new FakeKv();
+
+      const first = await acquireHold(SLOT_A, from, undefined, kv);
+      if (first.status !== "acquired") return assert.fail();
+
+      const switched = await acquireHold(
+        SLOT_A,
+        to,
+        { slotStart: SLOT_A, token: first.token, productId: from },
+        kv,
+      );
+      assert.equal(switched.status, "acquired", `${from} → ${to}`);
+      if (switched.status !== "acquired") return;
+
+      // The time is still theirs, and only the starts the new service needs
+      // are held — no leftovers from the old one.
+      assert.equal(await kv.get(`booking-hold:${SLOT_A}`), first.token);
+      const expected =
+        to === CP12 ? null : first.token;
+      assert.equal(
+        await kv.get(`booking-hold:${SLOT_B}`),
+        expected,
+        `${from} → ${to} left the wrong keys`,
+      );
+    }
+  });
+
+  test("releasing gives back exactly what each product took", async () => {
+    for (const product of [CP12, SERVICE, BUNDLE]) {
+      kv = new FakeKv();
+      const held = await acquireHold(SLOT_A, product, undefined, kv);
+      if (held.status !== "acquired") return assert.fail();
+
+      assert.equal(await releaseHold(SLOT_A, held.token, product, kv), true);
+      assert.equal(
+        (await findHeldSlots([SLOT_A, SLOT_B], undefined, kv)).size,
+        0,
+        `${product} left a key behind on release`,
+      );
+    }
   });
 });

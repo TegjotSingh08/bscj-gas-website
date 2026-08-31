@@ -1,6 +1,6 @@
 "use client";
 
-import { cp12 } from "@/lib/business";
+import type { Product } from "@/lib/booking/products";
 import type { Slot } from "./BookingFlow";
 
 function longDate(iso: string): string {
@@ -15,6 +15,7 @@ function longDate(iso: string): string {
 
 export function TimePicker({
   date,
+  product,
   slots,
   reservedSlotStart,
   busy = false,
@@ -23,6 +24,8 @@ export function TimePicker({
   onChangeDate,
 }: {
   date: string;
+  /** The service being booked — it decides how long an appointment runs. */
+  product: Product;
   slots: Slot[];
   /** The slot this booking attempt currently holds, if any. */
   reservedSlotStart?: string | null;
@@ -51,9 +54,9 @@ export function TimePicker({
         <span className="font-semibold text-navy-800">{longDate(date)}</span>
         <span className="hidden sm:inline">
           {" "}
-          · appointments take about {cp12.durationMinutes} minutes
+          · appointments take about {product.durationMinutes} minutes
         </span>
-        <span className="sm:hidden"> · about {cp12.durationMinutes} minutes</span>
+        <span className="sm:hidden"> · about {product.durationMinutes} minutes</span>
         {busy && " · reserving your slot…"}
       </p>
       {changingTime && (

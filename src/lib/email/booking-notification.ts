@@ -52,13 +52,18 @@ export type BookingNotificationInput = {
   /** The property address, from the single canonical formatter. */
   addressLines: string[];
   postcode: string;
+  /** "Gas Safety Certificate (CP12)" / "CP12 + Annual Boiler Service". */
+  productName: string;
+  /** Short, upper-cased into the subject: "CP12" / "CP12 + boiler service". */
+  productSubjectName: string;
   customerName: string;
   /** Canonical +447XXXXXXXXX, as normalised by the server. */
   customerPhone: string;
   customerEmail: string;
   /** "Landlord", "Letting agent", … — already a display label. */
   customerType: string;
-  applianceCount: number;
+  /** Null when the service does not price by appliance. */
+  applianceCount: number | null;
   /** Server-derived total. Never a client-submitted figure. */
   priceTotal: number;
   /** True when the appointment falls on today's date in Europe/London. */
@@ -94,9 +99,10 @@ export function isSameDay(
 
 export function notificationSubject(input: BookingNotificationInput): string {
   // Shouted, because it has to survive a glance at a lock screen.
+  const service = input.productSubjectName.toUpperCase();
   return input.sameDay
-    ? `URGENT — SAME-DAY CP12 BOOKING — ${input.startLabel} — ${input.postcode}`
-    : `NEW CP12 BOOKING — ${input.subjectDateLabel} ${input.startLabel} — ${input.postcode}`;
+    ? `URGENT — SAME-DAY ${service} BOOKING — ${input.startLabel} — ${input.postcode}`
+    : `NEW ${service} BOOKING — ${input.subjectDateLabel} ${input.startLabel} — ${input.postcode}`;
 }
 
 export function renderBookingNotificationEmail(
@@ -177,12 +183,15 @@ function buildHtml(
     row("Customer", input.customerName),
     row("Mobile", input.customerPhone),
     row("Email", input.customerEmail),
+    row("Service", input.productName),
     row("Customer type", input.customerType),
     row("Postcode", input.postcode),
-    row(
-      "Appliances",
-      `${input.applianceCount} ${input.applianceCount === 1 ? "appliance" : "appliances"}`,
-    ),
+    input.applianceCount === null
+      ? ""
+      : row(
+          "Appliances",
+          `${input.applianceCount} ${input.applianceCount === 1 ? "appliance" : "appliances"}`,
+        ),
     row("Total", `£${input.priceTotal} — ${cp12.payment.toLowerCase()}`),
     input.tenantName || input.tenantPhone
       ? row(
@@ -233,7 +242,9 @@ function buildHtml(
 
 function buildText(input: BookingNotificationInput): string {
   return [
-    input.sameDay ? "*** SAME-DAY BOOKING - TODAY ***" : "NEW CP12 BOOKING",
+    input.sameDay
+      ? "*** SAME-DAY BOOKING - TODAY ***"
+      : `NEW ${input.productSubjectName.toUpperCase()} BOOKING`,
     "",
     input.dateLabel,
     `${input.startLabel}-${input.endLabel}`,
@@ -245,9 +256,12 @@ function buildText(input: BookingNotificationInput): string {
     `Customer:      ${input.customerName}`,
     `Mobile:        ${input.customerPhone}`,
     `Email:         ${input.customerEmail}`,
+    `Service:       ${input.productName}`,
     `Customer type: ${input.customerType}`,
     `Postcode:      ${input.postcode}`,
-    `Appliances:    ${input.applianceCount}`,
+    ...(input.applianceCount === null
+      ? []
+      : [`Appliances:    ${input.applianceCount}`]),
     `Total:         £${input.priceTotal} - ${cp12.payment.toLowerCase()}`,
     ...(input.tenantName || input.tenantPhone
       ? [

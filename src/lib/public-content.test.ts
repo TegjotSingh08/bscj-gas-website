@@ -13,6 +13,7 @@ import {
 } from "./business";
 import { faqs } from "./faqs";
 import { calculatePrice } from "./booking/pricing";
+import { bundleSavingFor, products, productList } from "./booking/products";
 import { buildPropertyAddress } from "./address/format";
 
 /**
@@ -636,15 +637,123 @@ describe("the commercial offer is stated accurately", () => {
   });
 });
 
+describe("nothing is invented about the boiler service", () => {
+  /*
+    Only the name and the price of the bundle have ever been confirmed. What
+    an annual boiler service actually involves has not been specified, so the
+    site must not describe it — a checklist nobody agreed to is exactly the
+    kind of service claim docs/business-details.md forbids.
+  */
+  test("only the confirmed facts exist in the registry", () => {
+    const bundle = products["cp12-boiler-service"];
+    assert.equal(bundle.name, "CP12 + Annual Boiler Service");
+    assert.equal(bundle.price, 90);
+    assert.equal(bundle.durationMinutes, 60);
+    // The appliance rule is shared with the CP12, not a second invented one.
+    assert.equal(bundle.includes, cp12.includes);
+    assert.equal(bundle.extraAppliancePrice, cp12.extraAppliancePrice);
+  });
+
+  test("no page claims a procedure, part or check we have not confirmed", () => {
+    assert.deepEqual(
+      filesContaining([
+        "flue test",
+        "gas pressure test",
+        "combustion analys",
+        "clean the burner",
+        "strip and clean",
+        "replace the seals",
+        "manufacturer's checklist",
+        "point service",
+        "point check",
+        "we will clean",
+        "parts included",
+        "parts are included",
+      ]),
+      [],
+    );
+  });
+
+  test("the boiler service is never sold as a guarantee", () => {
+    assert.deepEqual(
+      filesContaining([
+        "extends the life of your boiler",
+        "prevents breakdowns",
+        "prevent breakdowns",
+        "keeps your warranty valid",
+        "maintains your warranty",
+        "save you money on",
+      ]),
+      [],
+    );
+  });
+
+  test("the only saving claimed is the one the price list supports", () => {
+    /*
+      "Save £15" became sayable when the boiler service got its own published
+      price: £45 + £60 against £90 is arithmetic on two things a customer can
+      actually book. What stays forbidden is the invented kind — a crossed-out
+      price nobody was ever charged, or a discount implied to be temporary.
+    */
+    const saving = bundleSavingFor("cp12-boiler-service");
+    assert.ok(saving);
+    assert.equal(saving.saving, 15);
+    assert.equal(saving.separateTotal, products.cp12.price + products["boiler-service"].price);
+
+    assert.deepEqual(
+      filesContaining([
+        "was £",
+        "normally £",
+        "usually £",
+        "rrp",
+        "% off",
+        "half price",
+        "instead of £",
+        "reduced from",
+        "limited offer",
+      ]),
+      [],
+    );
+  });
+
+  test("the saving is derived, never typed into the copy", () => {
+    // A hardcoded "£15" would survive a price change and become a lie.
+    const offenders = [...copy]
+      .filter(([file]) => !file.endsWith("products.ts"))
+      .filter(([, contents]) => /save\s*£\s*\d/i.test(contents))
+      .map(([file]) => file);
+    assert.deepEqual(offenders, []);
+  });
+});
+
 describe("no invented facts reach the public site", () => {
   test("no review or rating markup exists, because no reviews are verified", () => {
     assert.equal(schemaSource.includes("aggregateRating"), false);
     assert.equal(schemaSource.includes('"Review"'), false);
   });
 
-  test("the published price is the one fixed price", () => {
+  test("every published price is the price its product actually charges", () => {
+    // Two services now, so this is no longer "the one price" — it is that no
+    // published figure can drift from the registry the server bills from.
+    assert.equal(products.cp12.price, 45);
+    assert.equal(products.cp12.priceTotalDisplay, "£45 total");
+    assert.equal(products["cp12-boiler-service"].price, 90);
+    assert.equal(products["cp12-boiler-service"].priceTotalDisplay, "£90 total");
+
+    for (const product of productList) {
+      assert.equal(product.priceTotalDisplay, `£${product.price} total`);
+      assert.equal(product.priceDisplay, `£${product.price}`);
+      assert.equal(calculatePrice(3, product.id).total, product.price);
+    }
+  });
+
+  test("the £45 CP12 is still the entry product and still the default", () => {
+    // The bundle was added alongside it, never in place of it.
     assert.equal(cp12.price, 45);
     assert.equal(cp12.priceTotalDisplay, "£45 total");
+    assert.equal(calculatePrice(3).total, 45);
+    assert.equal(calculatePrice(3).productId, "cp12");
+    assert.equal(cp12.durationMinutes, 45);
   });
 
   test("no cancellation or no-show charge exists anywhere", () => {
@@ -713,5 +822,106 @@ describe("no invented facts reach the public site", () => {
       .map(([file]) => file);
 
     assert.deepEqual(offenders, []);
+  });
+});
+
+/**
+ * Pricing is BSCJ's strongest competitive position, so the site is not allowed
+ * to bury it.
+ *
+ * These are structural rules about where a price must appear and what a call
+ * to action must say — deliberately not assertions about type sizes, which
+ * would break on any honest design change without protecting anything.
+ */
+describe("both prices are stated up front", () => {
+  /** Pages a customer can land on and decide from. */
+  const decisionPages = [
+    "src/app/page.tsx",
+    "src/app/gas-safety-certificate-wolverhampton/page.tsx",
+    "src/app/book/page.tsx",
+  ];
+
+  test("all three prices are published somewhere a customer will meet them", () => {
+    for (const product of productList) {
+      const surfaced = [...copy].filter(
+        ([file, contents]) =>
+          !file.startsWith("src/lib/") &&
+          (contents.includes(`products["${product.id}"]`) ||
+            contents.includes(`products.${product.id}`) ||
+            (product.id === "cp12" && /cp12\.price/.test(contents))),
+      );
+      assert.ok(
+        surfaced.length > 0,
+        `${product.name} is not published on any page`,
+      );
+    }
+  });
+
+  test("every decision page states the entry price", () => {
+    for (const page of decisionPages) {
+      const contents = copy.get(page);
+      assert.ok(contents, `${page} should exist`);
+      assert.match(
+        contents,
+        /cp12\.price(Display|TotalDisplay)|products\.cp12/,
+        `${page} does not state the £45`,
+      );
+    }
+  });
+
+  test("the bundle price is reachable without a quote or an enquiry", () => {
+    // It is published on the pricing surfaces, not hidden behind a form.
+    const surfaced = [...copy].filter(([, contents]) =>
+      contents.includes('products["cp12-boiler-service"]'),
+    );
+    assert.ok(
+      surfaced.length >= 3,
+      "the £90 should be published on more than one customer-facing surface",
+    );
+  });
+
+  test("no price is withheld pending an enquiry", () => {
+    assert.deepEqual(
+      filesContaining([
+        "request a quote",
+        "get a quote",
+        "prices from",
+        "from £",
+        "poa",
+        "price on application",
+        "contact us for pricing",
+        "call for a price",
+      ]),
+      [],
+    );
+  });
+
+  test("the booking selector leads with the price, not with prose", () => {
+    const selector = copy.get("src/components/booking/ServiceChoice.tsx");
+    assert.ok(selector, "the service selector should exist");
+    // The figure is rendered at display size; the benefit line is not.
+    assert.match(selector, /text-3xl|text-4xl|text-5xl/);
+    assert.match(selector, /priceDisplay/);
+    // And it comes from the registry rather than being typed in.
+    assert.equal(/£\d/.test(selector), false);
+  });
+
+  test("no fake urgency, discount or popularity is used to sell either price", () => {
+    // These are genuinely fixed prices. They are stated, not marketed at.
+    assert.deepEqual(
+      filesContaining([
+        "most popular",
+        "limited time",
+        "offer ends",
+        "hurry",
+        "only .. left",
+        "was £",
+        "normally £",
+        "usually £",
+        "half price",
+        "% off",
+      ]),
+      [],
+    );
   });
 });

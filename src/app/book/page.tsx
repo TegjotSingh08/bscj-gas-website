@@ -8,6 +8,7 @@ import {
   cancellationPolicy,
   cp12,
 } from "@/lib/business";
+import { products } from "@/lib/booking/products";
 import { JsonLd, breadcrumbSchema, serviceSchema } from "@/lib/schema";
 
 export const metadata: Metadata = {
@@ -35,8 +36,14 @@ export default function BookPage() {
             Book your gas safety certificate
           </h1>
 
+          {/*
+            Both prices, because both are selectable immediately below. Stating
+            only the £45 here would read as the price of whatever you pick.
+          */}
           <p className="mt-2 text-base font-bold text-flame-400 sm:mt-4 sm:text-lg">
-            {cp12.priceTotalDisplay} · {cp12.payment}
+            {cp12.priceTotalDisplay} · {products["boiler-service"].priceDisplay}{" "}
+            boiler service · {products["cp12-boiler-service"].priceDisplay} both
+            · {cp12.payment}
           </p>
 
           {/* The reassurance a phone needs, in one line. */}
@@ -78,9 +85,11 @@ export default function BookPage() {
             </h2>
             <ul className="mt-3 space-y-2 text-sm leading-relaxed text-navy-800">
               <li>
-                Count your gas appliances. {cp12.priceDisplay} covers{" "}
-                {cp12.includes}; each extra one is{" "}
-                {cp12.extraApplianceDisplay}.
+                Booking a certificate? Count your gas appliances.{" "}
+                {cp12.priceDisplay} covers {cp12.includes}; each extra one is{" "}
+                {cp12.extraApplianceDisplay}. A boiler service on its own is{" "}
+                {products["boiler-service"].priceTotalDisplay} whatever else
+                runs on gas.
               </li>
               <li>
                 If a tenant will be letting us in, have their name and number

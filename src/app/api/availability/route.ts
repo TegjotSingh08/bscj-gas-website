@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
-import { bookingConfig } from "@/lib/booking/config";
+import { bookingConfig, bookingConfigFor } from "@/lib/booking/config";
+import { isProductId, productFor, DEFAULT_PRODUCT_ID } from "@/lib/booking/products";
 import { findHeldSlots, isWellFormedToken } from "@/lib/booking/holds";
 import {
   clientKey,
@@ -28,6 +29,10 @@ export const dynamic = "force-dynamic";
  * The caller may present their own hold in headers (not the query string, so
  * the token stays out of logs and history) to keep their reserved slot visible
  * to them.
+ *
+ * Availability is product-aware, because the two products are different
+ * lengths and so rule out different times. `?product=` names one; omitting it
+ * asks for the CP12, which is what every caller written before products did.
  */
 export async function GET(request: Request) {
   pruneRateLimits();
@@ -46,6 +51,15 @@ export async function GET(request: Request) {
     );
   }
 
+  // An unrecognised product is refused rather than quietly answered with the
+  // CP12's times, which would offer a bundle customer slots it cannot honour.
+  const requestedProduct = new URL(request.url).searchParams.get("product");
+  if (requestedProduct !== null && !isProductId(requestedProduct)) {
+    return NextResponse.json({ error: "bad_product" }, { status: 400 });
+  }
+  const product = productFor(requestedProduct ?? DEFAULT_PRODUCT_ID);
+  const config = bookingConfigFor(product.id);
+
   const ownSlot = request.headers.get("x-hold-slot");
   const ownToken = request.headers.get("x-hold-token");
   const own =
@@ -54,7 +68,7 @@ export async function GET(request: Request) {
       : undefined;
 
   const now = new Date();
-  const dates = bookableDates(now);
+  const dates = bookableDates(now, config);
 
   const first = parseIsoDate(dates[0]);
   const last = parseIsoDate(dates[dates.length - 1]);
@@ -67,7 +81,7 @@ export async function GET(request: Request) {
 
   try {
     const busy = await fetchBusyPeriods(timeMin, timeMax);
-    const days = buildAvailability(dates, busy, now);
+    const days = buildAvailability(dates, busy, now, config);
 
     // Remove slots reserved by other customers. If the store is unreachable
     // this returns nothing held, and availability falls back to Google alone —
@@ -83,7 +97,11 @@ export async function GET(request: Request) {
     }));
 
     return NextResponse.json(
-      { days: withoutHeld, timeZone: bookingConfig.timeZone },
+      {
+        days: withoutHeld,
+        productId: product.id,
+        timeZone: bookingConfig.timeZone,
+      },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (error) {

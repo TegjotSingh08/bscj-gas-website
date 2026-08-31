@@ -3,6 +3,7 @@
 import { calculatePrice } from "@/lib/booking/pricing";
 import { customerTypeLabels } from "@/lib/booking/schema";
 import { business, cp12 } from "@/lib/business";
+import type { Product } from "@/lib/booking/products";
 import { formatAddressLines } from "@/lib/address/format";
 import { formatUkMobileForDisplay, normaliseUkMobile } from "@/lib/booking/contact";
 import type { Slot } from "./BookingFlow";
@@ -61,6 +62,7 @@ function Consent({
 
 export function ReviewStep({
   date,
+  product,
   slot,
   details,
   submitting,
@@ -75,6 +77,8 @@ export function ReviewStep({
   onConfirm,
 }: {
   date: string;
+  /** The service being booked. Names the product and drives the total. */
+  product: Product;
   slot: Slot;
   details: DetailsValues;
   submitting: boolean;
@@ -104,7 +108,7 @@ export function ReviewStep({
   const mobileDisplay = mobile.ok
     ? formatUkMobileForDisplay(mobile.e164)
     : details.phone;
-  const price = calculatePrice(details.applianceCount);
+  const price = calculatePrice(details.applianceCount, product.id);
 
   /** Every required confirmation, and only the ones that actually apply. */
   const canConfirm =
@@ -130,7 +134,7 @@ export function ReviewStep({
 
       <div className="mt-4 rounded-2xl border-2 border-navy-900 bg-white p-5 sm:p-6">
         <p className="text-xs font-bold uppercase tracking-wider text-flame-600">
-          Gas Safety Certificate (CP12)
+          {product.name}
         </p>
         <p className="mt-2 text-2xl font-extrabold text-navy-900">
           {longDate(date)}
@@ -165,10 +169,12 @@ export function ReviewStep({
             label="You are the"
             value={customerTypeLabels[details.customerType]}
           />
-          <Row
-            label="Appliances"
-            value={`${price.applianceCount} ${price.applianceCount === 1 ? "appliance" : "appliances"}`}
-          />
+          {price.appliancePricing && (
+            <Row
+              label="Appliances"
+              value={`${price.applianceCount} ${price.applianceCount === 1 ? "appliance" : "appliances"}`}
+            />
+          )}
           {details.tenantName || details.tenantPhone ? (
             <Row
               label="Tenant"
@@ -190,9 +196,12 @@ export function ReviewStep({
             </span>
           </div>
           {price.extraCharge > 0 && (
+            // Named, not "for the certificate": on the bundle the base buys
+            // the certificate and the service, and saying otherwise would
+            // misdescribe what the customer is agreeing to pay for.
             <p className="mt-1 text-xs text-navy-200">
-              £{price.basePrice} for the certificate, plus £{price.extraCharge}{" "}
-              for {price.extraAppliances} additional{" "}
+              £{price.basePrice} for the {price.productName}, plus £
+              {price.extraCharge} for {price.extraAppliances} additional{" "}
               {price.extraAppliances === 1 ? "appliance" : "appliances"}.
             </p>
           )}
@@ -248,11 +257,11 @@ export function ReviewStep({
           onChange={onEarlyPerformanceRequestedChange}
         >
           My appointment is inside my 14-day cancellation period. I am asking{" "}
-          {business.name} to carry out the gas safety check on that date, and I
-          understand that once the check has been carried out in full I will no
-          longer have the right to cancel it. If I cancel after the work has
-          started but before it is finished, I will pay a proportionate amount
-          for the work already done.
+          {business.name} to carry out the {product.workDescription} on that
+          date, and I understand that once the work has been carried out in
+          full I will no longer have the right to cancel it. If I cancel after
+          the work has started but before it is finished, I will pay a
+          proportionate amount for the work already done.
         </Consent>
       )}
 
@@ -264,7 +273,7 @@ export function ReviewStep({
       */}
       <p className="mt-5 rounded-xl bg-navy-50 px-4 py-3 text-sm font-semibold leading-relaxed text-navy-900">
         Confirming this booking creates a contract and an obligation to pay
-        £{price.total} for the Gas Safety Certificate. {cp12.payment} — there is
+        £{price.total} for the {product.name}. {cp12.payment} — there is
         nothing to pay now.
       </p>
 

@@ -18,6 +18,7 @@ import {
 
 const RESERVATION: Reservation = {
   token: "a".repeat(64),
+  productId: "cp12" as const,
   slotStart: "2026-08-24T16:00:00.000Z",
   slotEnd: "2026-08-24T16:45:00.000Z",
   label: "17:00",
@@ -119,6 +120,10 @@ describe("changing the reserved time", () => {
     assert.deepEqual(previousHoldFor(state), {
       slotStart: RESERVATION.slotStart,
       token: RESERVATION.token,
+      // The product travels too: how many starts the old reservation occupied
+      // depends on how long it was, and the server has to know to give them
+      // all back.
+      productId: RESERVATION.productId,
     });
   });
 
@@ -248,6 +253,10 @@ describe("changing the reserved date", () => {
     assert.deepEqual(previousHoldFor(state), {
       slotStart: RESERVATION.slotStart,
       token: RESERVATION.token,
+      // The product travels too: how many starts the old reservation occupied
+      // depends on how long it was, and the server has to know to give them
+      // all back.
+      productId: RESERVATION.productId,
     });
   });
 

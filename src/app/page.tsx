@@ -42,18 +42,32 @@ export default function HomePage() {
           </p>
 
           {/*
-            Balanced wrapping keeps "fixed £45" off a line of its own at
-            320-430px without hard-coding a break point.
+            The price used to live inside this heading, as "— fixed £45". It
+            now has its own line directly below at more than twice the size, so
+            keeping it here as well read as a stutter and cost a third line of
+            wrapping on a phone. The exact-match phrase is what the heading is
+            for; the figure speaks for itself underneath, and both the title
+            tag and the JSON-LD offers still carry the price.
           */}
           <h1 className="mt-3 max-w-3xl text-[1.75rem] font-extrabold leading-[1.15] text-balance text-white sm:mt-4 sm:text-5xl lg:text-6xl">
-            {/*
-              Non-breaking space before the dash: left to itself the line broke
-              as "Wolverhampton" / "— fixed £45", stranding the dash at the
-              start of a line.
-            */}
-            Gas Safety Certificate Wolverhampton{"\u00a0\u2014"}{" "}
-            <span className="text-flame-400">fixed {cp12.priceDisplay}</span>
+            Gas Safety Certificate Wolverhampton
           </h1>
+
+          {/*
+            The price, given the weight it earns. Pricing is BSCJ's strongest
+            competitive position, so the figure outranks the paragraph below it
+            rather than being mentioned inside one. It replaces the duplicate
+            price item that used to head the tick list, so the hero is no
+            longer than it was.
+          */}
+          <p className="mt-4 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <span className="text-6xl font-extrabold leading-none tracking-tight text-flame-400 sm:text-7xl">
+              {cp12.priceDisplay}
+            </span>
+            <span className="text-base font-bold text-white sm:text-lg">
+              total &middot; up to 3 appliances
+            </span>
+          </p>
 
           {/* Shorter on a phone; the full proposition from `sm` up. */}
           <p className="mt-3 max-w-2xl text-base leading-relaxed text-navy-100 sm:hidden">
@@ -94,11 +108,13 @@ export default function HomePage() {
           */}
           <ul className="mt-4 flex flex-wrap gap-x-3 gap-y-1.5 text-sm font-semibold text-navy-100 sm:mt-5">
             {[
-              `${cp12.priceTotalDisplay} — up to 3 appliances`,
+              // The price is stated above, at full size. Repeating it here
+              // would spend a line of the hero saying it smaller.
               "No separate call-out fee",
               "No deposit",
               cp12.payment,
               "Same-day digital copy",
+              `Extra appliances ${cp12.extraApplianceDisplay} each`,
             ].map((point) => (
               <li key={point} className="flex items-center gap-1.5">
                 <span aria-hidden="true" className="text-flame-400">
@@ -128,11 +144,11 @@ export default function HomePage() {
       <section className="mx-auto max-w-6xl px-4 py-16">
         <div className="mx-auto max-w-2xl text-center">
           <h2 className="text-3xl font-extrabold text-navy-900 sm:text-4xl">
-            One fixed price. Nothing added on the day.
+            Fixed prices, published up front.
           </h2>
           <p className="mt-4 text-base leading-relaxed text-navy-700">
-            You should know what a CP12 costs before you book it. Here is
-            exactly what {cp12.priceDisplay} gets you.
+            You should know what it costs before you book it. This is the whole
+            price list — a certificate, a boiler service, or both in one visit.
           </p>
         </div>
         <div className="mt-10">

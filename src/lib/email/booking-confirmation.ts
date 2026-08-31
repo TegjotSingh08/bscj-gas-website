@@ -50,7 +50,19 @@ export type BookingEmailInput = {
    * Rendered line by line — the email never reconstructs an address itself.
    */
   addressLines: string[];
-  applianceCount: number;
+  /** "Gas Safety Certificate (CP12)" / "CP12 + Annual Boiler Service". */
+  productName: string;
+  /** Short form for the subject line: "CP12" / "CP12 + boiler service". */
+  productSubjectName: string;
+  /** "gas safety check" / "gas safety check and annual boiler service". */
+  workDescription: string;
+  /** The product's appointment length, in minutes. */
+  appointmentMinutes: number;
+  /**
+   * Null when the service does not price by appliance — the standalone boiler
+   * service. Showing "3 appliances" there would describe work not being done.
+   */
+  applianceCount: number | null;
   /** Server-derived total. Never a client-submitted figure. */
   priceTotal: number;
   /** The terms version accepted at booking, e.g. "2026-08-22". */
@@ -90,11 +102,11 @@ function sectionLabel(text: string): string {
 export function renderBookingConfirmationEmail(
   input: BookingEmailInput,
 ): RenderedEmail {
-  const subject = `Your BSCJ Gas CP12 booking — ${input.subjectDateLabel}`;
+  const subject = `Your BSCJ Gas ${input.productSubjectName} booking — ${input.subjectDateLabel}`;
 
   // Deliberately not a repeat of the subject: it adds the time and the fact of
   // confirmation, which is what the inbox preview line is worth spending on.
-  const preheader = `Your Gas Safety Certificate appointment is confirmed for ${input.startLabel} on ${input.subjectDateLabel}. Reference ${input.reference}.`;
+  const preheader = `Your ${input.productName} appointment is confirmed for ${input.startLabel} on ${input.subjectDateLabel}. Reference ${input.reference}.`;
 
   const html = buildHtml(input, preheader);
   const text = buildText(input);
@@ -110,6 +122,7 @@ function buildHtml(input: BookingEmailInput, preheader: string): string {
     startLabel,
     endLabel,
     addressLines,
+    productName,
     applianceCount,
     priceTotal,
   } = input;
@@ -142,7 +155,7 @@ function buildHtml(input: BookingEmailInput, preheader: string): string {
               You&rsquo;re booked.
             </p>
             <p style="margin:6px 0 0;font-family:${FONT_STACK};font-size:15px;line-height:22px;color:${NAVY_800};">
-              Your Gas Safety Certificate appointment has been confirmed.
+              Your ${escapeHtml(productName)} appointment has been confirmed.
             </p>
           </td>
         </tr>
@@ -176,7 +189,7 @@ function buildHtml(input: BookingEmailInput, preheader: string): string {
               ${escapeHtml(startLabel)}&ndash;${escapeHtml(endLabel)}
             </p>
             <p style="margin:12px 0 0;font-family:${FONT_STACK};font-size:15px;color:${NAVY_800};">
-              Gas Safety Certificate (CP12)
+              ${escapeHtml(productName)}
             </p>
           </td>
         </tr>
@@ -206,12 +219,16 @@ function buildHtml(input: BookingEmailInput, preheader: string): string {
       <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
         <tr>
           <td style="padding:0 0 10px;border-bottom:1px solid ${NAVY_100};font-family:${FONT_STACK};font-size:14px;color:${NAVY_600};">Service</td>
-          <td align="right" style="padding:0 0 10px;border-bottom:1px solid ${NAVY_100};font-family:${FONT_STACK};font-size:14px;font-weight:bold;color:${NAVY_900};">Gas Safety Certificate (CP12)</td>
+          <td align="right" style="padding:0 0 10px;border-bottom:1px solid ${NAVY_100};font-family:${FONT_STACK};font-size:14px;font-weight:bold;color:${NAVY_900};">${escapeHtml(productName)}</td>
         </tr>
-        <tr>
+        ${
+          applianceCount === null
+            ? ""
+            : `<tr>
           <td style="padding:10px 0;border-bottom:1px solid ${NAVY_100};font-family:${FONT_STACK};font-size:14px;color:${NAVY_600};">Appliances</td>
           <td align="right" style="padding:10px 0;border-bottom:1px solid ${NAVY_100};font-family:${FONT_STACK};font-size:14px;font-weight:bold;color:${NAVY_900};">${escapeHtml(appliancesLabel(applianceCount))}</td>
-        </tr>
+        </tr>`
+        }
         <tr>
           <td style="padding:10px 0;border-bottom:1px solid ${NAVY_100};font-family:${FONT_STACK};font-size:14px;color:${NAVY_600};">Total</td>
           <td align="right" style="padding:10px 0;border-bottom:1px solid ${NAVY_100};font-family:${FONT_STACK};font-size:18px;font-weight:bold;color:${NAVY_900};">&pound;${priceTotal} total</td>
@@ -233,7 +250,7 @@ function buildHtml(input: BookingEmailInput, preheader: string): string {
       <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
         <tr><td class="m-step" style="padding:0 0 7px;font-family:${FONT_STACK};font-size:15px;line-height:22px;color:${NAVY_800};">1. Your appointment is now in our engineer&rsquo;s schedule.</td></tr>
         <tr><td class="m-step" style="padding:0 0 7px;font-family:${FONT_STACK};font-size:15px;line-height:22px;color:${NAVY_800};">2. Someone aged 18 or over needs to let the engineer in and give access to the boiler, the gas meter and every gas appliance being checked.</td></tr>
-        <tr><td class="m-step" style="padding:0 0 7px;font-family:${FONT_STACK};font-size:15px;line-height:22px;color:${NAVY_800};">3. The appointment usually takes about ${cp12.durationMinutes} minutes.</td></tr>
+        <tr><td class="m-step" style="padding:0 0 7px;font-family:${FONT_STACK};font-size:15px;line-height:22px;color:${NAVY_800};">3. The appointment usually takes about ${input.appointmentMinutes} minutes.</td></tr>
         <tr><td style="font-family:${FONT_STACK};font-size:15px;line-height:22px;color:${NAVY_800};">4. ${escapeHtml(cp12.payment)} &mdash; there is nothing to pay before the visit.</td></tr>
       </table>
     </td>
@@ -314,9 +331,10 @@ function buildHtml(input: BookingEmailInput, preheader: string): string {
               input.earlyPerformanceRequested
                 ? `<p class="m-body" style="margin:10px 0 0;font-family:${FONT_STACK};font-size:15px;line-height:22px;color:${NAVY_800};">
               Because your appointment is inside that 14-day period, you asked
-              us to carry out the check on your chosen date and acknowledged
-              that you would lose the right to cancel once the check has been
-              carried out in full. If you cancel after we have started but
+              us to carry out the ${escapeHtml(input.workDescription)} on your
+              chosen date and acknowledged that you would lose the right to
+              cancel once the work has been carried out in full. If you cancel
+              after we have started but
               before we finish, you pay a proportionate amount for the work
               done — not the whole ${escapeHtml(`£${input.priceTotal}`)}.
             </p>`
@@ -332,7 +350,7 @@ function buildHtml(input: BookingEmailInput, preheader: string): string {
               the Consumer Rights Act 2015.
             </p>
             <p class="m-body" style="margin:10px 0 0;font-family:${FONT_STACK};font-size:13px;line-height:20px;color:${NAVY_600};">
-              Total price: ${escapeHtml(`£${input.priceTotal}`)}, payable after the check is
+              Total price: ${escapeHtml(`£${input.priceTotal}`)}, payable after the work is
               carried out. Accepted under our Terms &amp; Conditions version
               ${escapeHtml(input.termsVersion)}, at
               <a href="${business.url}/terms" style="color:${NAVY_600};">${escapeHtml(business.domain)}/terms</a>.
@@ -434,24 +452,24 @@ function buildText(input: BookingEmailInput): string {
     "Gas Safe Registered · Wolverhampton",
     "",
     "YOU'RE BOOKED",
-    "Your Gas Safety Certificate appointment has been confirmed.",
+    `Your ${input.productName} appointment has been confirmed.`,
     "",
     `Hello ${input.customerName},`,
     "",
     "APPOINTMENT",
     input.dateLabel,
     `${input.startLabel}-${input.endLabel}`,
-    "Gas Safety Certificate (CP12)",
+    input.productName,
     "",
     "PROPERTY",
     ...input.addressLines,
     "",
     "SERVICE",
-    "Gas Safety Certificate (CP12)",
+    input.productName,
     "",
-    "APPLIANCES",
-    appliancesLabel(input.applianceCount),
-    "",
+    ...(input.applianceCount === null
+      ? []
+      : ["APPLIANCES", appliancesLabel(input.applianceCount), ""]),
     "TOTAL",
     `£${input.priceTotal} total`,
     "",
@@ -465,7 +483,7 @@ function buildText(input: BookingEmailInput): string {
     "1. Your appointment is now in our engineer's schedule.",
     "2. Someone aged 18 or over needs to let the engineer in and give access to",
     "   the boiler, the gas meter and every gas appliance being checked.",
-    `3. The appointment usually takes about ${cp12.durationMinutes} minutes.`,
+    `3. The appointment usually takes about ${input.appointmentMinutes} minutes.`,
     `4. ${cp12.payment} - there is nothing to pay before the visit.`,
     "",
     "NEED TO CHANGE SOMETHING?",
@@ -489,8 +507,9 @@ function buildText(input: BookingEmailInput): string {
     ...(input.earlyPerformanceRequested
       ? [
           "Because your appointment is inside that 14-day period, you asked us to",
-          "carry out the check on your chosen date, and acknowledged that you would",
-          "lose the right to cancel once the check has been carried out in full.",
+          `carry out the ${input.workDescription} on your chosen date, and`,
+          "acknowledged that you would lose the right to cancel once the work has",
+          "been carried out in full.",
           "If you cancel after we have started but before we finish, you pay a",
           `proportionate amount for the work done - not the whole £${input.priceTotal}.`,
         ]
@@ -503,7 +522,7 @@ function buildText(input: BookingEmailInput): string {
     "free of charge, whatever notice you give. We do not charge a cancellation",
     "fee. Nothing here affects your rights under the Consumer Rights Act 2015.",
     "",
-    `Total price: £${input.priceTotal}, payable after the check is carried out.`,
+    `Total price: £${input.priceTotal}, payable after the work is carried out.`,
     `Accepted under our Terms & Conditions version ${input.termsVersion},`,
     `at ${business.url}/terms`,
     "",

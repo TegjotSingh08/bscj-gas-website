@@ -4,7 +4,7 @@ import { useState } from "react";
 
 import { customerTypeLabels, customerTypes } from "@/lib/booking/schema";
 import { calculatePrice, MAX_APPLIANCES } from "@/lib/booking/pricing";
-import { cp12 } from "@/lib/business";
+import type { Product } from "@/lib/booking/products";
 import {
   firstInvalidField,
   hasErrors,
@@ -45,12 +45,15 @@ function FieldError({ message }: { message?: string }) {
 
 export function DetailsForm({
   values,
+  product,
   fieldErrors,
   onPatch,
   onBack,
   onContinue,
 }: {
   values: DetailsValues;
+  /** The service being booked. Every figure below is derived from it. */
+  product: Product;
   fieldErrors: Record<string, string>;
   /**
    * Applies a partial update. A patch rather than a whole object because two
@@ -67,7 +70,7 @@ export function DetailsForm({
    * red "enter your name" before they have had the chance to type one.
    */
   const [attempted, setAttempted] = useState(false);
-  const price = calculatePrice(values.applianceCount);
+  const price = calculatePrice(values.applianceCount, product.id);
   const showTenantFields =
     values.customerType === "landlord" || values.customerType === "letting-agent";
 
@@ -83,7 +86,11 @@ export function DetailsForm({
    * this module cannot determine on its own.
    */
   function currentErrors(): DetailsErrors {
-    const errors = validateDetails({ ...values, tenantPhone: values.tenantPhone });
+    const errors = validateDetails({
+      ...values,
+      tenantPhone: values.tenantPhone,
+      appliancePricing: product.appliancePricing,
+    });
     if (!errors.postcode && !addressReady) {
       errors.postcode =
         "Check your postcode so we can confirm the property is in our area.";
@@ -209,6 +216,19 @@ export function DetailsForm({
           <FieldError message={shownErrors.customerType} />
         </div>
 
+        {/*
+          Only asked where the answer changes something. A standalone boiler
+          service is one boiler at a fixed price, so counting the hob and the
+          gas fire would be asking a landlord for information nobody uses and
+          implying a surcharge that does not exist. Everything else on this
+          form — contact, address, customer type, tenant access — is needed for
+          any visit, so nothing else is conditional.
+
+          The server does not depend on this: `calculatePrice` refuses to add
+          an appliance charge to a product without appliance pricing, whatever
+          count arrives.
+        */}
+        {product.appliancePricing && (
         <div className="sm:col-span-2">
           <label htmlFor="applianceCount" className={labelClass}>
             How many gas appliances?
@@ -229,8 +249,9 @@ export function DetailsForm({
           </select>
           <p className="mt-2 text-xs leading-relaxed text-navy-600">
             Count the boiler plus anything else that runs on gas — hob, oven,
-            fire or water heater. {cp12.priceDisplay} covers {cp12.includes};
-            each extra one is {cp12.extraApplianceDisplay}.
+            fire or water heater. {product.priceDisplay} covers{" "}
+            {product.includes}; each extra one is{" "}
+            {product.extraApplianceDisplay}.
           </p>
           <p className="mt-2 rounded-lg bg-navy-50 px-3 py-2 text-sm font-bold text-navy-900">
             Your price: £{price.total} total
@@ -244,6 +265,15 @@ export function DetailsForm({
           </p>
           <FieldError message={shownErrors.applianceCount} />
         </div>
+        )}
+
+        {!product.appliancePricing && (
+          <div className="sm:col-span-2">
+            <p className="rounded-lg bg-navy-50 px-3 py-2 text-sm font-bold text-navy-900">
+              Your price: {product.priceTotalDisplay}
+            </p>
+          </div>
+        )}
 
         {showTenantFields && (
           <>

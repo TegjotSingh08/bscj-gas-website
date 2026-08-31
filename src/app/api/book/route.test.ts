@@ -23,9 +23,16 @@ let calendarBehaviour: "succeeds" | "fails" | "slot_busy" = "succeeds";
 let emailBehaviour: "sent" | "failed" | "not_configured" = "sent";
 let holdBehaviour: "valid" | "expired" | "unavailable" = "valid";
 let completedMarker: string | null = null;
+/** The product the route asked the hold store to give back. */
+let releasedProductId: string | null = null;
 
 /** What the route actually asked the calendar and the mailer to do. */
-let lastEvent: { description: string } | null = null;
+let lastEvent: {
+  description: string;
+  summary: string;
+  start: Date;
+  end: Date;
+} | null = null;
 let lastEmail: {
   to: string;
   email: { subject: string; html: string; text: string };
@@ -52,6 +59,33 @@ function eventDescription(): string {
   return lastEvent.description;
 }
 
+/** The calendar event itself, for the last booking. */
+function calendarEvent(): {
+  description: string;
+  summary: string;
+  start: Date;
+  end: Date;
+} {
+  assert.ok(lastEvent, "no calendar event was created");
+  return lastEvent;
+}
+
+/** "19:00" for an instant, in the booking timezone. */
+function londonTime(instant: Date): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/London",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(instant);
+}
+
+/** How long the appointment written to the calendar actually runs. */
+function eventMinutes(): number {
+  const event = calendarEvent();
+  return (event.end.getTime() - event.start.getTime()) / 60000;
+}
+
 /** The rendered confirmation email, for the last booking. */
 function confirmationEmail(): { subject: string; html: string; text: string } {
   assert.ok(lastEmail, "no confirmation email was sent");
@@ -64,16 +98,20 @@ function confirmationEmail(): { subject: string; html: string; text: string } {
  * 30-day horizon and the closed Saturday. A fixed calendar date would quietly
  * start failing once it fell into the past.
  */
-function slotDaysAhead(days: number): string {
+function slotDaysAhead(days: number, hour = 14): string {
   const target = new Date(Date.now() + days * 24 * 60 * 60000);
   const parts = getPartsInZone(target, "Europe/London");
   // Saturdays are not worked, so shift onto the Sunday.
-  const at14 = zonedTimeToUtc({ ...parts, hour: 14, minute: 0 }, "Europe/London");
-  if (at14.getUTCDay() === 6) {
-    return slotDaysAhead(days + 1);
+  const at = zonedTimeToUtc({ ...parts, hour, minute: 0 }, "Europe/London");
+  if (at.getUTCDay() === 6) {
+    return slotDaysAhead(days + 1, hour);
   }
-  return at14.toISOString();
+  return at.toISOString();
 }
+
+/** The last start of the working day, and the one that must never exist. */
+const SEVEN_PM = slotDaysAhead(20, 19);
+const EIGHT_PM = slotDaysAhead(20, 20);
 
 /** Inside the 14-day cancellation period, so an express request is required. */
 const SLOT_START = slotDaysAhead(3);
@@ -95,7 +133,12 @@ mock.module("@/lib/google/calendar", {
       }
       return [];
     },
-    createEvent: async (input: { description: string }) => {
+    createEvent: async (input: {
+      description: string;
+      summary: string;
+      start: Date;
+      end: Date;
+    }) => {
       calls.push("google:create-event");
       lastEvent = input;
       if (calendarBehaviour === "fails") {
@@ -129,8 +172,13 @@ mock.module("@/lib/booking/holds", {
         ? { status: "valid", secondsRemaining: 900 }
         : { status: holdBehaviour };
     },
-    releaseHold: async () => {
+    releaseHold: async (
+      _slotStart: string,
+      _token: string,
+      productId?: string,
+    ) => {
       calls.push("redis:release-hold");
+      releasedProductId = productId ?? null;
       return true;
     },
     markBookingCompleted: async () => {
@@ -256,6 +304,7 @@ beforeEach(() => {
   lastEmail = null;
   lastNotification = null;
   notificationBehaviour = "sent";
+  releasedProductId = null;
 });
 
 describe("transaction order", () => {
@@ -935,5 +984,432 @@ describe("BSCJ is notified when a booking is created", () => {
       assert.equal(body.includes("event-abc123"), false);
       assert.equal(/terms accepted/i.test(body), false);
     }
+  });
+});
+
+/**
+ * The second product, and the rule that makes it safe: the browser names a
+ * service and nothing else. Everything a booking costs and everything it
+ * occupies in the diary is decided here, from the server's own registry.
+ */
+describe("the service being booked is the server's decision", () => {
+  test("omitting the product books the £45 CP12, exactly as before", async () => {
+    const response = await POST(bookingRequest());
+    const body = await response.json();
+
+    assert.equal(body.booking.productId, "cp12");
+    assert.equal(body.booking.productName, "Gas Safety Certificate (CP12)");
+    assert.equal(body.booking.priceTotal, 45);
+    assert.equal(eventMinutes(), 45);
+  });
+
+  test("the bundle books at £90 for sixty minutes", async () => {
+    const response = await POST(
+      bookingRequest({ productId: "cp12-boiler-service" }),
+    );
+    const body = await response.json();
+
+    assert.equal(body.booking.productId, "cp12-boiler-service");
+    assert.equal(body.booking.productName, "CP12 + Annual Boiler Service");
+    assert.equal(body.booking.priceTotal, 90);
+    assert.equal(eventMinutes(), 60);
+  });
+
+  test("an unknown product is refused before anything is booked", async () => {
+    const response = await POST(bookingRequest({ productId: "cp12-free" }));
+    const body = await response.json();
+
+    assert.equal(response.status, 400);
+    assert.equal(body.error, "validation_failed");
+    assert.ok(body.fieldErrors.productId);
+    assert.equal(calls.includes("google:create-event"), false);
+    assert.equal(calls.includes("resend:send"), false);
+  });
+
+  test("a product of the wrong type is refused, not coerced", async () => {
+    for (const productId of [42, null, ["cp12"], { id: "cp12" }, ""]) {
+      const response = await POST(bookingRequest({ productId }));
+      assert.equal(response.status, 400, `accepted ${JSON.stringify(productId)}`);
+    }
+  });
+
+  test("a submitted price cannot change what the customer is charged", async () => {
+    const response = await POST(
+      bookingRequest({
+        productId: "cp12-boiler-service",
+        priceTotal: 1,
+        price: 1,
+        basePrice: 1,
+        total: 1,
+      }),
+    );
+    const body = await response.json();
+
+    assert.equal(body.booking.priceTotal, 90);
+    assert.match(eventDescription(), /Price: £90 total/);
+  });
+
+  test("a submitted duration cannot change how long the booking runs", async () => {
+    // A bundle claiming to be a quarter of an hour still occupies the hour it
+    // actually needs — otherwise the diary would be quietly oversold.
+    const response = await POST(
+      bookingRequest({
+        productId: "cp12-boiler-service",
+        durationMinutes: 15,
+        appointmentMinutes: 15,
+        slotEnd: new Date(new Date(SLOT_START).getTime() + 15 * 60000).toISOString(),
+      }),
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(eventMinutes(), 60);
+  });
+
+  test("a CP12 claiming to be an hour still takes forty-five minutes", async () => {
+    await POST(bookingRequest({ productId: "cp12", durationMinutes: 60 }));
+    assert.equal(eventMinutes(), 45);
+  });
+
+  test("extra appliances add £15 each, on either product", async () => {
+    const cp12Response = await POST(bookingRequest({ applianceCount: 4 }));
+    assert.equal((await cp12Response.json()).booking.priceTotal, 60);
+
+    const bundleOne = await POST(
+      bookingRequest({
+        productId: "cp12-boiler-service",
+        applianceCount: 4,
+        idempotencyKey: "attempt-0002",
+      }),
+    );
+    assert.equal((await bundleOne.json()).booking.priceTotal, 105);
+
+    const bundleTwo = await POST(
+      bookingRequest({
+        productId: "cp12-boiler-service",
+        applianceCount: 5,
+        idempotencyKey: "attempt-0003",
+      }),
+    );
+    assert.equal((await bundleTwo.json()).booking.priceTotal, 120);
+  });
+});
+
+describe("the calendar entry says which service was booked", () => {
+  test("a CP12 keeps the summary it has always had", async () => {
+    await POST(bookingRequest());
+    assert.match(calendarEvent().summary, /^CP12 — /);
+  });
+
+  test("a bundle is distinguishable at a glance in the diary", async () => {
+    await POST(bookingRequest({ productId: "cp12-boiler-service" }));
+    assert.match(calendarEvent().summary, /^CP12 \+ Boiler Service — /);
+  });
+
+  test("the event records the service and its length", async () => {
+    await POST(bookingRequest({ productId: "cp12-boiler-service" }));
+    const description = eventDescription();
+    assert.match(description, /Service: CP12 \+ Annual Boiler Service/);
+    assert.match(description, /Appointment: 60 minutes/);
+  });
+
+  test("the hold is given back for the product that took it", async () => {
+    await POST(bookingRequest({ productId: "cp12-boiler-service" }));
+    // A bundle reserved more than one start; releasing the wrong product would
+    // leave the spillover held for the rest of its TTL.
+    assert.equal(releasedProductId, "cp12-boiler-service");
+  });
+});
+
+describe("both emails name the service that was booked", () => {
+  test("the customer's confirmation names the CP12 and its price", async () => {
+    await POST(bookingRequest());
+    const email = confirmationEmail();
+
+    assert.match(email.subject, /CP12 booking/);
+    for (const body of [email.html, email.text]) {
+      assert.ok(body.includes("Gas Safety Certificate (CP12)"));
+      assert.ok(body.includes("45"));
+    }
+  });
+
+  test("the customer's confirmation names the bundle and its price", async () => {
+    await POST(bookingRequest({ productId: "cp12-boiler-service" }));
+    const email = confirmationEmail();
+
+    assert.match(email.subject, /CP12 \+ boiler service booking/);
+    for (const body of [email.html, email.text]) {
+      assert.ok(body.includes("CP12 + Annual Boiler Service"));
+      assert.ok(body.includes("90"));
+    }
+  });
+
+  test("the internal alert names the CP12, exactly as it always did", async () => {
+    await POST(bookingRequest({ slotStart: FAR_SLOT_START }));
+    assert.match(notificationEmail().subject, /^NEW CP12 BOOKING — /);
+  });
+
+  test("the internal alert names the bundle", async () => {
+    await POST(
+      bookingRequest({
+        slotStart: FAR_SLOT_START,
+        productId: "cp12-boiler-service",
+      }),
+    );
+    const email = notificationEmail();
+
+    assert.match(email.subject, /^NEW CP12 \+ BOILER SERVICE BOOKING — /);
+    assert.ok(email.html.includes("CP12 + Annual Boiler Service"));
+    assert.ok(email.text.includes("CP12 + Annual Boiler Service"));
+  });
+
+  test("the internal alert carries the server-derived bundle total", async () => {
+    await POST(
+      bookingRequest({
+        slotStart: FAR_SLOT_START,
+        productId: "cp12-boiler-service",
+        applianceCount: 4,
+        priceTotal: 1,
+      }),
+    );
+    assert.ok(notificationEmail().text.includes("£105"));
+  });
+
+  test("a future bundle gets the normal subject, not the urgent one", async () => {
+    /*
+      The urgent form is proved deterministically for both products in
+      booking-notification.test.ts, which drives the builder directly. It is
+      not asserted through the route for the same reason the CP12's is not: a
+      same-day slot is only bookable in the early hours, so the result would
+      depend on the clock. What the route can prove is that adding a product
+      did not disturb the branch.
+    */
+    await POST(
+      bookingRequest({
+        slotStart: FAR_SLOT_START,
+        productId: "cp12-boiler-service",
+      }),
+    );
+    assert.equal(/URGENT/.test(notificationEmail().subject), false);
+  });
+});
+
+/**
+ * The end of the working day, enforced where it actually matters: at the
+ * write, not just in what the site offered.
+ *
+ * An appointment must finish inside working hours; the 15-minute buffer is
+ * internal and may run past closing on the last job. So 19:00 is bookable for
+ * both products — 19:00–19:45 and 19:00–20:00 — and 20:00 is bookable for
+ * neither. Confirmed 31 August 2026.
+ */
+describe("the 19:00 boundary is enforced at the booking itself", () => {
+  test("a CP12 books at 19:00 and runs to 19:45", async () => {
+    const response = await POST(bookingRequest({ slotStart: SEVEN_PM }));
+    assert.equal(response.status, 200);
+
+    const event = calendarEvent();
+    assert.equal(eventMinutes(), 45);
+    assert.equal(londonTime(event.start), "19:00");
+    assert.equal(londonTime(event.end), "19:45");
+  });
+
+  test("a bundle books at 19:00 and runs to exactly 20:00", async () => {
+    const response = await POST(
+      bookingRequest({ slotStart: SEVEN_PM, productId: "cp12-boiler-service" }),
+    );
+    assert.equal(response.status, 200);
+
+    const event = calendarEvent();
+    assert.equal(eventMinutes(), 60);
+    assert.equal(londonTime(event.start), "19:00");
+    assert.equal(
+      londonTime(event.end),
+      "20:00",
+      "the appointment must end exactly at closing, not before it",
+    );
+  });
+
+  test("the buffer running to 20:15 is never written into the event", async () => {
+    // The customer's appointment is what goes in the diary. The buffer is
+    // scheduling protection, and it is applied by widening busy periods when
+    // the next slot is offered — never by lengthening this booking.
+    await POST(
+      bookingRequest({ slotStart: SEVEN_PM, productId: "cp12-boiler-service" }),
+    );
+    assert.equal(eventMinutes(), 60);
+    assert.notEqual(eventMinutes(), 75);
+  });
+
+  test("the confirmation tells the customer 19:00–20:00", async () => {
+    const response = await POST(
+      bookingRequest({ slotStart: SEVEN_PM, productId: "cp12-boiler-service" }),
+    );
+    const body = await response.json();
+
+    assert.equal(body.booking.startLabel, "19:00");
+    assert.equal(body.booking.endLabel, "20:00");
+    for (const format of [confirmationEmail().html, confirmationEmail().text]) {
+      assert.ok(format.includes("19:00"));
+      assert.ok(format.includes("20:00"));
+    }
+  });
+
+  test("neither product may start at 20:00", async () => {
+    for (const productId of ["cp12", "cp12-boiler-service"]) {
+      const response = await POST(
+        bookingRequest({ slotStart: EIGHT_PM, productId }),
+      );
+      const body = await response.json();
+
+      assert.equal(response.status, 409, `20:00 accepted for ${productId}`);
+      assert.equal(body.error, "slot_taken");
+      assert.equal(calls.includes("google:create-event"), false);
+    }
+  });
+
+  test("a 20:00 start is refused before anything is written", async () => {
+    await POST(
+      bookingRequest({ slotStart: EIGHT_PM, productId: "cp12-boiler-service" }),
+    );
+    // The availability re-check is the gate, and it closes ahead of the write.
+    assert.ok(calls.includes("google:freebusy"));
+    assert.equal(calls.includes("google:create-event"), false);
+    assert.equal(calls.includes("resend:send"), false);
+    assert.equal(calls.includes("resend:notify"), false);
+  });
+});
+
+/**
+ * The standalone Annual Boiler Service.
+ *
+ * The rule that matters most here is a negative one: the certificate's
+ * extra-appliance surcharge must not be able to reach it. £60 is £60.
+ */
+describe("the standalone boiler service is a fixed £60", () => {
+  const SERVICE = "boiler-service";
+
+  test("it books at £60 for its sixty-minute allocation", async () => {
+    const response = await POST(bookingRequest({ productId: SERVICE }));
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.booking.productId, SERVICE);
+    assert.equal(body.booking.productName, "Annual Boiler Service");
+    assert.equal(body.booking.priceTotal, 60);
+    assert.equal(eventMinutes(), 60);
+  });
+
+  test("no appliance count can add a surcharge to it", async () => {
+    for (const applianceCount of [1, 3, 4, 5, 12]) {
+      const response = await POST(
+        bookingRequest({
+          productId: SERVICE,
+          applianceCount,
+          idempotencyKey: `service-${applianceCount}`,
+        }),
+      );
+      const body = await response.json();
+      assert.equal(
+        body.booking.priceTotal,
+        60,
+        `${applianceCount} appliances changed the price`,
+      );
+    }
+  });
+
+  test("a submitted price cannot change what it costs", async () => {
+    const response = await POST(
+      bookingRequest({
+        productId: SERVICE,
+        priceTotal: 1,
+        price: 1,
+        basePrice: 1,
+        extraAppliancePrice: 15,
+      }),
+    );
+    assert.equal((await response.json()).booking.priceTotal, 60);
+    assert.match(eventDescription(), /Price: £60 total/);
+  });
+
+  test("a submitted duration cannot change how long it runs", async () => {
+    await POST(
+      bookingRequest({
+        productId: SERVICE,
+        durationMinutes: 15,
+        appointmentMinutes: 15,
+      }),
+    );
+    assert.equal(eventMinutes(), 60);
+  });
+
+  test("the diary entry names the service and carries no appliance count", async () => {
+    await POST(bookingRequest({ productId: SERVICE, applianceCount: 5 }));
+
+    assert.match(calendarEvent().summary, /^Boiler Service — /);
+    const description = eventDescription();
+    assert.match(description, /Service: Annual Boiler Service/);
+    assert.match(description, /Appointment: 60 minutes/);
+    // An appliance count here would describe work that is not being done.
+    assert.equal(/Appliances:/.test(description), false);
+  });
+
+  test("both emails name the service and its price, without appliances", async () => {
+    await POST(
+      bookingRequest({
+        slotStart: FAR_SLOT_START,
+        productId: SERVICE,
+        applianceCount: 5,
+      }),
+    );
+
+    const customer = confirmationEmail();
+    assert.match(customer.subject, /Boiler Service booking/);
+    for (const body of [customer.html, customer.text]) {
+      assert.ok(body.includes("Annual Boiler Service"));
+      assert.ok(body.includes("60"));
+      assert.equal(/\bappliances\b/i.test(body), false);
+    }
+
+    const internal = notificationEmail();
+    assert.match(internal.subject, /^NEW BOILER SERVICE BOOKING — /);
+    for (const body of [internal.html, internal.text]) {
+      assert.ok(body.includes("Annual Boiler Service"));
+      assert.ok(body.includes("60"));
+      assert.equal(/appliance/i.test(body), false);
+    }
+  });
+
+  test("19:00 is valid and runs to exactly 20:00", async () => {
+    const response = await POST(
+      bookingRequest({ slotStart: SEVEN_PM, productId: SERVICE }),
+    );
+    assert.equal(response.status, 200);
+    assert.equal(eventMinutes(), 60);
+    assert.equal(londonTime(calendarEvent().start), "19:00");
+    assert.equal(londonTime(calendarEvent().end), "20:00");
+  });
+
+  test("20:00 is refused, as it is for every product", async () => {
+    const response = await POST(
+      bookingRequest({ slotStart: EIGHT_PM, productId: SERVICE }),
+    );
+    assert.equal(response.status, 409);
+    assert.equal(calls.includes("google:create-event"), false);
+  });
+
+  test("the certificate products are untouched by any of this", async () => {
+    const cp12 = await POST(bookingRequest({ applianceCount: 4 }));
+    assert.equal((await cp12.json()).booking.priceTotal, 60);
+    assert.equal(eventMinutes(), 45);
+
+    const bundle = await POST(
+      bookingRequest({
+        productId: "cp12-boiler-service",
+        applianceCount: 4,
+        idempotencyKey: "bundle-regression",
+      }),
+    );
+    assert.equal((await bundle.json()).booking.priceTotal, 105);
+    assert.equal(eventMinutes(), 60);
   });
 });

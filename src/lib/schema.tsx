@@ -6,6 +6,7 @@ import {
   registeredOffice,
   serviceAreas,
 } from "./business";
+import { productList } from "./booking/products";
 import { faqs } from "./faqs";
 
 /**
@@ -77,19 +78,29 @@ export const serviceSchema = {
   serviceType: "Landlord Gas Safety Record (CP12)",
   provider: { "@id": `${business.url}/#business` },
   areaServed: serviceAreas.map((area) => ({ "@type": "City", name: area })),
-  offers: {
+  /*
+    Both bookable services, built from the same registry the booking engine
+    prices from — so a published offer cannot drift from what a customer is
+    actually charged.
+
+    The bundle's description says only what has been confirmed: a CP12 plus an
+    annual boiler service. Nothing here describes what that service includes,
+    because nothing about that has been specified.
+  */
+  offers: productList.map((product) => ({
     "@type": "Offer",
-    price: cp12.price,
+    name: product.name,
+    price: product.price,
     priceCurrency: "GBP",
     availability: "https://schema.org/InStock",
-    description: `Fixed total price covering ${cp12.includes}. Additional appliances ${cp12.extraApplianceDisplay} each.`,
+    description: `Fixed total price covering ${product.includes}. Additional appliances ${product.extraApplianceDisplay} each.`,
     url: `${business.url}/book`,
     priceSpecification: {
       "@type": "PriceSpecification",
-      price: cp12.price,
+      price: product.price,
       priceCurrency: "GBP",
     },
-  },
+  })),
 } as const;
 
 export const faqSchema = {

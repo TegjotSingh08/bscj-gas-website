@@ -2,12 +2,15 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { releaseHold } from "@/lib/booking/holds";
+import { DEFAULT_PRODUCT_ID, PRODUCT_IDS } from "@/lib/booking/products";
 
 export const dynamic = "force-dynamic";
 
 const schema = z.object({
   slotStart: z.string().datetime(),
   token: z.string().regex(/^[0-9a-f]{64}$/),
+  /** Decides which keys the reservation occupied. Absent means the CP12. */
+  productId: z.enum(PRODUCT_IDS).default(DEFAULT_PRODUCT_ID),
 });
 
 /**
@@ -31,6 +34,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ released: false }, { status: 400 });
   }
 
-  const released = await releaseHold(parsed.data.slotStart, parsed.data.token);
+  const released = await releaseHold(
+    parsed.data.slotStart,
+    parsed.data.token,
+    parsed.data.productId,
+  );
   return NextResponse.json({ released });
 }

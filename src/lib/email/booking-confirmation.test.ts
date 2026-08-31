@@ -18,6 +18,10 @@ const BASE: BookingEmailInput = {
   endLabel: "17:45",
   subjectDateLabel: "Monday 24 August",
   addressLines: ["24 Example Road", "Wolverhampton", "WV1 1AA"],
+  productName: "Gas Safety Certificate (CP12)",
+  productSubjectName: "CP12",
+  workDescription: "gas safety check",
+  appointmentMinutes: 45,
   applianceCount: 1,
   priceTotal: 45,
   termsVersion: "2026-08-22",
@@ -480,5 +484,72 @@ describe("the keep-this-email reminder", () => {
     assert.ok(!/spam/i.test(html));
     assert.ok(!/junk/i.test(text));
     assert.ok(!/spam/i.test(text));
+  });
+});
+
+/**
+ * The customer's own copy has to name what they bought. It is the durable
+ * record of the contract, so "Gas Safety Certificate" on a £90 booking would
+ * be describing the wrong service.
+ */
+describe("the confirmation names the service booked", () => {
+  const bundle = {
+    productName: "CP12 + Annual Boiler Service",
+    productSubjectName: "CP12 + boiler service",
+    workDescription: "gas safety check and annual boiler service",
+    appointmentMinutes: 60,
+    priceTotal: 90,
+  };
+
+  test("a CP12 subject and body are unchanged", () => {
+    const rendered = render({});
+    assert.match(rendered.subject, /Your BSCJ Gas CP12 booking — /);
+    for (const format of ["html", "text"] as const) {
+      assert.ok(rendered[format].includes("Gas Safety Certificate (CP12)"));
+      assert.ok(rendered[format].includes("about 45 minutes"));
+    }
+  });
+
+  test("a bundle names itself in the subject", () => {
+    assert.match(
+      render(bundle).subject,
+      /Your BSCJ Gas CP12 \+ boiler service booking — /,
+    );
+  });
+
+  test("a bundle names itself and its length in both formats", () => {
+    const rendered = render(bundle);
+    for (const format of ["html", "text"] as const) {
+      assert.ok(rendered[format].includes("CP12 + Annual Boiler Service"));
+      assert.ok(rendered[format].includes("about 60 minutes"));
+      assert.ok(rendered[format].includes("90"));
+    }
+  });
+
+  test("the appointment length shown is the product's, not a constant", () => {
+    assert.ok(!render(bundle).text.includes("about 45 minutes"));
+    assert.ok(!render({}).text.includes("about 60 minutes"));
+  });
+
+  /*
+    Regulation 16 again: the durable record of what was agreed has to describe
+    the work that was actually contracted, not a generic "check", or a customer
+    who bought a service would have written confirmation of an inspection.
+  */
+  test("an early start describes the work actually booked", () => {
+    const rendered = render({ ...bundle, earlyPerformanceRequested: true });
+    for (const format of ["html", "text"] as const) {
+      assert.ok(
+        rendered[format].includes("gas safety check and annual boiler service"),
+      );
+    }
+  });
+
+  test("a CP12 early start still describes a gas safety check", () => {
+    const rendered = render({ earlyPerformanceRequested: true });
+    for (const format of ["html", "text"] as const) {
+      assert.ok(rendered[format].includes("gas safety check"));
+      assert.ok(!rendered[format].includes("boiler service"));
+    }
   });
 });

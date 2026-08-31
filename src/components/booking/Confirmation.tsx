@@ -5,6 +5,8 @@ import { emailNotice } from "@/lib/booking/confirmation-notice";
 
 export type ConfirmedBooking = {
   reference: string;
+  /** The service booked, named by the server. */
+  productName: string;
   dateLabel: string;
   startLabel: string;
   endLabel: string;
@@ -115,6 +117,12 @@ export function Confirmation({ booking }: { booking: ConfirmedBooking }) {
             */}
             <dd className="text-base font-bold text-navy-900">
               {booking.propertyAddress}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-sm font-semibold text-navy-600">Service</dt>
+            <dd className="text-base font-bold text-navy-900">
+              {booking.productName}
             </dd>
           </div>
           <div>

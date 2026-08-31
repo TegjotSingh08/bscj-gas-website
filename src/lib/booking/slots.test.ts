@@ -1,7 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 
-import { bookingConfig, blockMinutes } from "./config";
+import { blockMinutesFor, bookingConfig, bookingConfigFor } from "./config";
 import {
   bookableDates,
   buildAvailability,
@@ -29,12 +29,13 @@ function at(iso: string, hour: number, minute = 0): Date {
 }
 
 describe("working hours generation", () => {
-  test("slots run from 10:00 and stop when the job plus buffer would overrun", () => {
+  test("slots run from 10:00 and stop when the appointment would overrun", () => {
     const slots = candidateSlotsForDate(BST_WEDNESDAY);
     const labels = slots.map((s) => timeLabelInZone(s.start, bookingConfig.timeZone));
 
     assert.equal(labels[0], "10:00");
-    // 19:00 + 45min + 15min buffer = 20:00 exactly, so 19:00 is the last slot.
+    // 19:00 + 45min = 19:45, inside hours. 20:00 + 45min would overrun, so
+    // 19:00 is the last start.
     assert.equal(labels.at(-1), "19:00");
     assert.equal(labels.length, 10);
   });
@@ -42,7 +43,7 @@ describe("working hours generation", () => {
   test("appointment length and buffer come from the shared config", () => {
     assert.equal(bookingConfig.appointmentMinutes, 45);
     assert.equal(bookingConfig.bufferMinutes, 15);
-    assert.equal(blockMinutes, 60);
+    assert.equal(blockMinutesFor(bookingConfig), 60);
   });
 
   test("no slots are offered on a Saturday", () => {
@@ -336,5 +337,137 @@ describe("booking form validation", () => {
 
   test("optional tenant and access fields may be omitted", () => {
     assert.equal(bookingSchema.safeParse(valid).success, true);
+  });
+});
+
+/**
+ * The rule that lets a 60-minute bundle be sold at 19:00.
+ *
+ * An appointment must finish inside working hours. The 15-minute buffer is
+ * internal scheduling protection, not part of what the customer books, so it
+ * may run past closing on the last job of the day — but it is still enforced
+ * in full between two bookings. Confirmed 31 August 2026; see
+ * docs/business-details.md.
+ */
+describe("appointment length versus the working-hours boundary", () => {
+  const bundleConfig = bookingConfigFor("cp12-boiler-service");
+
+  function labels(isoDate: string, config = bookingConfig): string[] {
+    return candidateSlotsForDate(isoDate, config).map((slot) =>
+      timeLabelInZone(slot.start, config.timeZone),
+    );
+  }
+
+  test("the CP12 grid is exactly what it always was", () => {
+    assert.equal(bookingConfigFor("cp12").appointmentMinutes, 45);
+    assert.deepEqual(labels(BST_WEDNESDAY), [
+      "10:00",
+      "11:00",
+      "12:00",
+      "13:00",
+      "14:00",
+      "15:00",
+      "16:00",
+      "17:00",
+      "18:00",
+      "19:00",
+    ]);
+  });
+
+  test("the bundle is an hour long", () => {
+    assert.equal(bundleConfig.appointmentMinutes, 60);
+    assert.equal(blockMinutesFor(bundleConfig), 75);
+  });
+
+  test("the bundle still offers 19:00, and it runs to 20:00", () => {
+    const slots = candidateSlotsForDate(BST_WEDNESDAY, bundleConfig);
+    const last = slots.at(-1);
+    assert.ok(last);
+
+    assert.equal(timeLabelInZone(last.start, bundleConfig.timeZone), "19:00");
+    assert.equal(timeLabelInZone(last.end, bundleConfig.timeZone), "20:00");
+    assert.equal((last.end.getTime() - last.start.getTime()) / 60000, 60);
+  });
+
+  test("the buffer running to 20:15 does not invalidate the 19:00 bundle", () => {
+    const last = candidateSlotsForDate(BST_WEDNESDAY, bundleConfig).at(-1);
+    assert.ok(last);
+
+    // The block genuinely does overrun the working day. That is the point:
+    // the boundary is the appointment, not the block.
+    const blockEnd = new Date(
+      last.start.getTime() + blockMinutesFor(bundleConfig) * 60000,
+    );
+    assert.equal(timeLabelInZone(blockEnd, bundleConfig.timeZone), "20:15");
+    assert.ok(
+      blockMinutesFor(bundleConfig) >
+        bundleConfig.workingHours.endMinutes - (19 * 60),
+    );
+  });
+
+  test("neither product ever offers a start after 19:00", () => {
+    for (const config of [bookingConfig, bundleConfig]) {
+      const starts = labels(BST_WEDNESDAY, config);
+      assert.equal(starts.at(-1), "19:00");
+      assert.equal(starts.includes("20:00"), false);
+      assert.equal(starts.length, 10);
+    }
+  });
+
+  test("both products are offered the same ten hourly starts", () => {
+    // The bundle is longer, but it does not lose a slot to that — which is
+    // what the appointment-versus-buffer distinction was decided to protect.
+    assert.deepEqual(labels(BST_WEDNESDAY), labels(BST_WEDNESDAY, bundleConfig));
+  });
+
+  test("a bundle is validated against the bundle's own length", () => {
+    const nineteen = candidateSlotsForDate(BST_WEDNESDAY, bundleConfig).at(-1);
+    assert.ok(nineteen);
+    const day = at("2026-08-18", 6);
+
+    assert.equal(
+      isSlotStillAvailable(
+        nineteen.start.toISOString(),
+        [],
+        day,
+        bundleConfig,
+      ),
+      true,
+    );
+  });
+
+  test("the buffer is still enforced in full between two bookings", () => {
+    // A 19:00–20:00 bundle blocks from 18:45: the buffer is only forgiving at
+    // the end of the day, never between jobs.
+    const bundleBusy: Interval[] = [
+      { start: at(BST_WEDNESDAY, 19), end: at(BST_WEDNESDAY, 20) },
+    ];
+    const free = filterAvailableSlots(
+      candidateSlotsForDate(BST_WEDNESDAY),
+      bundleBusy,
+      at("2026-08-18", 6),
+    );
+    const open = free.map((s) => timeLabelInZone(s.start, bookingConfig.timeZone));
+
+    assert.equal(open.includes("19:00"), false);
+    assert.equal(open.includes("18:00"), true, "18:00–18:45 clears 19:00 by 15m");
+  });
+
+  test("an 18:00 bundle blocks the 19:00 that follows it", () => {
+    // 18:00–19:00 plus the buffer reaches 19:15, so nothing may start at 19:00.
+    const busy: Interval[] = [
+      { start: at(BST_WEDNESDAY, 18), end: at(BST_WEDNESDAY, 19) },
+    ];
+    const free = filterAvailableSlots(
+      candidateSlotsForDate(BST_WEDNESDAY, bundleConfig),
+      busy,
+      at("2026-08-18", 6),
+      bundleConfig,
+    );
+    const open = free.map((s) => timeLabelInZone(s.start, bundleConfig.timeZone));
+
+    assert.equal(open.includes("19:00"), false);
+    assert.equal(open.includes("17:00"), false, "17:00–18:00 would abut 18:00");
+    assert.equal(open.includes("16:00"), true);
   });
 });

@@ -31,6 +31,8 @@ const BASE: BookingNotificationInput = {
   customerPhone: "+447700900123",
   customerEmail: "jane@example.com",
   customerType: "Landlord",
+  productName: "Gas Safety Certificate (CP12)",
+  productSubjectName: "CP12",
   applianceCount: 3,
   priceTotal: 45,
   sameDay: false,
@@ -295,5 +297,57 @@ describe("customer-controlled values are escaped", () => {
 
   test("the plain-text part needs no escaping and keeps the raw value", () => {
     assert.ok(injected.text.includes('<script>alert("xss")</script>'));
+  });
+});
+
+/**
+ * The alert has to say which service is being turned up for. A 45-minute
+ * certificate and an hour-long service are different days' work.
+ */
+describe("the alert names the service", () => {
+  const bundle = {
+    productName: "CP12 + Annual Boiler Service",
+    productSubjectName: "CP12 + boiler service",
+  };
+
+  test("a CP12 subject is unchanged, in both forms", () => {
+    assert.match(render({}).subject, /^NEW CP12 BOOKING — /);
+    assert.match(
+      render({ sameDay: true }).subject,
+      /^URGENT — SAME-DAY CP12 BOOKING — /,
+    );
+  });
+
+  test("a bundle names itself in both forms", () => {
+    assert.match(render(bundle).subject, /^NEW CP12 \+ BOILER SERVICE BOOKING — /);
+    assert.match(
+      render({ ...bundle, sameDay: true }).subject,
+      /^URGENT — SAME-DAY CP12 \+ BOILER SERVICE BOOKING — /,
+    );
+  });
+
+  test("the service and its total appear in both parts of the alert", () => {
+    const rendered = render({ ...bundle, priceTotal: 105 });
+    for (const body of [rendered.html, rendered.text]) {
+      assert.ok(body.includes("CP12 + Annual Boiler Service"));
+      assert.ok(body.includes("105"));
+    }
+  });
+
+  test("same-day urgency is unaffected by which service was booked", () => {
+    // The flag is computed from the slot alone; the product only changes the
+    // words around it.
+    const now = new Date("2026-08-27T09:00:00Z");
+    for (const product of [{}, bundle]) {
+      void product;
+      assert.equal(
+        isSameDay(new Date("2026-08-27T18:00:00Z"), now, "Europe/London"),
+        true,
+      );
+      assert.equal(
+        isSameDay(new Date("2026-08-28T08:00:00Z"), now, "Europe/London"),
+        false,
+      );
+    }
   });
 });

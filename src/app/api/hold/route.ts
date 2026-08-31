@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
-import { bookingConfig } from "@/lib/booking/config";
+import { bookingConfig, bookingConfigFor } from "@/lib/booking/config";
 import {
   acquireHold,
   HOLD_DURATION_SECONDS,
   isWellFormedToken,
   releaseHold,
 } from "@/lib/booking/holds";
+import { PRODUCT_IDS, DEFAULT_PRODUCT_ID, productFor } from "@/lib/booking/products";
 import {
   clientKey,
   pruneRateLimits,
@@ -23,12 +24,28 @@ import {
 
 export const dynamic = "force-dynamic";
 
+/** The appointment end, derived from the product — never from the request. */
+function slotEndFor(slotStartIso: string, durationMinutes: number): string {
+  return new Date(
+    new Date(slotStartIso).getTime() + durationMinutes * 60000,
+  ).toISOString();
+}
+
+/**
+ * The browser names a product; it never states a duration. Anything outside
+ * the registry is refused outright, and an absent id is the CP12 — so a
+ * request written before products existed still reserves a 45-minute slot.
+ */
+const productId = z.enum(PRODUCT_IDS).default(DEFAULT_PRODUCT_ID);
+
 const acquireSchema = z.object({
   slotStart: z.string().datetime(),
+  productId,
   previous: z
     .object({
       slotStart: z.string().datetime(),
       token: z.string().regex(/^[0-9a-f]{64}$/),
+      productId,
     })
     .optional(),
 });
@@ -36,6 +53,7 @@ const acquireSchema = z.object({
 const releaseSchema = z.object({
   slotStart: z.string().datetime(),
   token: z.string().regex(/^[0-9a-f]{64}$/),
+  productId,
 });
 
 /** Reserves a slot for this customer while they finish the booking. */
@@ -69,6 +87,9 @@ export async function POST(request: Request) {
   }
 
   const { slotStart, previous } = parsed.data;
+  const product = productFor(parsed.data.productId);
+  // Every availability decision below is made with THIS product's length.
+  const config = bookingConfigFor(product.id);
   const now = new Date();
 
   // The slot must be a real configured slot and still free in Google before
@@ -78,7 +99,7 @@ export async function POST(request: Request) {
     const windowEnd = new Date(new Date(slotStart).getTime() + 24 * 60 * 60000);
     const busy = await fetchBusyPeriods(windowStart, windowEnd);
 
-    if (!isSlotStillAvailable(slotStart, busy, now)) {
+    if (!isSlotStillAvailable(slotStart, busy, now, config)) {
       return NextResponse.json(
         {
           error: "slot_taken",
@@ -98,7 +119,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "unknown" }, { status: 500 });
   }
 
-  const outcome = await acquireHold(slotStart, previous);
+  const outcome = await acquireHold(slotStart, product.id, previous);
 
   if (outcome.status === "taken") {
     return NextResponse.json(
@@ -118,6 +139,8 @@ export async function POST(request: Request) {
       held: false,
       degraded: true,
       slotStart,
+      slotEnd: slotEndFor(slotStart, product.durationMinutes),
+      productId: product.id,
       timeZone: bookingConfig.timeZone,
     });
   }
@@ -127,6 +150,10 @@ export async function POST(request: Request) {
     degraded: false,
     token: outcome.token,
     slotStart: outcome.slotStart,
+    // Server-derived: the browser is told when the appointment ends, it never
+    // says so itself.
+    slotEnd: slotEndFor(outcome.slotStart, product.durationMinutes),
+    productId: product.id,
     expiresAt: outcome.expiresAt,
     durationSeconds: HOLD_DURATION_SECONDS,
     timeZone: bookingConfig.timeZone,
@@ -151,6 +178,10 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: "bad_request" }, { status: 400 });
   }
 
-  const released = await releaseHold(parsed.data.slotStart, parsed.data.token);
+  const released = await releaseHold(
+    parsed.data.slotStart,
+    parsed.data.token,
+    parsed.data.productId,
+  );
   return NextResponse.json({ released });
 }

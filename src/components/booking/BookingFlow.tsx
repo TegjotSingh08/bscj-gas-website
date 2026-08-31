@@ -12,6 +12,11 @@ import {
 import { business, calendarDirectUrl, cp12 } from "@/lib/business";
 import { bookingConfig } from "@/lib/booking/config";
 import {
+  DEFAULT_PRODUCT_ID,
+  productFor,
+  type ProductId,
+} from "@/lib/booking/products";
+import {
   requiresEarlyPerformanceRequest,
   TERMS_VERSION,
 } from "@/lib/booking/terms";
@@ -22,6 +27,7 @@ import {
   type Reservation,
   type Step,
 } from "@/lib/booking/attempt";
+import { ServiceChoice } from "./ServiceChoice";
 import { DatePicker } from "./DatePicker";
 import { TimePicker } from "./TimePicker";
 import { DetailsForm, type DetailsValues } from "./DetailsForm";
@@ -41,8 +47,14 @@ const HOLD_WARNING_SECONDS = 300;
 
 const BOOKING_TIME_ZONE = bookingConfig.timeZone;
 
-/** Pure fetcher: no React state, so it can live outside the component. */
+/**
+ * Pure fetcher: no React state, so it can live outside the component.
+ *
+ * The product is part of the question, not a detail: the two services are
+ * different lengths, so they rule out different times.
+ */
 async function fetchAvailability(
+  productId: ProductId,
   reservation?: Reservation | null,
 ): Promise<DayAvailability[] | null> {
   try {
@@ -51,10 +63,13 @@ async function fetchAvailability(
       headers["x-hold-slot"] = reservation.slotStart;
       headers["x-hold-token"] = reservation.token;
     }
-    const response = await fetch("/api/availability", {
-      cache: "no-store",
-      headers,
-    });
+    const response = await fetch(
+      `/api/availability?product=${encodeURIComponent(productId)}`,
+      {
+        cache: "no-store",
+        headers,
+      },
+    );
     if (!response.ok) return null;
     const data = (await response.json()) as { days?: DayAvailability[] };
     return data.days ?? [];
@@ -89,6 +104,8 @@ const emptyDetails: DetailsValues = {
  */
 export function BookingFlow() {
   const [attempt, dispatch] = useReducer(attemptReducer, initialAttemptState);
+  /** The service being booked. The CP12 is the default, as it is everywhere. */
+  const [productId, setProductId] = useState<ProductId>(DEFAULT_PRODUCT_ID);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [days, setDays] = useState<DayAvailability[]>([]);
   const [details, setDetails] = useState<DetailsValues>(emptyDetails);
@@ -109,6 +126,7 @@ export function BookingFlow() {
     useState(false);
 
   const { step, reservation, changingTime, selectedDate } = attempt;
+  const product = productFor(productId);
 
   /**
    * Mirrors the live reservation for the abandonment handler below, which is
@@ -138,6 +156,7 @@ export function BookingFlow() {
             JSON.stringify({
               slotStart: current.slotStart,
               token: current.token,
+              productId: current.productId,
             }),
           ],
           { type: "application/json" },
@@ -175,7 +194,7 @@ export function BookingFlow() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const result = await fetchAvailability();
+      const result = await fetchAvailability(DEFAULT_PRODUCT_ID);
       if (cancelled) return;
       if (result) {
         setDays(result);
@@ -190,9 +209,9 @@ export function BookingFlow() {
   }, []);
 
   const refreshAvailability = useCallback(
-    async (current?: Reservation | null) => {
+    async (forProduct: ProductId, current?: Reservation | null) => {
       setLoadState("loading");
-      const result = await fetchAvailability(current);
+      const result = await fetchAvailability(forProduct, current);
       if (result) {
         setDays(result);
         setLoadState("ready");
@@ -246,6 +265,7 @@ export function BookingFlow() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           slotStart: slot.startIso,
+          productId,
           previous: previousHoldFor(attempt),
         }),
       });
@@ -263,7 +283,7 @@ export function BookingFlow() {
               "Sorry — that appointment is no longer available. Please choose another time.",
           );
         }
-        await refreshAvailability(reservation);
+        await refreshAvailability(productId, reservation);
         return;
       }
 
@@ -278,8 +298,11 @@ export function BookingFlow() {
         type: "reserved",
         reservation: {
           token: data.token ?? null,
+          productId,
           slotStart: slot.startIso,
-          slotEnd: slot.endIso,
+          // The server states when the appointment ends, from the product it
+          // actually reserved. The slot's own end is only ever a display hint.
+          slotEnd: data.slotEnd ?? slot.endIso,
           label: slot.label,
           dateIso: selectedDate ?? slot.startIso.slice(0, 10),
           expiresAt: data.expiresAt ?? null,
@@ -301,8 +324,123 @@ export function BookingFlow() {
     setFormError(
       "Your reserved appointment has expired. Please choose another available time.",
     );
-    await refreshAvailability(null);
-  }, [refreshAvailability]);
+    await refreshAvailability(productId, null);
+  }, [refreshAvailability, productId]);
+
+  /** Gives a reservation back, with every start it occupied. Best effort. */
+  async function releaseReservation(current: Reservation | null) {
+    if (!current?.token) return;
+    try {
+      await fetch("/api/hold", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          slotStart: current.slotStart,
+          token: current.token,
+          productId: current.productId,
+        }),
+      });
+    } catch {
+      // The TTL clears it regardless.
+    }
+  }
+
+  /**
+   * Switches service.
+   *
+   * With no reservation this is just a different question to ask the
+   * availability endpoint. With one, the held time has to be re-reserved for
+   * the new length before it can be kept — a 45-minute slot is not necessarily
+   * free for 60 minutes — so the server is asked, and the answer is honoured:
+   * kept if it can be, given up and re-chosen if it cannot.
+   *
+   * Every consent is cleared either way. They were given against a price and a
+   * service that no longer apply, and the obligation-to-pay tick least of all
+   * may survive a change of total.
+   */
+  async function selectProduct(next: ProductId) {
+    if (next === productId || holdPending || submitting) return;
+
+    const previousProduct = productId;
+    const current = reservation;
+
+    setProductId(next);
+    setFormError(null);
+    setNotice(null);
+    setAddressConfirmed(false);
+    setTermsAccepted(false);
+    setEarlyPerformanceRequested(false);
+
+    if (!current) {
+      await refreshAvailability(next, null);
+      return;
+    }
+
+    setHoldPending(true);
+    try {
+      const response = await fetch("/api/hold", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          slotStart: current.slotStart,
+          productId: next,
+          previous: previousHoldFor(attempt),
+        }),
+      });
+      const data = await response.json();
+
+      if (response.ok) {
+        dispatch({
+          type: "reservation-updated",
+          reservation: {
+            ...current,
+            productId: next,
+            token: data.token ?? current.token,
+            slotEnd: data.slotEnd ?? current.slotEnd,
+            expiresAt: data.expiresAt ?? current.expiresAt,
+            degraded: Boolean(data.degraded),
+          },
+        });
+        await refreshAvailability(next, {
+          ...current,
+          productId: next,
+          token: data.token ?? current.token,
+        });
+        return;
+      }
+
+      if (response.status === 409) {
+        // The time genuinely cannot take the longer appointment. Say so and
+        // send them back to choose again, rather than silently keeping a
+        // reservation for a service they are no longer buying.
+        await releaseReservation(current);
+        dispatch({ type: "expired" });
+        setNotice(
+          `Your reserved time is not available for the ${productFor(next).name}. Please choose another time.`,
+        );
+        await refreshAvailability(next, null);
+        return;
+      }
+
+      // Anything else — the calendar unreachable, the store down, a 500 — says
+      // nothing about whether the time fits. Giving the reservation up over a
+      // transient fault would cost the customer a slot they still hold, so the
+      // choice goes back instead and their booking stands untouched.
+      setProductId(previousProduct);
+      setFormError(
+        "We could not change the service just now. Your reserved time is still held. Please try again, or call or WhatsApp us.",
+      );
+    } catch {
+      // The request never completed, so nothing was released. Put the choice
+      // back rather than stranding the customer between two services.
+      setProductId(previousProduct);
+      setFormError(
+        "We could not reach our booking system. Your reserved time is still held. Please try again, or call or WhatsApp us.",
+      );
+    } finally {
+      setHoldPending(false);
+    }
+  }
 
   async function handleCancelBooking() {
     const confirmedCancel = window.confirm(
@@ -319,21 +457,8 @@ export function BookingFlow() {
     setFieldErrors({});
     idempotencyKey.current = null;
 
-    if (current?.token) {
-      try {
-        await fetch("/api/hold", {
-          method: "DELETE",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            slotStart: current.slotStart,
-            token: current.token,
-          }),
-        });
-      } catch {
-        // The TTL clears it regardless.
-      }
-    }
-    await refreshAvailability(null);
+    await releaseReservation(current);
+    await refreshAvailability(productId, null);
   }
 
   async function handleConfirm() {
@@ -349,6 +474,7 @@ export function BookingFlow() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...details,
+          productId,
           addressConfirmedByCustomer: addressConfirmed,
           termsAccepted,
           termsVersion: TERMS_VERSION,
@@ -374,7 +500,7 @@ export function BookingFlow() {
       if (data.error === "slot_taken") {
         dispatch({ type: "expired" });
         setFormError(data.message);
-        await refreshAvailability(null);
+        await refreshAvailability(productId, null);
         return;
       }
 
@@ -424,13 +550,30 @@ export function BookingFlow() {
   if (loadState === "failed") {
     return (
       <div ref={flowTop} className="scroll-mt-24">
-        <BookingFallback onRetry={() => void refreshAvailability(reservation)} />
+        <BookingFallback
+          onRetry={() => void refreshAvailability(productId, reservation)}
+        />
       </div>
     );
   }
 
   return (
     <div ref={flowTop} className="scroll-mt-24">
+      {/*
+        Above the step indicator rather than inside the funnel: choosing a
+        service is not a fifth step, and someone who only wants the £45
+        certificate should reach a date in exactly the same number of taps as
+        before. It stays on screen throughout, so the service can be changed
+        without unwinding the booking.
+      */}
+      <div className="mb-6">
+        <ServiceChoice
+          value={productId}
+          onChange={(next) => void selectProduct(next)}
+          disabled={holdPending || submitting}
+        />
+      </div>
+
       <StepIndicator
         current={step}
         onGoTo={(target: Step) => {
@@ -488,6 +631,7 @@ export function BookingFlow() {
         {step === 2 && selectedDate && (
           <TimePicker
             date={selectedDate}
+            product={product}
             slots={slotsForSelectedDate}
             reservedSlotStart={reservation?.slotStart ?? null}
             busy={holdPending}
@@ -500,6 +644,7 @@ export function BookingFlow() {
         {step === 3 && reservation && (
           <DetailsForm
             values={details}
+            product={product}
             fieldErrors={fieldErrors}
             onPatch={(patch) => {
               // Any edit invalidates a confirmation given on the review step.
@@ -520,6 +665,7 @@ export function BookingFlow() {
         {step === 4 && reservation && (
           <ReviewStep
             date={reservation.dateIso}
+            product={product}
             slot={{
               startIso: reservation.slotStart,
               endIso: reservation.slotEnd,

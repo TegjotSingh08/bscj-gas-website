@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 
 import { business, serviceAreaCopy } from "@/lib/business";
-import { bookingConfig } from "@/lib/booking/config";
+import { bookingConfig, bookingConfigFor } from "@/lib/booking/config";
+import { productFor } from "@/lib/booking/products";
 import { calculatePrice } from "@/lib/booking/pricing";
 import {
   checkHold,
@@ -113,6 +114,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "rejected" }, { status: 400 });
   }
 
+  // The service being booked. The schema has already refused any id outside
+  // the registry, so from here the name, the price and the appointment length
+  // are the server's own — a request states none of them.
+  const product = productFor(data.productId);
+  const config = bookingConfigFor(product.id);
+
   // A repeat submission of an attempt that already succeeded. Checked before
   // the hold, because a successful booking deletes its own hold — without this
   // a double click would be reported as an expired reservation.
@@ -216,10 +223,12 @@ export async function POST(request: Request) {
   });
 
   // Price is always derived here — never taken from the client.
-  const price = calculatePrice(data.applianceCount);
+  const price = calculatePrice(data.applianceCount, product.id);
 
   const start = new Date(data.slotStart);
-  const end = new Date(start.getTime() + bookingConfig.appointmentMinutes * 60000);
+  // The appointment length comes from the product, so a request cannot make a
+  // 60-minute job occupy a 45-minute space in the diary, or the reverse.
+  const end = new Date(start.getTime() + product.durationMinutes * 60000);
   const now = new Date();
 
   try {
@@ -228,7 +237,7 @@ export async function POST(request: Request) {
     const windowEnd = new Date(start.getTime() + 24 * 60 * 60000);
     const busy = await fetchBusyPeriods(windowStart, windowEnd);
 
-    if (!isSlotStillAvailable(data.slotStart, busy, now)) {
+    if (!isSlotStillAvailable(data.slotStart, busy, now, config)) {
       return NextResponse.json(
         {
           error: "slot_taken",
@@ -257,6 +266,9 @@ export async function POST(request: Request) {
     );
 
     const description = [
+      `Service: ${product.name}`,
+      `Appointment: ${product.durationMinutes} minutes`,
+      "",
       `Customer: ${clean(data.fullName)}`,
       `Phone: ${clean(data.phone)}`,
       `Email: ${clean(data.email)}`,
@@ -267,7 +279,12 @@ export async function POST(request: Request) {
       `Access notes: ${clean(data.accessNotes || "none given")}`,
       "Address: confirmed by customer at booking",
       "",
-      `Appliances: ${price.applianceCount}`,
+      // Omitted where it means nothing: a standalone boiler service is one
+      // boiler at a fixed price, so an appliance count on the job sheet would
+      // describe work that is not being done.
+      ...(price.appliancePricing
+        ? [`Appliances: ${price.applianceCount}`]
+        : []),
       `Price: £${price.total} total (£${price.basePrice} base${
         price.extraCharge
           ? ` + £${price.extraCharge} for ${price.extraAppliances} extra`
@@ -286,7 +303,7 @@ export async function POST(request: Request) {
 
     const event = await createEvent({
       eventId: buildEventId(data.slotStart, data.idempotencyKey),
-      summary: `CP12 — ${property.formattedAddress}`,
+      summary: `${product.calendarName} — ${property.formattedAddress}`,
       description,
       location: property.formattedAddress,
       start,
@@ -301,7 +318,8 @@ export async function POST(request: Request) {
     // The slot is now a real calendar event: the reservation has done its job.
     await markBookingCompleted(data.idempotencyKey, event.id);
     if (typeof data.holdToken === "string") {
-      await releaseHold(data.slotStart, data.holdToken);
+      // Releases every start the booking reserved, not just the one clicked.
+      await releaseHold(data.slotStart, data.holdToken, product.id);
     }
 
     const reference = bookingReference(event.id);
@@ -317,7 +335,11 @@ export async function POST(request: Request) {
       endLabel,
       subjectDateLabel: formatSubjectDate(dateIso, bookingConfig.timeZone),
       addressLines: formatAddressLines(property),
-      applianceCount: price.applianceCount,
+      productName: product.name,
+      productSubjectName: product.subjectName,
+      workDescription: product.workDescription,
+      appointmentMinutes: product.durationMinutes,
+      applianceCount: price.appliancePricing ? price.applianceCount : null,
       // Server-derived total, never the figure the browser displayed.
       priceTotal: price.total,
       // Regulation 16 confirmation: the cancellation information travels in
@@ -363,11 +385,13 @@ export async function POST(request: Request) {
         endLabel,
         addressLines: formatAddressLines(property),
         postcode: property.postcode,
+        productName: product.name,
+        productSubjectName: product.subjectName,
         customerName: clean(data.fullName),
         customerPhone: clean(data.phone),
         customerEmail: data.email,
         customerType: customerTypeLabels[data.customerType],
-        applianceCount: price.applianceCount,
+        applianceCount: price.appliancePricing ? price.applianceCount : null,
         priceTotal: price.total,
         sameDay,
         accessNotes: clean(data.accessNotes || ""),
@@ -380,6 +404,8 @@ export async function POST(request: Request) {
       ok: true,
       booking: {
         reference,
+        productId: product.id,
+        productName: product.name,
         dateLabel,
         startLabel,
         endLabel,

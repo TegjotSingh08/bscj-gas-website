@@ -62,6 +62,58 @@ export const cp12 = {
     "Physical certificate completed at your property, with a digital copy emailed the same day free of charge",
 } as const;
 
+/**
+ * The standalone annual boiler service, confirmed 31 August 2026.
+ *
+ * Only the name and the price are verified. **What the service includes has
+ * never been specified**, so nothing here or anywhere else describes its
+ * checks, steps or parts.
+ *
+ * The 60 minutes is a **calendar allocation, not a claim about how long the
+ * work takes**. No standalone duration has ever been confirmed, and the
+ * combined visit allocates 60 minutes for a 45-minute CP12 plus the service —
+ * which implies the service element is far shorter than an hour when the two
+ * are done together. Sixty is deliberately the generous end: over-allocating
+ * protects the diary, under-allocating oversells it. See
+ * docs/business-details.md.
+ */
+export const boilerService = {
+  price: 60,
+  priceDisplay: "£60",
+  priceTotalDisplay: "£60 total",
+  /** A calendar allocation. Never presented as how long the work takes. */
+  durationMinutes: 60,
+  payment: cp12.payment,
+  priceSentence:
+    "That is the total price for the annual boiler service, and there is no separate call-out fee. If we find anything that needs repair, we will explain the cost and agree it with you before doing any extra work.",
+} as const;
+
+/**
+ * The second bookable product, confirmed 31 August 2026.
+ *
+ * Only the name, the price and the appointment length are verified. **What the
+ * annual boiler service actually includes has never been specified**, so
+ * nothing here — and nothing anywhere else on the site — describes its checks,
+ * steps or parts. The site says the customer has booked a CP12 plus an annual
+ * boiler service, and stops there. See docs/business-details.md.
+ *
+ * The appliance rule is deliberately not restated: it is the CP12 rule, shared
+ * rather than copied, so the two products cannot drift apart.
+ */
+export const boilerServiceBundle = {
+  price: 90,
+  priceDisplay: "£90",
+  priceTotalDisplay: "£90 total",
+  durationMinutes: 60,
+  /** Shared with the CP12, not a second copy of it. */
+  includes: cp12.includes,
+  extraAppliancePrice: cp12.extraAppliancePrice,
+  extraApplianceDisplay: cp12.extraApplianceDisplay,
+  payment: cp12.payment,
+  priceSentence:
+    "That is the total price for the gas safety inspection, your certificate and an annual boiler service, and there is no separate call-out fee. If we find more gas appliances than you told us about, or anything that needs repair, we will explain the cost and agree it with you before doing any extra work.",
+} as const;
+
 export const availability = {
   workingDays: "Monday to Friday, plus Sunday",
   workingHours: "10:00 – 20:00",

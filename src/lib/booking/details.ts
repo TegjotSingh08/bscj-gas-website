@@ -60,6 +60,12 @@ export type ValidatableDetails = {
   postcode: string;
   customerType: string;
   applianceCount: number;
+  /**
+   * Whether the chosen product prices by appliance. Absent means it does —
+   * every caller written before the standalone service existed was asking
+   * about a certificate.
+   */
+  appliancePricing?: boolean;
   /** Optional, but held to the same standard when supplied. */
   tenantPhone?: string;
 };
@@ -110,9 +116,13 @@ export function validateDetails(values: ValidatableDetails): DetailsErrors {
       "Please choose whether you are a landlord, agent, tenant or homeowner.";
   }
 
-  const appliances = Number(values.applianceCount);
-  if (!Number.isInteger(appliances) || appliances < 1) {
-    errors.applianceCount = "Please choose a number of appliances.";
+  // Only judged when the product actually asks the question. A standalone
+  // boiler service never shows the field, so it must not be able to fail on it.
+  if (values.appliancePricing !== false) {
+    const appliances = Number(values.applianceCount);
+    if (!Number.isInteger(appliances) || appliances < 1) {
+      errors.applianceCount = "Please choose a number of appliances.";
+    }
   }
 
   return errors;
