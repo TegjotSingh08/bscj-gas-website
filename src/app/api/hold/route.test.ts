@@ -74,7 +74,8 @@ function slotDaysAhead(days: number, hour: number): string {
 }
 
 const SEVEN_PM = slotDaysAhead(10, 19);
-const EIGHT_PM = slotDaysAhead(10, 20);
+const NINE_PM = slotDaysAhead(10, 21);
+const TEN_PM = slotDaysAhead(10, 22);
 const MIDDAY = slotDaysAhead(10, 12);
 
 async function hold(body: Record<string, unknown>) {
@@ -155,23 +156,23 @@ describe("a reservation is validated against its own product", () => {
     assert.equal(calls.length, 0);
   });
 
-  test("19:00 may be reserved for either product", async () => {
-    const cp12 = await hold({ slotStart: SEVEN_PM });
+  test("the last start of the day may be reserved for either product", async () => {
+    const cp12 = await hold({ slotStart: NINE_PM });
     assert.equal(cp12.status, 200);
     assert.equal(minutes(cp12.body.slotStart, cp12.body.slotEnd), 45);
 
     const bundle = await hold({
-      slotStart: SEVEN_PM,
+      slotStart: NINE_PM,
       productId: "cp12-boiler-service",
     });
     assert.equal(bundle.status, 200);
     assert.equal(minutes(bundle.body.slotStart, bundle.body.slotEnd), 60);
   });
 
-  test("20:00 may be reserved for neither", async () => {
+  test("22:00 may be reserved for neither", async () => {
     for (const productId of ["cp12", "cp12-boiler-service"]) {
-      const { status, body } = await hold({ slotStart: EIGHT_PM, productId });
-      assert.equal(status, 409, `20:00 reserved for ${productId}`);
+      const { status, body } = await hold({ slotStart: TEN_PM, productId });
+      assert.equal(status, 409, `22:00 reserved for ${productId}`);
       assert.equal(body.error, "slot_taken");
       assert.equal(calls.includes("redis:acquire"), false);
     }

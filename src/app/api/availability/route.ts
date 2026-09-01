@@ -9,11 +9,16 @@ import {
   rateLimit,
   rateLimits,
 } from "@/lib/booking/rate-limit";
-import { bookableDates, buildAvailability } from "@/lib/booking/slots";
+import {
+  bookableDates,
+  buildAvailability,
+  countBookingsByDate,
+} from "@/lib/booking/slots";
 import { parseIsoDate, zonedTimeToUtc } from "@/lib/booking/time";
 import {
   CalendarApiError,
   CalendarNotConfiguredError,
+  fetchBookingEvents,
   fetchBusyPeriods,
 } from "@/lib/google/calendar";
 
@@ -80,8 +85,20 @@ export async function GET(request: Request) {
   const timeMax = zonedTimeToUtc({ ...last, hour: 23, minute: 59 }, bookingConfig.timeZone);
 
   try {
-    const busy = await fetchBusyPeriods(timeMin, timeMax);
-    const days = buildAvailability(dates, busy, now, config);
+    /*
+      Two questions, two calls, because free/busy cannot answer the second.
+
+      Free/busy says which times are occupied — by anything, including the
+      engineer's own diary. The events read says how many of those are
+      customers, which is what the daily cap counts. A day at its limit offers
+      nothing; a day with a school run on it simply loses those hours.
+    */
+    const [busy, bookings] = await Promise.all([
+      fetchBusyPeriods(timeMin, timeMax),
+      fetchBookingEvents(timeMin, timeMax),
+    ]);
+    const bookingCounts = countBookingsByDate(bookings, config);
+    const days = buildAvailability(dates, busy, now, config, bookingCounts);
 
     // Remove slots reserved by other customers. If the store is unreachable
     // this returns nothing held, and availability falls back to Google alone —

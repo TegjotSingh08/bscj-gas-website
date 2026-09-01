@@ -136,12 +136,12 @@ separately:
 
 Consequences:
 
-- The last CP12 start remains 19:00 (19:00-19:45).
-- The last bundle start is also 19:00 (19:00-20:00), with the buffer running
-  internally to 20:15.
-- No appointment of either product is offered starting after 19:00.
+- The last CP12 start is 21:00 (21:00-21:45).
+- The last hour-long start is also 21:00 (21:00-22:00), with the buffer running
+  internally to 22:15.
+- No appointment of any product is offered starting after 21:00.
 - Between two bookings the 15 minute buffer is still enforced in full, so a
-  19:00-20:00 bundle blocks any other job from 18:45 to 20:15.
+  21:00-22:00 appointment blocks any other job from 20:45 to 22:15.
 
 ## Availability Messaging
 
@@ -161,7 +161,7 @@ Any change must be made here first, then reflected on the site.
 ## Availability
 
 - Working days: Monday - Friday + Sunday
-- Working hours: 10:00 - 20:00
+- Working hours: 10:00 - 22:00
 - Appointment length: 45 minutes for a CP12, 60 minutes for CP12 + Annual
   Boiler Service, 60 minutes allocated for a standalone Annual Boiler Service.
   Set per product, never globally.
@@ -171,6 +171,42 @@ Any change must be made here first, then reflected on the site.
   of bundles is a longer day than a day of CP12s.
 - Minimum booking notice: 12 hours	
 - Maximum advance booking period: 30 days
+
+## What counts toward the daily limit
+
+DECIDED 1 September 2026, when the cap rose to 10.
+
+The limit is **10 customer bookings per local Europe/London calendar date**. It
+is enforced by this website, never assumed to be enforced by Google.
+
+**Counts toward the ten:** an appointment booked through this site. These are
+identified on the calendar by the private extended property `bscjBooking=1`
+that every new booking carries, or by the event id prefix `bscj` that every
+booking this site has ever written carries - including the ones taken before
+the property existed. Cancelled events do not count.
+
+**Does not count:** anything else on the engineer's calendar. The recurring
+weekday school run, a dentist appointment, a personal entry. These still
+**block the times they cover**, through the normal Google free/busy check, but
+they are not customers and must not spend the day's capacity.
+
+This distinction is the reason free/busy alone is not enough: it returns start
+and end times only, with no way to tell a customer from a school run. The count
+therefore comes from a separate read of the events list.
+
+**The school run is not modelled in code.** There is no hardcoded 15:00-17:00
+rule anywhere. Those slots are generated normally and disappear only because
+Google reports a conflict, so deleting the event for one day brings them back
+with no deployment. Note that a 15:00-17:00 event removes **three** slots -
+15:00, 16:00 and 17:00 - because the 15 minute travel buffer widens it to
+17:15. Ending the event at 16:45 would return 17:00.
+
+**Concurrency.** Counting and writing are two steps, so a booking holds a short
+lock on its own local date while it counts and writes. Two customers
+confirming for the same day at the same moment are serialised, and the second
+counts after the first has landed. If the reservation store is unreachable the
+booking still proceeds on the Google count alone, which is the protection that
+existed before the cap was enforced at all.
 
 ## Service Areas
 

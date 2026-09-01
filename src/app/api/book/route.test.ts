@@ -2,6 +2,7 @@ import { test, describe, beforeEach, mock } from "node:test";
 import assert from "node:assert/strict";
 
 import { getPartsInZone, zonedTimeToUtc } from "@/lib/booking/time";
+import { setKvClientForTesting, type KvClient } from "@/lib/kv/store";
 import { TERMS_VERSION } from "@/lib/booking/terms";
 
 /**
@@ -110,8 +111,10 @@ function slotDaysAhead(days: number, hour = 14): string {
 }
 
 /** The last start of the working day, and the one that must never exist. */
-const SEVEN_PM = slotDaysAhead(20, 19);
-const EIGHT_PM = slotDaysAhead(20, 20);
+// SEVEN_PM/EIGHT_PM keep their names from when the day ended at 20:00; they
+// now point at 21:00 and 22:00, which are the same two cases.
+const SEVEN_PM = slotDaysAhead(20, 21);
+const EIGHT_PM = slotDaysAhead(20, 22);
 
 /** Inside the 14-day cancellation period, so an express request is required. */
 const SLOT_START = slotDaysAhead(3);
@@ -119,8 +122,31 @@ const SLOT_START = slotDaysAhead(3);
 const FAR_SLOT_START = slotDaysAhead(20);
 const HOLD_TOKEN = "a".repeat(64);
 
+/**
+ * Customer bookings already on the calendar for the day under test.
+ *
+ * `createEvent` pushes to it, so a second request in the same test counts the
+ * first one — which is what makes the concurrency test meaningful.
+ */
+let existingBookings: { id: string; start: Date }[] = [];
+
+/** Set only by the concurrency tests. See `meetingPoint`. */
+let bookingReadBarrier: (() => Promise<void>) | null = null;
+
 mock.module("@/lib/google/calendar", {
   namedExports: {
+    fetchBookingEvents: async () => {
+      calls.push("google:list-bookings");
+      // Widens the window between counting and writing, so a concurrency test
+      // exercises the guard instead of the scheduler. Null in every other test.
+      // Snapshot at read time, exactly as a real response is: what existed
+      // when Google was asked, not what exists when the caller resumes.
+      // Spreading after the wait let the fake serialise the requests by itself
+      // and quietly hid the race this is here to expose.
+      const answer = [...existingBookings];
+      if (bookingReadBarrier) await bookingReadBarrier();
+      return answer;
+    },
     fetchBusyPeriods: async () => {
       calls.push("google:freebusy");
       if (calendarBehaviour === "slot_busy") {
@@ -141,6 +167,7 @@ mock.module("@/lib/google/calendar", {
     }) => {
       calls.push("google:create-event");
       lastEvent = input;
+      existingBookings.push({ id: "event-abc123", start: input.start });
       if (calendarBehaviour === "fails") {
         const error = new Error("calendar down");
         error.name = "CalendarApiError";
@@ -305,6 +332,9 @@ beforeEach(() => {
   lastNotification = null;
   notificationBehaviour = "sent";
   releasedProductId = null;
+  existingBookings = [];
+  bookingReadBarrier = null;
+  setKvClientForTesting(null);
 });
 
 describe("transaction order", () => {
@@ -1203,17 +1233,17 @@ describe("both emails name the service that was booked", () => {
  * neither. Confirmed 31 August 2026.
  */
 describe("the 19:00 boundary is enforced at the booking itself", () => {
-  test("a CP12 books at 19:00 and runs to 19:45", async () => {
+  test("a CP12 books at the last start and runs 21:00–21:45", async () => {
     const response = await POST(bookingRequest({ slotStart: SEVEN_PM }));
     assert.equal(response.status, 200);
 
     const event = calendarEvent();
     assert.equal(eventMinutes(), 45);
-    assert.equal(londonTime(event.start), "19:00");
-    assert.equal(londonTime(event.end), "19:45");
+    assert.equal(londonTime(event.start), "21:00");
+    assert.equal(londonTime(event.end), "21:45");
   });
 
-  test("a bundle books at 19:00 and runs to exactly 20:00", async () => {
+  test("a bundle books at the last start and runs to exactly 22:00", async () => {
     const response = await POST(
       bookingRequest({ slotStart: SEVEN_PM, productId: "cp12-boiler-service" }),
     );
@@ -1221,15 +1251,15 @@ describe("the 19:00 boundary is enforced at the booking itself", () => {
 
     const event = calendarEvent();
     assert.equal(eventMinutes(), 60);
-    assert.equal(londonTime(event.start), "19:00");
+    assert.equal(londonTime(event.start), "21:00");
     assert.equal(
       londonTime(event.end),
-      "20:00",
+      "22:00",
       "the appointment must end exactly at closing, not before it",
     );
   });
 
-  test("the buffer running to 20:15 is never written into the event", async () => {
+  test("the buffer running to 22:15 is never written into the event", async () => {
     // The customer's appointment is what goes in the diary. The buffer is
     // scheduling protection, and it is applied by widening busy periods when
     // the next slot is offered — never by lengthening this booking.
@@ -1240,34 +1270,34 @@ describe("the 19:00 boundary is enforced at the booking itself", () => {
     assert.notEqual(eventMinutes(), 75);
   });
 
-  test("the confirmation tells the customer 19:00–20:00", async () => {
+  test("the confirmation tells the customer 21:00–22:00", async () => {
     const response = await POST(
       bookingRequest({ slotStart: SEVEN_PM, productId: "cp12-boiler-service" }),
     );
     const body = await response.json();
 
-    assert.equal(body.booking.startLabel, "19:00");
-    assert.equal(body.booking.endLabel, "20:00");
+    assert.equal(body.booking.startLabel, "21:00");
+    assert.equal(body.booking.endLabel, "22:00");
     for (const format of [confirmationEmail().html, confirmationEmail().text]) {
-      assert.ok(format.includes("19:00"));
-      assert.ok(format.includes("20:00"));
+      assert.ok(format.includes("21:00"));
+      assert.ok(format.includes("22:00"));
     }
   });
 
-  test("neither product may start at 20:00", async () => {
+  test("neither product may start at 22:00", async () => {
     for (const productId of ["cp12", "cp12-boiler-service"]) {
       const response = await POST(
         bookingRequest({ slotStart: EIGHT_PM, productId }),
       );
       const body = await response.json();
 
-      assert.equal(response.status, 409, `20:00 accepted for ${productId}`);
+      assert.equal(response.status, 409, `22:00 accepted for ${productId}`);
       assert.equal(body.error, "slot_taken");
       assert.equal(calls.includes("google:create-event"), false);
     }
   });
 
-  test("a 20:00 start is refused before anything is written", async () => {
+  test("a 22:00 start is refused before anything is written", async () => {
     await POST(
       bookingRequest({ slotStart: EIGHT_PM, productId: "cp12-boiler-service" }),
     );
@@ -1379,17 +1409,17 @@ describe("the standalone boiler service is a fixed £60", () => {
     }
   });
 
-  test("19:00 is valid and runs to exactly 20:00", async () => {
+  test("the last start is valid and runs to exactly 22:00", async () => {
     const response = await POST(
       bookingRequest({ slotStart: SEVEN_PM, productId: SERVICE }),
     );
     assert.equal(response.status, 200);
     assert.equal(eventMinutes(), 60);
-    assert.equal(londonTime(calendarEvent().start), "19:00");
-    assert.equal(londonTime(calendarEvent().end), "20:00");
+    assert.equal(londonTime(calendarEvent().start), "21:00");
+    assert.equal(londonTime(calendarEvent().end), "22:00");
   });
 
-  test("20:00 is refused, as it is for every product", async () => {
+  test("22:00 is refused, as it is for every product", async () => {
     const response = await POST(
       bookingRequest({ slotStart: EIGHT_PM, productId: SERVICE }),
     );
@@ -1411,5 +1441,205 @@ describe("the standalone boiler service is a fixed £60", () => {
     );
     assert.equal((await bundle.json()).booking.priceTotal, 105);
     assert.equal(eventMinutes(), 60);
+  });
+});
+
+/**
+ * The daily cap, enforced where it cannot be bypassed.
+ *
+ * Availability hides a full day, but availability is advice. These are the
+ * checks that run against Google immediately before the write, so a crafted
+ * POST cannot talk its way past them.
+ */
+describe("the daily booking limit is enforced at the write", () => {
+  /** A real store, so the per-day lock actually serialises. */
+  class FakeKv implements KvClient {
+    private data = new Map<string, string>();
+    async setIfAbsent(key: string, value: string) {
+      if (this.data.has(key)) return false;
+      this.data.set(key, value);
+      return true;
+    }
+    async get(key: string) {
+      return this.data.get(key) ?? null;
+    }
+    async deleteIfEqual(key: string, value: string) {
+      if (this.data.get(key) !== value) return false;
+      this.data.delete(key);
+      return true;
+    }
+    async ttl() {
+      return 15;
+    }
+    async mget(keys: string[]) {
+      return keys.map((key) => this.data.get(key) ?? null);
+    }
+    async set(key: string, value: string) {
+      this.data.set(key, value);
+    }
+    async incrementWithTtl() {
+      return 1;
+    }
+  }
+
+  /** `count` existing customer bookings on the day SLOT_START falls on. */
+  function fillDay(count: number) {
+    const day = new Date(SLOT_START);
+    existingBookings = Array.from({ length: count }, (_, index) => ({
+      id: `bscj-existing-${index}`,
+      start: new Date(day.getTime() - (index + 1) * 60 * 60000),
+    }));
+  }
+
+  test("the cap is checked against Google before the event is written", async () => {
+    await POST(bookingRequest());
+    const listed = calls.indexOf("google:list-bookings");
+    const created = calls.indexOf("google:create-event");
+
+    assert.ok(listed >= 0, "the existing bookings were never counted");
+    assert.ok(listed < created, "the cap was checked after the write");
+  });
+
+  test("nine existing bookings still permit one more", async () => {
+    fillDay(9);
+    const response = await POST(bookingRequest());
+
+    assert.equal(response.status, 200);
+    assert.ok(calls.includes("google:create-event"));
+  });
+
+  test("ten existing bookings refuse an eleventh, whatever the client sends", async () => {
+    fillDay(10);
+    const response = await POST(bookingRequest());
+    const body = await response.json();
+
+    assert.equal(response.status, 409);
+    assert.equal(body.error, "day_full");
+    assert.equal(calls.includes("google:create-event"), false);
+    assert.equal(calls.includes("resend:send"), false);
+    assert.equal(calls.includes("resend:notify"), false);
+  });
+
+  test("ordinary blocking events do not count toward the ten", async () => {
+    // The day is thick with the engineer's own diary, and empty of customers.
+    existingBookings = [];
+    const response = await POST(bookingRequest());
+    assert.equal(response.status, 200);
+  });
+
+  test("bookings on other days do not fill this one", async () => {
+    const otherDay = new Date(new Date(SLOT_START).getTime() + 5 * 24 * 3600_000);
+    existingBookings = Array.from({ length: 10 }, (_, index) => ({
+      id: `bscj-other-${index}`,
+      start: new Date(otherDay.getTime() + index * 60 * 60000),
+    }));
+
+    assert.equal((await POST(bookingRequest())).status, 200);
+  });
+
+  /**
+   * Holds every caller until `expected` of them have arrived, or the wait
+   * elapses.
+   *
+   * This is what makes the concurrency test mean something. Left to the
+   * scheduler, two mocked requests interleave in whatever order their promises
+   * happen to resolve, and the test can pass with the guard removed. Parking
+   * both requests between counting and writing guarantees the race: with no
+   * lock they both count nine and both write, and with the lock the second
+   * cannot reach the barrier until the first has finished and released.
+   */
+  function meetingPoint(expected: number, waitMs: number) {
+    let arrived = 0;
+    let open = () => {};
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+
+    return async () => {
+      arrived += 1;
+      if (arrived >= expected) {
+        open();
+        return;
+      }
+      await Promise.race([
+        gate,
+        new Promise<void>((resolve) => setTimeout(resolve, waitMs)),
+      ]);
+    };
+  }
+
+  test("two simultaneous confirmations cannot both take the last slot", async () => {
+    /*
+      Nine already booked, and two customers confirming at once. Counting and
+      writing are two steps, so without the per-day lock both would count nine
+      and both would write a tenth — eleven appointments in a day capped at
+      ten. The lock makes the second one count after the first has landed.
+    */
+    setKvClientForTesting(new FakeKv());
+    fillDay(9);
+    bookingReadBarrier = meetingPoint(2, 250);
+
+    const [first, second] = await Promise.all([
+      POST(bookingRequest({ idempotencyKey: "attempt-a" })),
+      POST(bookingRequest({ idempotencyKey: "attempt-b" })),
+    ]);
+    const statuses = [first.status, second.status].sort();
+
+    assert.deepEqual(statuses, [200, 409], "both attempts were allowed through");
+    assert.equal(
+      calls.filter((call) => call === "google:create-event").length,
+      1,
+      "two events were written for the same last slot",
+    );
+    assert.equal(
+      existingBookings.length,
+      10,
+      "the day ended up with more than the ten it allows",
+    );
+  });
+
+  test("the loser is told why, and it is a reason they can act on", async () => {
+    setKvClientForTesting(new FakeKv());
+    fillDay(9);
+    bookingReadBarrier = meetingPoint(2, 250);
+
+    const responses = await Promise.all([
+      POST(bookingRequest({ idempotencyKey: "attempt-c" })),
+      POST(bookingRequest({ idempotencyKey: "attempt-d" })),
+    ]);
+    const refused = responses.find((response) => response.status === 409);
+    assert.ok(refused);
+
+    const body = await refused.json();
+    assert.ok(["day_full", "day_busy"].includes(body.error), body.error);
+    assert.match(body.message, /day|try again/i);
+  });
+
+  test("the day is released again, so the next booking is not blocked", async () => {
+    setKvClientForTesting(new FakeKv());
+    existingBookings = [];
+
+    assert.equal((await POST(bookingRequest({ idempotencyKey: "release-one" }))).status, 200);
+    // If the lock leaked, this would be refused as day_busy rather than booked.
+    assert.equal((await POST(bookingRequest({ idempotencyKey: "release-two" }))).status, 200);
+  });
+
+  test("a refused booking still releases the day", async () => {
+    setKvClientForTesting(new FakeKv());
+    fillDay(10);
+
+    assert.equal((await POST(bookingRequest({ idempotencyKey: "refused-x" }))).status, 409);
+
+    existingBookings = [];
+    assert.equal((await POST(bookingRequest({ idempotencyKey: "refused-y" }))).status, 200);
+  });
+
+  test("without a reservation store the booking still goes through", async () => {
+    // Degraded, not broken: the Google count is still the authority, and
+    // failing real bookings because Redis is down would be the worse outcome.
+    setKvClientForTesting(null);
+    fillDay(9);
+
+    assert.equal((await POST(bookingRequest())).status, 200);
   });
 });

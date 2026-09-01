@@ -32,6 +32,11 @@ Read these before making changes:
 - Do not build an admin dashboard.
 - Do not build a custom calendar backend. Google Calendar stays the system of
   record for availability and appointments.
+- Do not hardcode recurring unavailability such as the weekday school run.
+  Slots are generated normally and removed only by a real Google Calendar
+  conflict, so deleting the event makes them bookable again with no deploy.
+- The daily limit counts customer bookings only. The engineer's own diary
+  entries block times but never consume one of the ten.
 - Do not remove or change the £45 CP12 product. It is the entry offer and its
   price, duration, appliance rule and booking behaviour are fixed.
 - Do not describe what the annual boiler service includes beyond the confirmed

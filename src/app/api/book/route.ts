@@ -17,7 +17,15 @@ import {
   rateLimits,
 } from "@/lib/booking/rate-limit";
 import { bookingSchema, customerTypeLabels } from "@/lib/booking/schema";
-import { isSlotStillAvailable } from "@/lib/booking/slots";
+import {
+  countBookingsByDate,
+  isDayFullyBooked,
+  isSlotStillAvailable,
+} from "@/lib/booking/slots";
+import {
+  acquireDailyBookingLock,
+  releaseDailyBookingLock,
+} from "@/lib/booking/daily-limit";
 import { bookingReference } from "@/lib/booking/reference";
 import {
   cancellationPeriodLastDate,
@@ -28,7 +36,13 @@ import {
 import { buildPropertyAddress, formatAddressLines } from "@/lib/address/format";
 import { PostcodesIoProvider } from "@/lib/address/postcodes-io";
 import { checkServiceArea } from "@/lib/address/service-area";
-import { formatLongDate, isoDateInZone, timeLabelInZone } from "@/lib/booking/time";
+import {
+  formatLongDate,
+  isoDateInZone,
+  parseIsoDate,
+  timeLabelInZone,
+  zonedTimeToUtc,
+} from "@/lib/booking/time";
 import { renderBookingConfirmationEmail } from "@/lib/email/booking-confirmation";
 import {
   isSameDay,
@@ -44,6 +58,7 @@ import {
   CalendarNotConfiguredError,
   createEvent,
   DuplicateBookingError,
+  fetchBookingEvents,
   fetchBusyPeriods,
 } from "@/lib/google/calendar";
 
@@ -231,6 +246,31 @@ export async function POST(request: Request) {
   const end = new Date(start.getTime() + product.durationMinutes * 60000);
   const now = new Date();
 
+  const bookingDate = isoDateInZone(start, bookingConfig.timeZone);
+
+  /*
+    The daily cap is decided from Google, but counting and then writing is two
+    steps. Without this, two customers confirming for the same day at the same
+    moment could both count nine and both write a tenth. The lock serialises
+    them for that date, so the second one counts after the first has landed.
+
+    "unavailable" means there is no reservation store, not that the day is
+    free: the booking goes ahead on the Google count alone, which is the
+    protection that existed before the cap was enforced at all. Failing real
+    bookings because Redis is down would be the worse outcome.
+  */
+  const dayLock = await acquireDailyBookingLock(bookingDate);
+  if (dayLock.status === "busy") {
+    return NextResponse.json(
+      {
+        error: "day_busy",
+        message:
+          "Someone else is confirming a booking for that day. Please try again in a moment.",
+      },
+      { status: 409 },
+    );
+  }
+
   try {
     // Re-check availability against Google immediately before writing.
     const windowStart = new Date(start.getTime() - 24 * 60 * 60000);
@@ -248,7 +288,33 @@ export async function POST(request: Request) {
       );
     }
 
-    const dateIso = isoDateInZone(start, bookingConfig.timeZone);
+    /*
+      The cap, re-derived here rather than trusted from whatever the browser
+      was shown. Counted in customer bookings, so the engineer's own diary
+      entries block times without consuming the day's capacity.
+    */
+    const dayStart = zonedTimeToUtc(
+      { ...parseIsoDate(bookingDate)!, hour: 0, minute: 0 },
+      bookingConfig.timeZone,
+    );
+    const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60000);
+    const bookingCounts = countBookingsByDate(
+      await fetchBookingEvents(dayStart, dayEnd),
+      config,
+    );
+
+    if (isDayFullyBooked(bookingCounts, bookingDate, config)) {
+      return NextResponse.json(
+        {
+          error: "day_full",
+          message:
+            "Sorry — that day is now fully booked. Please choose another date.",
+        },
+        { status: 409 },
+      );
+    }
+
+    const dateIso = bookingDate;
     const tenantLine =
       data.tenantName || data.tenantPhone
         ? `Tenant: ${clean(data.tenantName || "not given")} — ${clean(
@@ -433,5 +499,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "calendar_unavailable" }, { status: 502 });
     }
     return NextResponse.json({ error: "unknown" }, { status: 500 });
+  } finally {
+    // Every path, including the early returns above and a thrown error. The
+    // 15-second TTL is only the backstop for a request that dies outright.
+    if (dayLock.status === "acquired") {
+      await releaseDailyBookingLock(bookingDate, dayLock.token);
+    }
   }
 }

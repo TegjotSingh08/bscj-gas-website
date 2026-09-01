@@ -116,7 +116,7 @@ export const boilerServiceBundle = {
 
 export const availability = {
   workingDays: "Monday to Friday, plus Sunday",
-  workingHours: "10:00 – 20:00",
+  workingHours: "10:00 – 22:00",
   minimumNoticeHours: 12,
   maximumAdvanceDays: 30,
   /**

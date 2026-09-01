@@ -275,6 +275,140 @@ export function buildEventId(slotStartIso: string, idempotencyKey: string): stri
   return `bscj${digest}`.slice(0, 60);
 }
 
+/**
+ * Marks an event as a customer booking taken through this website.
+ *
+ * The daily cap counts customers, not diary entries, and free/busy cannot tell
+ * them apart — it returns start and end times and nothing else, by design. So
+ * the count comes from the events API, and an event is ours when it carries
+ * this private extended property.
+ *
+ * Ids are accepted as a second signal because every event this site has ever
+ * written was given a deterministic id beginning with `bscj` (see
+ * `buildEventId`), including the bookings already sitting in the live calendar
+ * from before this property existed. Either signal is enough.
+ *
+ * "Private" here is Google's term for "visible only to this calendar" — it is
+ * not customer data. It carries no name, address or reference.
+ */
+export const BOOKING_MARKER_KEY = "bscjBooking";
+export const BOOKING_MARKER_VALUE = "1";
+
+/** The id prefix every booking this site writes has always carried. */
+const BOOKING_ID_PREFIX = "bscj";
+
+/** A confirmed customer booking, reduced to what the daily cap needs. */
+export type BookingEvent = { id: string; start: Date };
+
+type CalendarEventItem = {
+  id?: string;
+  status?: string;
+  start?: { dateTime?: string; date?: string };
+  extendedProperties?: { private?: Record<string, string> };
+};
+
+/** Whether a calendar entry is one of our customer bookings. */
+export function isBookingEvent(item: CalendarEventItem): boolean {
+  if (item.status === "cancelled") return false;
+  if (item.extendedProperties?.private?.[BOOKING_MARKER_KEY] === BOOKING_MARKER_VALUE) {
+    return true;
+  }
+  return typeof item.id === "string" && item.id.startsWith(BOOKING_ID_PREFIX);
+}
+
+/**
+ * Turns an events response into customer bookings, failing closed.
+ *
+ * An unreadable response must never be read as "no bookings yet": that is the
+ * direction that lets the daily cap be exceeded. Anything unexpected raises
+ * rather than returning an empty list. All-day entries are skipped — a booking
+ * always has a dateTime, so one without is not ours.
+ *
+ * Exported for testing.
+ */
+export function parseBookingEvents(data: { items?: unknown }): BookingEvent[] {
+  const items = data.items;
+  if (items === undefined) return [];
+  if (!Array.isArray(items)) {
+    throw new CalendarApiError("Google Calendar returned an unreadable event list.", 502);
+  }
+
+  const bookings: BookingEvent[] = [];
+  for (const raw of items as CalendarEventItem[]) {
+    if (!isBookingEvent(raw)) continue;
+
+    const dateTime = raw.start?.dateTime;
+    if (!dateTime) continue;
+
+    const start = new Date(dateTime);
+    if (Number.isNaN(start.getTime())) {
+      throw new CalendarApiError("Google Calendar returned an unreadable booking time.", 502);
+    }
+    bookings.push({ id: raw.id ?? "", start });
+  }
+  return bookings;
+}
+
+/**
+ * Customer bookings in a window, for the daily cap.
+ *
+ * Separate from `fetchBusyPeriods` on purpose, because they answer different
+ * questions. Free/busy answers "is this time occupied", and must include the
+ * school run and everything else on the diary. This answers "how many
+ * customers has BSCJ taken that day", and must include only bookings.
+ *
+ * Recurrences are expanded and cancellations excluded by the request itself.
+ * Paging is followed rather than truncated: a short read would undercount, and
+ * undercounting is what lets an eleventh booking through.
+ */
+export async function fetchBookingEvents(
+  timeMin: Date,
+  timeMax: Date,
+): Promise<BookingEvent[]> {
+  const credentials = readCredentials();
+  const token = await getAccessToken(credentials);
+
+  const bookings: BookingEvent[] = [];
+  let pageToken: string | undefined;
+  // Bounded so a malformed paging response cannot spin forever.
+  for (let page = 0; page < 10; page += 1) {
+    const params = new URLSearchParams({
+      timeMin: timeMin.toISOString(),
+      timeMax: timeMax.toISOString(),
+      singleEvents: "true",
+      showDeleted: "false",
+      maxResults: "2500",
+      fields: "items(id,status,start,extendedProperties),nextPageToken",
+    });
+    if (pageToken) params.set("pageToken", pageToken);
+
+    const response = await fetch(
+      `${CALENDAR_API}/calendars/${encodeURIComponent(credentials.calendarId)}/events?${params}`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      },
+    );
+
+    if (!response.ok) {
+      throw new CalendarApiError(
+        "Could not read existing bookings from Google Calendar.",
+        response.status,
+      );
+    }
+
+    const data = (await response.json()) as {
+      items?: unknown;
+      nextPageToken?: string;
+    };
+    bookings.push(...parseBookingEvents(data));
+
+    if (!data.nextPageToken) return bookings;
+    pageToken = data.nextPageToken;
+  }
+  return bookings;
+}
+
 export type CalendarEventInput = {
   eventId: string;
   summary: string;
@@ -306,6 +440,11 @@ export async function createEvent(input: CalendarEventInput): Promise<{
         location: input.location,
         start: { dateTime: input.start.toISOString(), timeZone: "Europe/London" },
         end: { dateTime: input.end.toISOString(), timeZone: "Europe/London" },
+        // Marks this as a customer booking, so the daily cap can count
+        // customers without mistaking the engineer's own diary for them.
+        extendedProperties: {
+          private: { [BOOKING_MARKER_KEY]: BOOKING_MARKER_VALUE },
+        },
         // No attendees: a service account cannot send invitations without
         // domain-wide delegation, and the site must not imply an email was sent.
         reminders: {

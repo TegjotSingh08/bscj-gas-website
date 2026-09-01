@@ -14,10 +14,13 @@ import assert from "node:assert/strict";
  */
 
 let busy: { start: Date; end: Date }[] = [];
+/** Customer bookings the calendar already holds, for the daily cap. */
+let bookings: { id: string; start: Date }[] = [];
 
 mock.module("@/lib/google/calendar", {
   namedExports: {
     fetchBusyPeriods: async () => busy,
+    fetchBookingEvents: async () => bookings,
     CalendarApiError: class CalendarApiError extends Error {},
     CalendarNotConfiguredError: class CalendarNotConfiguredError extends Error {},
   },
@@ -69,6 +72,7 @@ async function slots(query = ""): Promise<
 
 beforeEach(() => {
   busy = [];
+  bookings = [];
 });
 
 describe("availability is asked for one product at a time", () => {
@@ -114,11 +118,16 @@ describe("availability is asked for one product at a time", () => {
     }
   });
 
-  test("neither product is offered a start after 19:00", async () => {
-    for (const query of ["", "?product=cp12-boiler-service"]) {
+  test("neither product is offered a start after 21:00", async () => {
+    for (const query of [
+      "",
+      "?product=boiler-service",
+      "?product=cp12-boiler-service",
+    ]) {
       const labels = new Set((await slots(query)).map((slot) => slot.label));
-      assert.equal(labels.has("20:00"), false);
-      assert.equal(labels.has("19:00"), true, `19:00 missing for "${query}"`);
+      assert.equal(labels.has("20:00"), true, `20:00 missing for "${query}"`);
+      assert.equal(labels.has("21:00"), true, `21:00 missing for "${query}"`);
+      assert.equal(labels.has("22:00"), false, `22:00 offered for "${query}"`);
     }
   });
 
@@ -151,5 +160,172 @@ describe("availability is asked for one product at a time", () => {
       remaining.some((slot) => slot.startIso === target.startIso),
       false,
     );
+  });
+});
+
+/**
+ * The school run, and what the daily cap actually counts.
+ *
+ * Two rules meet here. A busy period hides the times it covers, whoever put it
+ * on the diary — so the recurring weekday school run removes 15:00 and 16:00
+ * without a line of code knowing it exists, and stops removing them the moment
+ * it is deleted. A booking count is customers only, so that same event never
+ * costs the day one of its ten appointments.
+ */
+describe("blocking events, weekends and the daily cap", () => {
+  /** Every slot label offered on one date. */
+  async function labelsOn(date: string, query = ""): Promise<string[]> {
+    const { body } = await availability(query);
+    assert.ok(body.days);
+    return body.days.find((day) => day.date === date)?.slots.map((s) => s.label) ?? [];
+  }
+
+  /** The first offered date that falls on the given London weekday. */
+  async function firstDateOnWeekday(weekday: number): Promise<string> {
+    const { body } = await availability();
+    assert.ok(body.days);
+    const match = body.days.find((day) => {
+      const [y, m, d] = day.date.split("-").map(Number);
+      return new Date(Date.UTC(y, m - 1, d)).getUTCDay() === weekday;
+    });
+    assert.ok(match, `no offered date fell on weekday ${weekday}`);
+    return match.date;
+  }
+
+  /** A busy period at wall-clock hours on a London date. */
+  function busyOn(date: string, fromHour: number, toHour: number) {
+    const [y, m, d] = date.split("-").map(Number);
+    const asUtc = (hour: number) =>
+      new Date(
+        new Date(`${date}T00:00:00Z`).getTime() +
+          hour * 3_600_000 -
+          // Resolve the London offset for that date rather than assuming it.
+          offsetMinutesFor(y, m, d) * 60_000,
+      );
+    return { start: asUtc(fromHour), end: asUtc(toHour) };
+  }
+
+  function offsetMinutesFor(y: number, m: number, d: number): number {
+    const noon = new Date(Date.UTC(y, m - 1, d, 12));
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Europe/London",
+      hour: "2-digit",
+      hour12: false,
+    }).formatToParts(noon);
+    const londonHour = Number(parts.find((p) => p.type === "hour")?.value ?? "12");
+    return (londonHour - 12) * 60;
+  }
+
+  /** `count` customer bookings on a date, at successive hours. */
+  function bookingsOn(date: string, count: number) {
+    return Array.from({ length: count }, (_, index) => ({
+      id: `bscj-${date}-${index}`,
+      start: busyOn(date, 10 + index, 11 + index).start,
+    }));
+  }
+
+  test("15:00 and 16:00 are offered when the calendar is free", async () => {
+    const weekday = await firstDateOnWeekday(3);
+    const labels = await labelsOn(weekday);
+
+    assert.ok(labels.includes("15:00"), "15:00 was missing on a free weekday");
+    assert.ok(labels.includes("16:00"), "16:00 was missing on a free weekday");
+  });
+
+  test("a 15:00–17:00 school run removes 15:00 and 16:00", async () => {
+    const weekday = await firstDateOnWeekday(3);
+    busy = [busyOn(weekday, 15, 17)];
+
+    const labels = await labelsOn(weekday);
+    assert.equal(labels.includes("15:00"), false);
+    assert.equal(labels.includes("16:00"), false);
+  });
+
+  test("it also takes 17:00, because of the travel buffer", async () => {
+    /*
+      Worth pinning, because it is a business consequence rather than a bug: a
+      block ending at 17:00 is widened by the 15-minute travel buffer to 17:15,
+      so a 17:00 appointment would start before the engineer could get there.
+      A 15:00–17:00 event therefore costs three slots, not two.
+
+      14:00 survives: 14:00–14:45 finishes exactly as the buffer begins.
+    */
+    const weekday = await firstDateOnWeekday(3);
+    busy = [busyOn(weekday, 15, 17)];
+
+    const labels = await labelsOn(weekday);
+    assert.equal(labels.includes("17:00"), false);
+    assert.ok(labels.includes("14:00"), "14:00–14:45 clears 15:00 by the buffer");
+    assert.ok(labels.includes("18:00"), "the evening beyond the buffer was lost");
+  });
+
+  test("deleting the school run brings 15:00 and 16:00 straight back", async () => {
+    const weekday = await firstDateOnWeekday(3);
+
+    busy = [busyOn(weekday, 15, 17)];
+    assert.equal((await labelsOn(weekday)).includes("15:00"), false);
+
+    // Nothing in the application remembers the event: it is only ever absent
+    // from what Google reports.
+    busy = [];
+    assert.equal((await labelsOn(weekday)).includes("15:00"), true);
+    assert.equal((await labelsOn(weekday)).includes("16:00"), true);
+  });
+
+  test("a weekday school run does not follow the weekend", async () => {
+    const weekday = await firstDateOnWeekday(3);
+    const sunday = await firstDateOnWeekday(0);
+    busy = [busyOn(weekday, 15, 17)];
+
+    const sundayLabels = await labelsOn(sunday);
+    assert.ok(sundayLabels.includes("15:00"), "Sunday lost 15:00 to a weekday event");
+    assert.ok(sundayLabels.includes("16:00"), "Sunday lost 16:00 to a weekday event");
+  });
+
+  test("Saturday stays closed, as the trading days say", async () => {
+    // Working days are Monday to Friday plus Sunday. Nothing here changes that.
+    const { body } = await availability();
+    assert.ok(body.days);
+    for (const day of body.days) {
+      const [y, m, d] = day.date.split("-").map(Number);
+      if (new Date(Date.UTC(y, m - 1, d)).getUTCDay() !== 6) continue;
+      assert.deepEqual(day.slots, [], `${day.date} is a Saturday and was offered`);
+    }
+  });
+
+  test("a blocking event costs times but not one of the ten bookings", async () => {
+    const weekday = await firstDateOnWeekday(3);
+    busy = [busyOn(weekday, 15, 17)];
+    bookings = [];
+
+    const labels = await labelsOn(weekday);
+    assert.ok(
+      labels.length > 0,
+      "an ordinary diary entry closed the day as though it were a booking",
+    );
+    assert.equal(labels.includes("15:00"), false);
+  });
+
+  test("nine bookings still leave the day open", async () => {
+    const weekday = await firstDateOnWeekday(3);
+    bookings = bookingsOn(weekday, 9);
+
+    assert.ok((await labelsOn(weekday)).length > 0, "a ninth booking closed the day");
+  });
+
+  test("ten bookings offer nothing further that day", async () => {
+    const weekday = await firstDateOnWeekday(3);
+    bookings = bookingsOn(weekday, 10);
+
+    assert.deepEqual(await labelsOn(weekday), []);
+  });
+
+  test("a full day does not close the days around it", async () => {
+    const weekday = await firstDateOnWeekday(3);
+    const sunday = await firstDateOnWeekday(0);
+    bookings = bookingsOn(weekday, 10);
+
+    assert.deepEqual(await labelsOn(weekday), []);
+    assert.ok((await labelsOn(sunday)).length > 0, "a full day closed another day");
   });
 });

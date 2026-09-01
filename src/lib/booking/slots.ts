@@ -5,8 +5,14 @@
  *   configured working windows
  *     minus Google Calendar busy periods (widened by the buffer)
  *     minus the minimum-notice cutoff
- *     minus days already at the daily cap
+ *     minus days that already hold the maximum number of customer bookings
  *   = offered slots
+ *
+ * Busy periods and booking counts are deliberately two different inputs. A
+ * busy period blocks the times it covers, whoever put it there; a booking
+ * count is customers only. The weekday school run is the case that forced the
+ * distinction: it must hide 15:00 and 16:00 without spending a booking slot,
+ * and it must stop hiding them the moment it is deleted from the calendar.
  */
 
 import { bookingConfig } from "./config";
@@ -112,15 +118,44 @@ export function filterAvailableSlots(
   });
 }
 
-/** How many bookings already sit on a given local date. */
-export function countBookingsOnDate(
-  busy: Interval[],
+/**
+ * A confirmed customer booking, for the daily cap. Only its start matters.
+ */
+export type BookingStart = { start: Date };
+
+/** How many customer bookings sit on each local date. */
+export type BookingCounts = ReadonlyMap<string, number>;
+
+/**
+ * Groups bookings by the local date they fall on.
+ *
+ * The date is resolved in the business timezone, so a 00:30 BST appointment
+ * counts against the day the engineer will actually drive to it rather than
+ * against the previous day in UTC.
+ *
+ * This used to count *busy periods*, which meant the engineer's own diary —
+ * the weekday school run above all — ate the day's customer capacity. Busy
+ * periods still block the slots they overlap; they no longer consume seats.
+ */
+export function countBookingsByDate(
+  bookings: readonly BookingStart[],
+  config = bookingConfig,
+): BookingCounts {
+  const counts = new Map<string, number>();
+  for (const booking of bookings) {
+    const date = isoDateInZone(booking.start, config.timeZone);
+    counts.set(date, (counts.get(date) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/** Whether a date has already taken all the bookings it is allowed. */
+export function isDayFullyBooked(
+  bookingCounts: BookingCounts,
   isoDate: string,
   config = bookingConfig,
-): number {
-  return busy.filter(
-    (period) => isoDateInZone(period.start, config.timeZone) === isoDate,
-  ).length;
+): boolean {
+  return (bookingCounts.get(isoDate) ?? 0) >= config.maximumBookingsPerDay;
 }
 
 /** The local dates a customer may currently book, inclusive of both ends. */
@@ -139,12 +174,10 @@ export function buildAvailability(
   busy: Interval[],
   now: Date,
   config = bookingConfig,
+  bookingCounts: BookingCounts = new Map(),
 ): DayAvailability[] {
   return dates.map((date) => {
-    const atCap =
-      countBookingsOnDate(busy, date, config) >= config.maximumBookingsPerDay;
-
-    const slots = atCap
+    const slots = isDayFullyBooked(bookingCounts, date, config)
       ? []
       : filterAvailableSlots(
           candidateSlotsForDate(date, config),
@@ -170,6 +203,7 @@ export function isSlotStillAvailable(
   busy: Interval[],
   now: Date,
   config = bookingConfig,
+  bookingCounts: BookingCounts = new Map(),
 ): boolean {
   const start = new Date(startIso);
   if (Number.isNaN(start.getTime())) return false;
@@ -183,9 +217,7 @@ export function isSlotStillAvailable(
   );
   if (!candidate) return false;
 
-  if (countBookingsOnDate(busy, date, config) >= config.maximumBookingsPerDay) {
-    return false;
-  }
+  if (isDayFullyBooked(bookingCounts, date, config)) return false;
 
   return filterAvailableSlots([candidate], busy, now, config).length === 1;
 }

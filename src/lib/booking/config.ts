@@ -35,8 +35,8 @@ export type BookingConfig = {
    *
    * Deliberately *not* part of the appointment. It is enforced in full between
    * two bookings, by widening every busy period on both sides, but it is
-   * allowed to run past the end of the working day on the last job: a 19:00
-   * bundle is a valid 19:00–20:00 appointment whose buffer ends at 20:15.
+   * allowed to run past the end of the working day on the last job: a 21:00
+   * bundle is a valid 21:00–22:00 appointment whose buffer ends at 22:15.
    * Decided 31 August 2026; see docs/business-details.md.
    */
   bufferMinutes: number;
@@ -44,18 +44,26 @@ export type BookingConfig = {
   slotIntervalMinutes: number;
   minimumNoticeHours: number;
   maximumAdvanceDays: number;
+  /**
+   * The most **customer bookings** BSCJ will take on one local calendar date.
+   *
+   * Counted in confirmed BSCJ booking events, never in busy periods: the
+   * engineer's own diary entries — the weekday school run, a dentist
+   * appointment — block the slots they overlap but are not customers and must
+   * not consume the day's capacity. See `lib/booking/daily-limit.ts`.
+   */
   maximumBookingsPerDay: number;
 };
 
 const baseConfig: Omit<BookingConfig, "appointmentMinutes"> = {
   timeZone: "Europe/London",
-  workingHours: { startMinutes: 10 * 60, endMinutes: 20 * 60 },
+  workingHours: { startMinutes: 10 * 60, endMinutes: 22 * 60 },
   workingWeekdays: WORKING_WEEKDAYS,
   bufferMinutes: 15,
   slotIntervalMinutes: 60,
   minimumNoticeHours: availability.minimumNoticeHours,
   maximumAdvanceDays: availability.maximumAdvanceDays,
-  maximumBookingsPerDay: 8,
+  maximumBookingsPerDay: 10,
 };
 
 /** The booking rules for one product. */

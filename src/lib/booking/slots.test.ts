@@ -6,7 +6,8 @@ import {
   bookableDates,
   buildAvailability,
   candidateSlotsForDate,
-  countBookingsOnDate,
+  countBookingsByDate,
+  isDayFullyBooked,
   filterAvailableSlots,
   isSlotStillAvailable,
   type Interval,
@@ -34,10 +35,10 @@ describe("working hours generation", () => {
     const labels = slots.map((s) => timeLabelInZone(s.start, bookingConfig.timeZone));
 
     assert.equal(labels[0], "10:00");
-    // 19:00 + 45min = 19:45, inside hours. 20:00 + 45min would overrun, so
-    // 19:00 is the last start.
-    assert.equal(labels.at(-1), "19:00");
-    assert.equal(labels.length, 10);
+    // 21:00 + 45min = 21:45, inside hours. 22:00 + 45min would overrun, so
+    // 21:00 is the last start.
+    assert.equal(labels.at(-1), "21:00");
+    assert.equal(labels.length, 12);
   });
 
   test("appointment length and buffer come from the shared config", () => {
@@ -152,28 +153,29 @@ describe("busy slot removal and buffers", () => {
     ];
     assert.equal(
       filterAvailableSlots(candidateSlotsForDate(BST_WEDNESDAY), busy, now).length,
-      10,
+      12,
     );
   });
 });
 
 describe("minimum booking notice", () => {
   test("slots inside the notice window are withheld", () => {
-    // 09:00 London on the day: the 12-hour cutoff lands at 21:00, past closing.
-    const now = at(BST_WEDNESDAY, 9);
+    // 10:00 London on the day: the 12-hour cutoff lands at 22:00, past the
+    // last start of 21:00.
+    const now = at(BST_WEDNESDAY, 10);
     const free = filterAvailableSlots(candidateSlotsForDate(BST_WEDNESDAY), [], now);
     assert.equal(free.length, 0);
   });
 
   test("slots beyond the notice window are offered", () => {
-    // 05:00 London: cutoff is 17:00, so 17:00, 18:00 and 19:00 remain.
+    // 05:00 London: cutoff is 17:00, so everything from 17:00 remains.
     const now = at(BST_WEDNESDAY, 5);
     const labels = filterAvailableSlots(
       candidateSlotsForDate(BST_WEDNESDAY),
       [],
       now,
     ).map((s) => timeLabelInZone(s.start, bookingConfig.timeZone));
-    assert.deepEqual(labels, ["17:00", "18:00", "19:00"]);
+    assert.deepEqual(labels, ["17:00", "18:00", "19:00", "20:00", "21:00"]);
   });
 
   test("the notice period is exactly the configured number of hours", () => {
@@ -187,16 +189,112 @@ describe("minimum booking notice", () => {
   });
 });
 
+/**
+ * The cap counts customers, not diary entries.
+ *
+ * It used to count busy periods, which meant the engineer's own calendar ate
+ * the day's capacity — the weekday school run alone would have spent two of
+ * them. Bookings and busy periods are now separate inputs, and only bookings
+ * consume a seat.
+ */
 describe("daily booking cap", () => {
-  test("a day at the cap offers nothing further", () => {
-    const busy: Interval[] = Array.from({ length: 8 }, (_, index) => ({
-      start: at(BST_WEDNESDAY, 10 + index),
-      end: at(BST_WEDNESDAY, 10 + index, 45),
+  /** `count` customer bookings on one date, at successive hours. */
+  function bookingsOn(isoDate: string, count: number) {
+    return Array.from({ length: count }, (_, index) => ({
+      start: at(isoDate, 10 + index),
     }));
-    assert.equal(countBookingsOnDate(busy, BST_WEDNESDAY), 8);
+  }
 
-    const [day] = buildAvailability([BST_WEDNESDAY], busy, at(BST_WEDNESDAY, 5));
+  test("the cap is ten customer bookings a day", () => {
+    assert.equal(bookingConfig.maximumBookingsPerDay, 10);
+  });
+
+  test("nine bookings still leaves the day open", () => {
+    const counts = countBookingsByDate(bookingsOn(BST_WEDNESDAY, 9));
+    assert.equal(counts.get(BST_WEDNESDAY), 9);
+    assert.equal(isDayFullyBooked(counts, BST_WEDNESDAY), false);
+
+    const [day] = buildAvailability(
+      [BST_WEDNESDAY],
+      [],
+      at("2026-08-18", 6),
+      bookingConfig,
+      counts,
+    );
+    assert.ok(day.slots.length > 0, "a ninth booking closed the day");
+  });
+
+  test("ten bookings offers nothing further", () => {
+    const counts = countBookingsByDate(bookingsOn(BST_WEDNESDAY, 10));
+    assert.equal(isDayFullyBooked(counts, BST_WEDNESDAY), true);
+
+    const [day] = buildAvailability(
+      [BST_WEDNESDAY],
+      [],
+      at("2026-08-18", 6),
+      bookingConfig,
+      counts,
+    );
     assert.deepEqual(day.slots, []);
+  });
+
+  test("a slot on a full day fails the confirmation re-check too", () => {
+    const counts = countBookingsByDate(bookingsOn(BST_WEDNESDAY, 10));
+    assert.equal(
+      isSlotStillAvailable(
+        at(BST_WEDNESDAY, 14).toISOString(),
+        [],
+        at("2026-08-18", 6),
+        bookingConfig,
+        counts,
+      ),
+      false,
+    );
+  });
+
+  test("an ordinary blocking event costs times, not capacity", () => {
+    // The school run: 15:00-17:00 on the diary, and not a customer.
+    const schoolRun: Interval[] = [
+      { start: at(BST_WEDNESDAY, 15), end: at(BST_WEDNESDAY, 17) },
+    ];
+    const counts = countBookingsByDate([]);
+
+    assert.equal(counts.get(BST_WEDNESDAY), undefined);
+    assert.equal(isDayFullyBooked(counts, BST_WEDNESDAY), false);
+
+    const [day] = buildAvailability(
+      [BST_WEDNESDAY],
+      schoolRun,
+      at("2026-08-18", 6),
+      bookingConfig,
+      counts,
+    );
+    const labels = day.slots.map((slot) => slot.label);
+
+    assert.ok(day.slots.length > 0, "a blocking event closed the whole day");
+    assert.equal(labels.includes("15:00"), false);
+    assert.equal(labels.includes("16:00"), false);
+  });
+
+  test("the cap counts against the London date, across BST and GMT", () => {
+    // 00:30 BST on 1 September is 23:30 UTC on 31 August. The booking belongs
+    // to the day the engineer will drive to it.
+    const counts = countBookingsByDate([
+      { start: new Date("2026-08-31T23:30:00.000Z") },
+      { start: new Date("2026-12-31T23:30:00.000Z") },
+    ]);
+    assert.equal(counts.get("2026-09-01"), 1);
+    assert.equal(counts.get("2026-08-31"), undefined);
+    assert.equal(counts.get("2026-12-31"), 1);
+  });
+
+  test("bookings on other days do not fill this one", () => {
+    const counts = countBookingsByDate([
+      ...bookingsOn("2026-08-20", 10),
+      ...bookingsOn(BST_WEDNESDAY, 2),
+    ]);
+    assert.equal(isDayFullyBooked(counts, "2026-08-20"), true);
+    assert.equal(isDayFullyBooked(counts, BST_WEDNESDAY), false);
   });
 });
 
@@ -358,7 +456,7 @@ describe("appointment length versus the working-hours boundary", () => {
     );
   }
 
-  test("the CP12 grid is exactly what it always was", () => {
+  test("the CP12 grid runs 10:00 to 21:00", () => {
     assert.equal(bookingConfigFor("cp12").appointmentMinutes, 45);
     assert.deepEqual(labels(BST_WEDNESDAY), [
       "10:00",
@@ -371,7 +469,19 @@ describe("appointment length versus the working-hours boundary", () => {
       "17:00",
       "18:00",
       "19:00",
+      "20:00",
+      "21:00",
     ]);
+  });
+
+  test("20:00 and 21:00 are offered; 22:00 is not a start", () => {
+    for (const id of ["cp12", "boiler-service", "cp12-boiler-service"] as const) {
+      const starts = labels(BST_WEDNESDAY, bookingConfigFor(id));
+      assert.equal(starts.includes("20:00"), true, `${id} lost 20:00`);
+      assert.equal(starts.includes("21:00"), true, `${id} lost 21:00`);
+      assert.equal(starts.includes("22:00"), false, `${id} offered 22:00`);
+      assert.equal(starts.at(-1), "21:00");
+    }
   });
 
   test("the bundle is an hour long", () => {
@@ -379,17 +489,17 @@ describe("appointment length versus the working-hours boundary", () => {
     assert.equal(blockMinutesFor(bundleConfig), 75);
   });
 
-  test("the bundle still offers 19:00, and it runs to 20:00", () => {
+  test("the bundle still offers the last start, and it runs to 22:00", () => {
     const slots = candidateSlotsForDate(BST_WEDNESDAY, bundleConfig);
     const last = slots.at(-1);
     assert.ok(last);
 
-    assert.equal(timeLabelInZone(last.start, bundleConfig.timeZone), "19:00");
-    assert.equal(timeLabelInZone(last.end, bundleConfig.timeZone), "20:00");
+    assert.equal(timeLabelInZone(last.start, bundleConfig.timeZone), "21:00");
+    assert.equal(timeLabelInZone(last.end, bundleConfig.timeZone), "22:00");
     assert.equal((last.end.getTime() - last.start.getTime()) / 60000, 60);
   });
 
-  test("the buffer running to 20:15 does not invalidate the 19:00 bundle", () => {
+  test("the buffer running to 22:15 does not invalidate the 21:00 bundle", () => {
     const last = candidateSlotsForDate(BST_WEDNESDAY, bundleConfig).at(-1);
     assert.ok(last);
 
@@ -398,36 +508,36 @@ describe("appointment length versus the working-hours boundary", () => {
     const blockEnd = new Date(
       last.start.getTime() + blockMinutesFor(bundleConfig) * 60000,
     );
-    assert.equal(timeLabelInZone(blockEnd, bundleConfig.timeZone), "20:15");
+    assert.equal(timeLabelInZone(blockEnd, bundleConfig.timeZone), "22:15");
     assert.ok(
       blockMinutesFor(bundleConfig) >
-        bundleConfig.workingHours.endMinutes - (19 * 60),
+        bundleConfig.workingHours.endMinutes - 21 * 60,
     );
   });
 
-  test("neither product ever offers a start after 19:00", () => {
+  test("neither product ever offers a start after 21:00", () => {
     for (const config of [bookingConfig, bundleConfig]) {
       const starts = labels(BST_WEDNESDAY, config);
-      assert.equal(starts.at(-1), "19:00");
-      assert.equal(starts.includes("20:00"), false);
-      assert.equal(starts.length, 10);
+      assert.equal(starts.at(-1), "21:00");
+      assert.equal(starts.includes("22:00"), false);
+      assert.equal(starts.length, 12);
     }
   });
 
-  test("both products are offered the same ten hourly starts", () => {
+  test("both products are offered the same twelve hourly starts", () => {
     // The bundle is longer, but it does not lose a slot to that — which is
     // what the appointment-versus-buffer distinction was decided to protect.
     assert.deepEqual(labels(BST_WEDNESDAY), labels(BST_WEDNESDAY, bundleConfig));
   });
 
   test("a bundle is validated against the bundle's own length", () => {
-    const nineteen = candidateSlotsForDate(BST_WEDNESDAY, bundleConfig).at(-1);
-    assert.ok(nineteen);
+    const lastStart = candidateSlotsForDate(BST_WEDNESDAY, bundleConfig).at(-1);
+    assert.ok(lastStart);
     const day = at("2026-08-18", 6);
 
     assert.equal(
       isSlotStillAvailable(
-        nineteen.start.toISOString(),
+        lastStart.start.toISOString(),
         [],
         day,
         bundleConfig,
@@ -451,6 +561,9 @@ describe("appointment length versus the working-hours boundary", () => {
 
     assert.equal(open.includes("19:00"), false);
     assert.equal(open.includes("18:00"), true, "18:00–18:45 clears 19:00 by 15m");
+    // 20:00 would start inside the buffer that runs to 20:15; 21:00 is clear.
+    assert.equal(open.includes("20:00"), false);
+    assert.equal(open.includes("21:00"), true, "the evening beyond it is free");
   });
 
   test("an 18:00 bundle blocks the 19:00 that follows it", () => {
@@ -530,16 +643,16 @@ describe("date boundaries elsewhere in the booking path", () => {
     // 00:30 + 12h = 12:30, so 12:00 is too soon and 13:00 is the first offer.
     assert.equal(labels.includes("12:00"), false);
     assert.equal(labels[0], "13:00");
-    assert.equal(labels.at(-1), "19:00");
+    assert.equal(labels.at(-1), "21:00");
   });
 
-  test("19:00 survives the boundary for every product", () => {
+  test("the last start survives the boundary for every product", () => {
     for (const id of ["cp12", "boiler-service", "cp12-boiler-service"] as const) {
       const config = bookingConfigFor(id);
       const last = candidateSlotsForDate("2026-09-01", config).at(-1);
       assert.ok(last);
 
-      assert.equal(timeLabelInZone(last.start, config.timeZone), "19:00");
+      assert.equal(timeLabelInZone(last.start, config.timeZone), "21:00");
       assert.equal(
         isSlotStillAvailable(
           last.start.toISOString(),
@@ -548,7 +661,7 @@ describe("date boundaries elsewhere in the booking path", () => {
           config,
         ),
         true,
-        `${id} lost its 19:00 slot at the month boundary`,
+        `${id} lost its last slot at the month boundary`,
       );
     }
   });
