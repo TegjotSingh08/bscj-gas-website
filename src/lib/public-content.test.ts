@@ -53,6 +53,27 @@ const files = sourceFiles(SOURCE_ROOT).filter(
 );
 
 /**
+ * Modules that exist only behind authentication.
+ *
+ * The copy rules below are about what a customer can read. These are the staff
+ * and invoicing surfaces, which no public page imports — a separate structural
+ * test in `admin-access.test.ts` is what holds that true, and this list is
+ * only meaningful because that test exists.
+ */
+const PRIVATE_MODULE_PREFIXES = [
+  path.join("src", "app", "admin"),
+  path.join("src", "lib", "auth"),
+  path.join("src", "lib", "db"),
+  path.join("src", "lib", "invoices"),
+  path.join("src", "lib", "pricing"),
+  path.join("src", "lib", "settings"),
+];
+
+function isPrivateModule(file: string): boolean {
+  return PRIVATE_MODULE_PREFIXES.some((prefix) => file.startsWith(prefix));
+}
+
+/**
  * Source with comments removed.
  *
  * Copy rules apply to what a customer can read, not to the notes explaining
@@ -372,7 +393,10 @@ describe("the mobile header", () => {
   });
 
   test("the areas link points at a section that exists", () => {
-    const home = readFileSync(path.resolve(SOURCE_ROOT, "app/page.tsx"), "utf8");
+    const home = readFileSync(
+      path.resolve(SOURCE_ROOT, "app/(site)/page.tsx"),
+      "utf8",
+    );
     assert.match(home, /id="areas"/);
   });
 
@@ -803,7 +827,7 @@ describe("no invented facts reach the public site", () => {
   });
 
   test("the terms page states its version and the right to cancel", () => {
-    const terms = copy.get("src/app/terms/page.tsx");
+    const terms = copy.get("src/app/(site)/terms/page.tsx");
     assert.ok(terms, "the terms page should exist");
     assert.match(terms, /right to cancel this contract within/i);
     assert.match(terms, /TERMS_VERSION/);
@@ -814,10 +838,20 @@ describe("no invented facts reach the public site", () => {
   });
 
   test("no VAT wording appears anywhere customer-facing", () => {
-    // The price is VAT-inclusive internally, which is recorded in
-    // docs/business-details.md and marked INTERNAL ONLY. It is presented
-    // publicly as a plain fixed total, with no VAT wording at all.
+    /*
+      The price is VAT-inclusive internally, which is recorded in
+      docs/business-details.md and marked INTERNAL ONLY. It is presented
+      publicly as a plain fixed total, with no VAT wording at all.
+
+      The V2 invoicing modules are excluded because they are not
+      customer-facing: BSCJ's VAT registration status is a fact an invoice has
+      to model, and modelling it is how the site can be certain never to charge
+      or mention VAT while registration is off. What keeps them off the public
+      site is not this rule but the import guard in `admin-access.test.ts`,
+      which asserts that no public page or component imports any of them.
+    */
     const offenders = [...copy]
+      .filter(([file]) => !isPrivateModule(file))
       .filter(([, contents]) => /\bvat\b/i.test(contents))
       .map(([file]) => file);
 
@@ -836,9 +870,9 @@ describe("no invented facts reach the public site", () => {
 describe("both prices are stated up front", () => {
   /** Pages a customer can land on and decide from. */
   const decisionPages = [
-    "src/app/page.tsx",
-    "src/app/gas-safety-certificate-wolverhampton/page.tsx",
-    "src/app/book/page.tsx",
+    "src/app/(site)/page.tsx",
+    "src/app/(site)/gas-safety-certificate-wolverhampton/page.tsx",
+    "src/app/(site)/book/page.tsx",
   ];
 
   test("all three prices are published somewhere a customer will meet them", () => {

@@ -1,0 +1,338 @@
+import { test, describe } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync, readdirSync } from "node:fs";
+import path from "node:path";
+
+/**
+ * Structural guards on the admin surface.
+ *
+ * These are repository-level assertions rather than request tests, for the
+ * same reason `public-content.test.ts` is: the failure they exist to prevent
+ * is a *new file* that quietly does the wrong thing. An admin page added later
+ * without an authorisation check, or a public page that starts importing the
+ * auth stack, would both pass every behavioural test in the suite.
+ */
+
+const ROOT = process.cwd();
+const APP_ROOT = path.resolve(ROOT, "src/app");
+const ADMIN_ROOT = path.join(APP_ROOT, "admin");
+
+function filesUnder(directory: string, match: (name: string) => boolean): string[] {
+  const found: string[] = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const full = path.join(directory, entry.name);
+    if (entry.isDirectory()) found.push(...filesUnder(full, match));
+    else if (match(entry.name)) found.push(full);
+  }
+  return found;
+}
+
+const read = (file: string) => readFileSync(file, "utf8");
+
+/**
+ * Source with comments removed.
+ *
+ * The rules below are about what the code does, not about the notes
+ * explaining why — a comment naming the route group must not trip the check
+ * that no URL contains it.
+ */
+function withoutComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .split("\n")
+    .filter((line) => {
+      const trimmed = line.trim();
+      return !trimmed.startsWith("//") && !trimmed.startsWith("*");
+    })
+    .join("\n");
+}
+const relative = (file: string) => path.relative(ROOT, file);
+
+describe("the admin gate", () => {
+  const middleware = read(path.resolve(ROOT, "src/middleware.ts"));
+
+  test("the matcher covers the admin pages and the admin API", () => {
+    assert.match(middleware, /"\/admin\/:path\*"/);
+    assert.match(middleware, /"\/api\/admin\/:path\*"/);
+  });
+
+  test("it covers nothing else", () => {
+    /*
+      The booking flow must not pass through authentication middleware. A
+      matcher that widened to "/:path*" would put every customer request
+      through this, and a mistake in it would take the public site down.
+
+      Asserted as an allow-list of private prefixes rather than an exact list,
+      because the prefixes grow as V2 surfaces land — but never to anything a
+      customer can reach. `/schedule` is deliberately absent: tenant access is
+      a token, not a session cookie, so gating it here would only imply it was
+      gated.
+    */
+    const matcher = middleware.match(/matcher:[\s\S]*?\[([^\]]*)\]/)?.[1] ?? "";
+    const entries = [...matcher.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+
+    const privatePrefixes = ["/admin", "/api/admin", "/portal", "/api/portal", "/engineer", "/api/engineer"];
+    assert.ok(entries.length > 0, "the matcher is empty");
+    assert.ok(entries.includes("/admin/:path*"));
+
+    for (const entry of entries) {
+      assert.ok(
+        privatePrefixes.some((prefix) => entry.startsWith(`${prefix}/`)),
+        `${entry} reaches outside the private surfaces`,
+      );
+    }
+
+    for (const publicPath of ["/book", "/api/book", "/api/availability", "/api/hold", "/schedule", "/:path*"]) {
+      assert.equal(
+        entries.some((entry) => entry.startsWith(publicPath)),
+        false,
+        `the matcher covers ${publicPath}`,
+      );
+    }
+  });
+
+  test("an unauthenticated API call is refused, not redirected", () => {
+    // Redirecting a fetch hands the caller an HTML login page with a 200 on
+    // it, which is the kind of thing that gets parsed as success.
+    assert.match(middleware, /startsWith\("\/api\/"\)/);
+    assert.match(middleware, /status:\s*401/);
+  });
+
+  test("the login page stays reachable, or there is no way in", () => {
+    assert.match(middleware, /"\/admin\/login"/);
+  });
+
+  test("the return path cannot become an open redirect", () => {
+    // Only a path and query are carried, never an absolute URL.
+    assert.match(middleware, /searchParams\.set\("next", `\$\{pathname\}\$\{search\}`\)/);
+
+    const form = read(
+      path.resolve(ROOT, "src/app/admin/login/LoginForm.tsx"),
+    );
+    assert.match(form, /startsWith\("\/\/"\)/);
+    assert.match(form, /startsWith\("\/"\)/);
+  });
+
+  test("the cookie check is documented as a gate, not as the authorisation", () => {
+    // Middleware runs on the edge and cannot do the database and scrypt work a
+    // real check needs. The comment is load-bearing: it tells the next person
+    // why `requireAdmin` still exists.
+    assert.match(middleware, /Authorisation is enforced again/i);
+  });
+});
+
+describe("every admin page checks authorisation for itself", () => {
+  const adminPages = filesUnder(ADMIN_ROOT, (name) => name === "page.tsx");
+
+  test("there are admin pages to check", () => {
+    assert.ok(adminPages.length > 0);
+  });
+
+  test("each one calls a guard, or is the login page", () => {
+    /*
+      The middleware matcher is a list someone has to remember to update. This
+      is the check that does not depend on remembering: a page under /admin
+      that never asks who is calling would be public the moment the matcher is
+      wrong.
+    */
+    for (const file of adminPages) {
+      const contents = read(file);
+      if (file.endsWith(path.join("login", "page.tsx"))) {
+        assert.match(contents, /currentSession/, `${relative(file)}`);
+        continue;
+      }
+      assert.match(
+        contents,
+        /requireAdmin\(\)/,
+        `${relative(file)} does not verify the session`,
+      );
+    }
+  });
+});
+
+describe("the public site does not carry the admin stack", () => {
+  const publicFiles = [
+    ...filesUnder(APP_ROOT, (name) => /\.tsx?$/.test(name)),
+    ...filesUnder(path.resolve(ROOT, "src/components"), (name) =>
+      /\.tsx?$/.test(name),
+    ),
+  ].filter(
+    (file) =>
+      !file.startsWith(ADMIN_ROOT) &&
+      !file.includes(".test.") &&
+      // The Auth.js endpoint itself. It is the sign-in surface, not a page a
+      // customer renders, and it exposes nothing but a credential check.
+      !file.startsWith(path.join(APP_ROOT, "api", "auth")),
+  );
+
+  test("no public page or component imports the auth stack", () => {
+    // Keeps Auth.js and the database out of the customer bundle entirely.
+    for (const file of publicFiles) {
+      const contents = read(file);
+      for (const forbidden of [
+        "next-auth",
+        "@/auth",
+        "@/lib/auth/",
+        "@/lib/db/",
+        "@/lib/settings/",
+        "@/lib/invoices/",
+        "@/lib/pricing/",
+      ]) {
+        assert.equal(
+          contents.includes(forbidden),
+          false,
+          `${relative(file)} imports ${forbidden}`,
+        );
+      }
+    }
+  });
+
+  test("the booking API routes are untouched by authentication", () => {
+    const bookingRoutes = [
+      "src/app/api/book/route.ts",
+      "src/app/api/availability/route.ts",
+      "src/app/api/hold/route.ts",
+      "src/app/api/hold/release/route.ts",
+      "src/app/api/address/postcode/route.ts",
+    ];
+    for (const route of bookingRoutes) {
+      const contents = read(path.resolve(ROOT, route));
+      assert.equal(contents.includes("next-auth"), false, route);
+      assert.equal(contents.includes("requireAdmin"), false, route);
+    }
+  });
+});
+
+describe("secrets and personal data stay out of the client", () => {
+  test("nothing introduces a NEXT_PUBLIC_ variable", () => {
+    // The V1 rule, still true: no credential and no service-area coordinate
+    // may reach the browser.
+    // Tests are excluded because this one has to contain the very string it
+    // forbids in order to look for it.
+    const sources = filesUnder(path.resolve(ROOT, "src"), (name) =>
+      /\.tsx?$/.test(name),
+    ).filter((file) => !file.includes(".test."));
+    for (const file of sources) {
+      assert.equal(
+        read(file).includes("NEXT_PUBLIC_"),
+        false,
+        `${relative(file)} exposes an environment variable to the browser`,
+      );
+    }
+  });
+
+  test("server-only modules say so", () => {
+    for (const file of [
+      "src/lib/db/client.ts",
+      "src/lib/auth/app-user.ts",
+      "src/lib/auth/session.ts",
+      "src/lib/settings/store.ts",
+      "src/lib/invoices/allocate.ts",
+    ]) {
+      assert.match(
+        read(path.resolve(ROOT, file)),
+        /import "server-only"/,
+        `${file} is not marked server-only`,
+      );
+    }
+  });
+
+  test("the credential check does not reveal which half was wrong", () => {
+    // An admin login that distinguishes "no such user" from "wrong password"
+    // is a list of who to attack.
+    const source = read(path.resolve(ROOT, "src/lib/auth/app-user.ts"));
+    assert.match(source, /DUMMY_HASH/);
+    assert.match(source, /return null/);
+
+    const form = read(path.resolve(ROOT, "src/app/admin/login/LoginForm.tsx"));
+    const messages = [...form.matchAll(/Those details were not recognised/g)];
+    assert.equal(messages.length, 1, "more than one failure message exists");
+  });
+});
+
+
+/**
+ * The public site and the staff area render from different layouts.
+ *
+ * Before this split, `/admin/login` inherited the customer header, the footer
+ * and the sticky "Book your CP12" bar — which covered the sign-in form on a
+ * phone — and shipped the marketing bundle to an internal tool. Route groups
+ * fixed it, and these assertions stop it drifting back.
+ */
+describe("the staff area does not render the public website", () => {
+  const rootLayout = read(path.resolve(APP_ROOT, "layout.tsx"));
+  const siteLayout = read(path.join(APP_ROOT, "(site)", "layout.tsx"));
+  const adminLayout = read(path.join(ADMIN_ROOT, "layout.tsx"));
+
+  test("the root layout is the document and nothing more", () => {
+    // Anything rendered here reaches every route, including the staff area.
+    for (const chrome of [
+      "Header",
+      "Footer",
+      "StickyMobileCTA",
+      "localBusinessSchema",
+    ]) {
+      assert.equal(
+        rootLayout.includes(chrome),
+        false,
+        `the root layout still renders ${chrome}`,
+      );
+    }
+    assert.match(rootLayout, /<html/);
+    assert.match(rootLayout, /<body/);
+  });
+
+  test("the customer chrome lives in the public group", () => {
+    for (const chrome of ["Header", "Footer", "StickyMobileCTA"]) {
+      assert.ok(siteLayout.includes(chrome), `(site) is missing ${chrome}`);
+    }
+  });
+
+  test("the admin layout renders none of it", () => {
+    for (const chrome of [
+      "Header",
+      "Footer",
+      "StickyMobileCTA",
+      "localBusinessSchema",
+    ]) {
+      assert.equal(
+        adminLayout.includes(chrome),
+        false,
+        `the admin layout renders ${chrome}`,
+      );
+    }
+  });
+
+  test("the route group is not a URL segment", () => {
+    /*
+      `(site)` exists only to group files. If a link or a canonical ever
+      contained it, the group would have changed the site's URLs — which is
+      exactly what it must not do.
+    */
+    const sources = filesUnder(path.resolve(ROOT, "src"), (name) =>
+      /\.tsx?$/.test(name),
+    ).filter((file) => !file.includes(".test."));
+
+    for (const file of sources) {
+      assert.equal(
+        /["'`]\/?\(site\)/.test(withoutComments(read(file))),
+        false,
+        `${relative(file)} puts the route group in a URL`,
+      );
+    }
+  });
+
+  test("every public page still lives under the public group", () => {
+    // A page added at src/app/<name>/page.tsx would silently lose the header.
+    const strayPages = filesUnder(APP_ROOT, (name) => name === "page.tsx").filter(
+      (file) =>
+        !file.startsWith(path.join(APP_ROOT, "(site)")) &&
+        !file.startsWith(ADMIN_ROOT),
+    );
+    assert.deepEqual(
+      strayPages.map(relative),
+      [],
+      "a page sits outside both the public group and the admin area",
+    );
+  });
+});

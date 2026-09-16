@@ -93,6 +93,11 @@ a messaging platform.
 
 ## Version 2 — Managed landlord / letting-agent service
 
+**Started 4 September 2026.** Approved and under construction; see
+`V2_ARCHITECTURE.md` for the agreed architecture and phase plan. The scope
+below is what was originally recorded, and it still describes the destination.
+
+
 **Commercial proposition:**
 
 > "Give us the properties. We manage the gas-safety scheduling for you."

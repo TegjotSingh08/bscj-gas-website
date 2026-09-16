@@ -1,11 +1,7 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
-import { Header } from "@/components/Header";
-import { Footer } from "@/components/Footer";
-import { StickyMobileCTA } from "@/components/StickyMobileCTA";
 import { business, cp12 } from "@/lib/business";
-import { JsonLd, localBusinessSchema } from "@/lib/schema";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -34,24 +30,22 @@ export const metadata: Metadata = {
   alternates: { canonical: "/" },
 };
 
+/**
+ * The document, and nothing else.
+ *
+ * The customer-facing header, footer, sticky call bar and business JSON-LD
+ * used to live here, which meant every route got them — including the staff
+ * area, where a "Book your CP12" bar sat over the sign-in form and the public
+ * bundle was shipped to an internal tool. They now belong to the `(site)`
+ * group, which covers exactly the pages a customer can reach.
+ *
+ * Route groups change no URLs. `/`, `/book` and the rest resolve exactly as
+ * they did; only what wraps them has moved.
+ */
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en-GB" className={`${inter.variable} h-full`}>
-      <body className="flex min-h-full flex-col">
-        <a
-          href="#main"
-          className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:bg-navy-900 focus:px-4 focus:py-2 focus:text-white"
-        >
-          Skip to content
-        </a>
-        <Header />
-        <main id="main" className="flex-1">
-          {children}
-        </main>
-        <Footer />
-        <StickyMobileCTA />
-        <JsonLd data={localBusinessSchema} />
-      </body>
+      <body className="flex min-h-full flex-col">{children}</body>
     </html>
   );
 }
