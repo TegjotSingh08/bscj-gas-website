@@ -83,12 +83,14 @@ commit.
 verified, and an administrator exists — all confirmed 17 September 2026. Run
 `npm run db:status` at any time; it is read-only.
 
-- **Persist V1 bookings** (moved from V2.0.3). After the calendar event exists
-  and the emails have been attempted, write the job, the customer and the
-  property — wrapped so a failure logs and does nothing else. Add a
-  reconciliation view in `/admin` listing calendar bookings with no job row.
-  Verify by breaking the database deliberately and confirming a booking still
-  completes.
+- ~~**Persist V1 bookings**~~ ✅ **done, 17 September 2026.**
+  `lib/jobs/persist-booking.ts`, called last from `/api/book`; never throws;
+  idempotent by submission key with the unique index as the backstop.
+  `/admin/jobs` and `/admin/jobs/[id]` expose it. Proved live: success records
+  one job, retries record none, a database failure leaves the booking
+  confirmed, and an agency scope cannot see consumer work. No migration needed.
+  *Still outstanding:* a reconciliation view listing calendar bookings that
+  have no job row — worth having once there is real history to reconcile.
 - `/portal` shell, sign-in, organisation context.
 - Landlords: list, create, edit.
 - Properties: list, create under new or existing landlord, edit. Postcode

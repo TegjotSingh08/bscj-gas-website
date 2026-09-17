@@ -52,6 +52,7 @@ import {
   sendBookingConfirmation,
   sendBookingNotification,
 } from "@/lib/email/send";
+import { persistWebsiteBooking } from "@/lib/jobs/persist-booking";
 import {
   buildEventId,
   CalendarApiError,
@@ -464,6 +465,51 @@ export async function POST(request: Request) {
         tenantName: clean(data.tenantName || ""),
         tenantPhone: clean(data.tenantPhone || ""),
       }),
+    });
+
+    // ---------------------------------------------------------------
+    // The V2 record.
+    //
+    // Last, and unable to fail the booking: the appointment exists, the hold
+    // is released and the customer has been written to. `persistWebsiteBooking`
+    // never throws — every failure comes back as a value — so this is called
+    // plainly, exactly as the two email sends above are.
+    //
+    // A booking that is not recorded here is a reconciliation job and shows up
+    // in /admin/jobs as absent. A booking refused because a database was
+    // unreachable would be a lost customer, which is the trade this ordering
+    // exists to make.
+    //
+    // Nothing about the response depends on the result. The customer is never
+    // told whether our own bookkeeping succeeded.
+    // ---------------------------------------------------------------
+    await persistWebsiteBooking({
+      reference,
+      idempotencyKey: data.idempotencyKey,
+      calendarEventId: event.id,
+      customerType: data.customerType,
+      fullName: clean(data.fullName),
+      company: data.company || null,
+      email: data.email,
+      phone: data.phone,
+      houseOrName: property.houseOrName,
+      street: property.street,
+      town: property.town ?? null,
+      postcode: property.postcode,
+      accessNotes: data.accessNotes || null,
+      tenantName: data.tenantName || null,
+      tenantPhone: data.tenantPhone || null,
+      productId: product.id,
+      // Omitted where it means nothing, on the same rule the calendar
+      // description already follows.
+      applianceCount: price.appliancePricing ? price.applianceCount : null,
+      extraAppliances: price.extraAppliances,
+      extraAppliancePrice: product.extraAppliancePrice,
+      // The server-derived total, never the figure the browser displayed.
+      priceTotal: price.total,
+      appointmentStart: start,
+      appointmentEnd: end,
+      durationMinutes: product.durationMinutes,
     });
 
     return NextResponse.json({

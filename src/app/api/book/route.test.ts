@@ -20,7 +20,8 @@ import { TERMS_VERSION } from "@/lib/booking/terms";
 /** Every side effect, in the order it happened. */
 let calls: string[] = [];
 
-let calendarBehaviour: "succeeds" | "fails" | "slot_busy" = "succeeds";
+let calendarBehaviour: "succeeds" | "fails" | "slot_busy" | "duplicate" =
+  "succeeds";
 let emailBehaviour: "sent" | "failed" | "not_configured" = "sent";
 let holdBehaviour: "valid" | "expired" | "unavailable" = "valid";
 let completedMarker: string | null = null;
@@ -39,6 +40,12 @@ let lastEmail: {
   email: { subject: string; html: string; text: string };
   reference: string;
 } | null = null;
+
+/** How the V2 record behaves, and what reached it. */
+let persistBehaviour: "records" | "unavailable" | "not_configured" = "records";
+let persistCalls: Record<string, unknown>[] = [];
+/** Jobs the fake has already recorded, keyed by idempotency key. */
+let persistedKeys = new Map<string, string>();
 
 /** The internal alert to BSCJ, and how the transport behaves for it. */
 let notificationBehaviour: "sent" | "failed" | "not_configured" = "sent";
@@ -133,6 +140,18 @@ let existingBookings: { id: string; start: Date }[] = [];
 /** Set only by the concurrency tests. See `meetingPoint`. */
 let bookingReadBarrier: (() => Promise<void>) | null = null;
 
+/**
+ * Hoisted so the fake `createEvent` can throw the very class the route checks
+ * with `instanceof`. A second definition would be a different class, and the
+ * route would fall through to its generic 500 instead of its 409.
+ */
+class FakeDuplicateBookingError extends Error {
+  constructor() {
+    super("duplicate");
+    this.name = "DuplicateBookingError";
+  }
+}
+
 mock.module("@/lib/google/calendar", {
   namedExports: {
     fetchBookingEvents: async () => {
@@ -168,6 +187,11 @@ mock.module("@/lib/google/calendar", {
       calls.push("google:create-event");
       lastEvent = input;
       existingBookings.push({ id: "event-abc123", start: input.start });
+      if (calendarBehaviour === "duplicate") {
+        // Google refuses an event id it has already seen. The deterministic
+        // id means a repeat submission lands here rather than booking twice.
+        throw new FakeDuplicateBookingError();
+      }
       if (calendarBehaviour === "fails") {
         const error = new Error("calendar down");
         error.name = "CalendarApiError";
@@ -185,7 +209,7 @@ mock.module("@/lib/google/calendar", {
       }
     },
     CalendarNotConfiguredError: class CalendarNotConfiguredError extends Error {},
-    DuplicateBookingError: class DuplicateBookingError extends Error {},
+    DuplicateBookingError: FakeDuplicateBookingError,
   },
 });
 
@@ -279,6 +303,42 @@ mock.module("@/lib/address/postcodes-io", {
   },
 });
 
+/**
+ * The V2 record.
+ *
+ * Mocked so the booking route's use of it is observable, and so a database
+ * failure can be simulated without one. The module's own behaviour — what it
+ * writes, and that it never throws — is tested in
+ * `lib/jobs/persist-booking.test.ts`.
+ */
+mock.module("@/lib/jobs/persist-booking", {
+  namedExports: {
+    persistWebsiteBooking: async (input: Record<string, unknown>) => {
+      calls.push("db:persist-job");
+      persistCalls.push(input);
+      /*
+        The real module catches everything and returns a value. A fake that
+        threw would be testing a module that cannot exist — so "unavailable"
+        returns the failure the way the real one does.
+      */
+      if (persistBehaviour === "unavailable") {
+        return { status: "failed", reason: "write_failed" };
+      }
+      if (persistBehaviour === "not_configured") {
+        return { status: "not_configured" };
+      }
+      // Idempotent by the submission's key, exactly as the real one is.
+      const key = input.idempotencyKey as string;
+      if (persistedKeys.has(key)) {
+        return { status: "exists", jobId: persistedKeys.get(key) };
+      }
+      const jobId = `job-${persistedKeys.size + 1}`;
+      persistedKeys.set(key, jobId);
+      return { status: "created", jobId };
+    },
+  },
+});
+
 mock.module("@/lib/booking/rate-limit", {
   namedExports: {
     rateLimit: async () => ({ ok: true, retryAfterSeconds: 0 }),
@@ -334,6 +394,9 @@ beforeEach(() => {
   releasedProductId = null;
   existingBookings = [];
   bookingReadBarrier = null;
+  persistBehaviour = "records";
+  persistCalls = [];
+  persistedKeys = new Map();
   setKvClientForTesting(null);
 });
 
@@ -1641,5 +1704,161 @@ describe("the daily booking limit is enforced at the write", () => {
     fillDay(9);
 
     assert.equal((await POST(bookingRequest())).status, 200);
+  });
+});
+
+/**
+ * The V2 record, from the booking route's side.
+ *
+ * The rule: recording a job is the last thing that happens and the least
+ * important. The appointment already exists in the calendar and the customer
+ * has already been emailed, so nothing here may change what the customer sees.
+ */
+describe("persisting the booking to the V2 database", () => {
+  test("a successful booking records exactly one job", async () => {
+    const response = await POST(bookingRequest());
+    assert.equal(response.status, 200);
+
+    assert.equal(
+      calls.filter((call) => call === "db:persist-job").length,
+      1,
+      "the job was not recorded exactly once",
+    );
+    assert.equal(persistedKeys.size, 1);
+  });
+
+  test("it happens only after the calendar event exists", async () => {
+    // The ordering the whole design rests on: the appointment is real before
+    // anything else is attempted.
+    await POST(bookingRequest());
+
+    assert.ok(
+      calls.indexOf("db:persist-job") > calls.indexOf("google:create-event"),
+      "the job was recorded before the calendar event existed",
+    );
+  });
+
+  test("it happens after both emails, so bookkeeping never delays a customer", async () => {
+    await POST(bookingRequest());
+
+    assert.ok(calls.indexOf("db:persist-job") > calls.indexOf("email:send"));
+    assert.ok(calls.indexOf("db:persist-job") > calls.indexOf("email:notify"));
+  });
+
+  test("a booking that never reached the calendar records nothing", async () => {
+    calendarBehaviour = "fails";
+
+    const response = await POST(bookingRequest());
+    assert.equal(response.status, 502);
+    assert.equal(calls.includes("db:persist-job"), false);
+  });
+
+  test("a rejected booking records nothing", async () => {
+    // Validation failed, so there is no appointment and nothing to record.
+    const response = await POST(bookingRequest({ postcode: "not a postcode" }));
+    assert.notEqual(response.status, 200);
+    assert.equal(calls.includes("db:persist-job"), false);
+  });
+
+  test("the reference recorded is the one the customer was given", async () => {
+    const response = await POST(bookingRequest());
+    const body = (await response.json()) as { booking: { reference: string } };
+
+    assert.equal(persistCalls.length, 1);
+    assert.equal(persistCalls[0].reference, body.booking.reference);
+  });
+
+  test("it is handed the server's own price and product, not the browser's", async () => {
+    // The request below claims four appliances; the price must be the server's
+    // arithmetic on the server's registry, never a figure from the payload.
+    await POST(bookingRequest({ applianceCount: 4, productId: "cp12" }));
+
+    assert.equal(persistCalls[0].productId, "cp12");
+    assert.equal(persistCalls[0].priceTotal, 60);
+    assert.equal(persistCalls[0].applianceCount, 4);
+    assert.equal(persistCalls[0].extraAppliances, 1);
+  });
+
+  test("it is handed the appointment the calendar actually holds", async () => {
+    await POST(bookingRequest());
+    const event = calendarEvent();
+
+    assert.deepEqual(persistCalls[0].appointmentStart, event.start);
+    assert.deepEqual(persistCalls[0].appointmentEnd, event.end);
+  });
+
+  test("a database outage does not fail a confirmed booking", async () => {
+    /*
+      The guarantee. The appointment exists and the customer has been emailed;
+      a failure to write our own record must be invisible to them.
+    */
+    persistBehaviour = "unavailable";
+
+    const response = await POST(bookingRequest());
+    const body = (await response.json()) as {
+      ok: boolean;
+      booking: { reference: string; emailSent: boolean };
+    };
+
+    assert.equal(response.status, 200);
+    assert.equal(body.ok, true);
+    assert.ok(body.booking.reference);
+    assert.equal(body.booking.emailSent, true);
+  });
+
+  test("no database configured does not fail a booking either", async () => {
+    persistBehaviour = "not_configured";
+
+    const response = await POST(bookingRequest());
+    assert.equal(response.status, 200);
+  });
+
+  test("the response says nothing about whether the record was written", async () => {
+    // It is not the customer's problem, and a warning about our own
+    // bookkeeping would only worry them.
+    persistBehaviour = "unavailable";
+
+    const response = await POST(bookingRequest());
+    const body = (await response.json()) as { booking: Record<string, unknown> };
+
+    for (const key of Object.keys(body.booking)) {
+      assert.equal(
+        /job|persist|database|record/i.test(key),
+        false,
+        `the response leaks bookkeeping state in "${key}"`,
+      );
+    }
+  });
+
+  test("a retried submission does not record a second job", async () => {
+    /*
+      Same idempotency key, twice. V1 refuses the second outright — the
+      completed-booking marker makes it a 409 before anything runs — so the
+      recording step is never even reached. Idempotency here is therefore
+      belt and braces, and `lib/jobs/persist-booking.test.ts` proves the
+      braces hold on their own.
+    */
+    const first = await POST(bookingRequest());
+    assert.equal(first.status, 200);
+    assert.equal(persistedKeys.size, 1);
+
+    completedMarker = "event-abc123";
+    const second = await POST(bookingRequest());
+
+    assert.equal(second.status, 409, "V1 no longer refuses a duplicate");
+    assert.equal(persistedKeys.size, 1, "a second job was recorded");
+  });
+
+  test("a duplicate caught by the calendar records nothing either", async () => {
+    // The marker is gone — say Redis was unavailable — so the deterministic
+    // event id is what catches it. Still no second job.
+    const first = await POST(bookingRequest());
+    assert.equal(first.status, 200);
+
+    calendarBehaviour = "duplicate";
+    const second = await POST(bookingRequest());
+
+    assert.equal(second.status, 409);
+    assert.equal(persistedKeys.size, 1, "a second job was recorded");
   });
 });

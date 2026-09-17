@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 
 import { requireAdmin } from "@/lib/auth/session";
 import { isDatabaseConfigured } from "@/lib/db/client";
@@ -44,10 +45,18 @@ export default async function AdminDashboardPage() {
           Foundation in place
         </h2>
         <p className="mt-2 text-sm leading-relaxed text-navy-700">
-          The V2 database, migrations and staff sign-in are ready. Jobs,
-          properties and customers are not being recorded yet — that is the next
-          phase. Until then the public booking flow continues to work exactly as
-          it does today, writing to Google Calendar as before.
+          The V2 database, migrations and staff sign-in are ready, and website
+          bookings are now recorded as jobs once their calendar event exists.
+          The public booking flow is unchanged: it still writes to Google
+          Calendar first, and a database failure cannot fail a booking.
+        </p>
+        <p className="mt-4">
+          <Link
+            href="/admin/jobs"
+            className="text-sm font-bold text-flame-600 underline"
+          >
+            View recorded jobs
+          </Link>
         </p>
         <dl className="mt-5 grid gap-3 sm:grid-cols-2">
           <div className="rounded-xl bg-navy-50 px-4 py-3">

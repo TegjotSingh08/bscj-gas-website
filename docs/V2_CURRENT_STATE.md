@@ -10,7 +10,10 @@ Last updated: 17 September 2026.
 ## Current milestone
 
 **V2.0 Foundation — COMPLETE AND OPERATIONAL, verified 17 September 2026.**
-**V2.1 Portfolio is the next milestone.**
+
+**V2.1 Portfolio — in progress.** The first slice, persisting V1 bookings, is
+done and verified against the live Neon development database. Landlord,
+property and tenancy screens are next.
 
 ## Where the code is
 
@@ -76,6 +79,43 @@ Everything else. No portfolio screens, no agent job creation, no tenant
 scheduling, no engineer UI, no certificate or invoice generation, no cron, no
 blob storage, no messaging UI.
 
+## V2.1, so far
+
+**Website bookings are recorded as jobs** (17 September 2026).
+
+`/api/book` gained exactly one new step: `persistWebsiteBooking`, called last —
+after the calendar event exists, after the hold is released, after both emails.
+It never throws, so it is called plainly, exactly as the email sends above it
+are. A database outage leaves the booking confirmed and the response unchanged.
+
+Retries write nothing at all: the job is looked up by idempotency key before
+any insert, so a second submission leaves no duplicate customer or property
+either. The unique index on `job.idempotency_key` guards the race past that
+check.
+
+`/admin/jobs` and `/admin/jobs/[id]` are the operational views — read-only, and
+scoped through `organisationCondition` so an administrator sees consumer work
+while an agency user never would.
+
+**No migration was needed.** The applied `0000` already carries every column
+this required.
+
+### Proved against live Neon, 17 September 2026
+
+| | |
+| --- | --- |
+| A — success produces one job | `created`, job count 0 → 1 |
+| B — retries do not duplicate | two retries both `exists`, same id, 1 customer / 1 job |
+| C — database failure cannot break a booking | route returns 200 with the reference and `emailSent: true` when persistence fails or is unconfigured |
+| D — visible to ADMIN | appears in the admin list and detail; an agency scope sees neither |
+
+Mapping on the real row: `price_total_pence=6000`, snapshot total `6000`,
+source `list`, `lifecycle=scheduled`, `scheduling_method=self_booked`,
+`source=website_self`, `calendar_sync_state=synced`, no organisation.
+
+Verification rows were deleted afterwards; the database is back to zero jobs,
+customers, properties and activities.
+
 ## Completed work
 
 - Full repository audit (16 September 2026)
@@ -97,7 +137,10 @@ Two things to do first, in this order:
 2. **Route every portfolio read through `organisationCondition`** from
    `lib/auth/scope.ts`. A handler that builds its own `WHERE` is the failure
    mode the whole design is arranged to make hard.
-3. **Push the branch.** V2.0 exists on one machine and nowhere else.
+3. **Push the branch.** V2.0 and V2.1 exist on one machine and nowhere else.
+
+The next V2.1 slice is the `/portal` shell and agency sign-in, then landlords,
+properties and tenancies.
 
 ## Major decisions
 
