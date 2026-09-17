@@ -16,6 +16,14 @@ import path from "node:path";
 const ROOT = process.cwd();
 const APP_ROOT = path.resolve(ROOT, "src/app");
 const ADMIN_ROOT = path.join(APP_ROOT, "admin");
+/** The agency portal. Private, authenticated, and not part of the public site. */
+const PORTAL_ROOT = path.join(APP_ROOT, "(portal)");
+
+/** Every authenticated surface. Add a route group here when you add one. */
+const PRIVATE_ROOTS = [ADMIN_ROOT, PORTAL_ROOT];
+
+const isPrivate = (file: string) =>
+  PRIVATE_ROOTS.some((root) => file.startsWith(root));
 
 function filesUnder(directory: string, match: (name: string) => boolean): string[] {
   const found: string[] = [];
@@ -107,10 +115,12 @@ describe("the admin gate", () => {
     assert.match(middleware, /searchParams\.set\("next", `\$\{pathname\}\$\{search\}`\)/);
 
     const form = read(
-      path.resolve(ROOT, "src/app/admin/login/LoginForm.tsx"),
+      path.resolve(ROOT, "src/components/auth/CredentialsForm.tsx"),
     );
     assert.match(form, /startsWith\("\/\/"\)/);
     assert.match(form, /startsWith\("\/"\)/);
+    // And it cannot carry somebody into the other audience's surface.
+    assert.match(form, /startsWith\(home\)/);
   });
 
   test("the cookie check is documented as a gate, not as the authorisation", () => {
@@ -158,7 +168,11 @@ describe("the public site does not carry the admin stack", () => {
     ),
   ].filter(
     (file) =>
-      !file.startsWith(ADMIN_ROOT) &&
+      !isPrivate(file) &&
+      !file.includes(".test.") &&
+      // The shared sign-in form. It belongs to both private surfaces and is
+      // reached from neither a public page nor a public component.
+      !file.startsWith(path.resolve(ROOT, "src/components/auth")) &&
       !file.includes(".test.") &&
       // The Auth.js endpoint itself. It is the sign-in surface, not a page a
       // customer renders, and it exposes nothing but a credential check.
@@ -244,7 +258,9 @@ describe("secrets and personal data stay out of the client", () => {
     assert.match(source, /DUMMY_HASH/);
     assert.match(source, /return null/);
 
-    const form = read(path.resolve(ROOT, "src/app/admin/login/LoginForm.tsx"));
+    const form = read(
+      path.resolve(ROOT, "src/components/auth/CredentialsForm.tsx"),
+    );
     const messages = [...form.matchAll(/Those details were not recognised/g)];
     assert.equal(messages.length, 1, "more than one failure message exists");
   });
@@ -326,8 +342,7 @@ describe("the staff area does not render the public website", () => {
     // A page added at src/app/<name>/page.tsx would silently lose the header.
     const strayPages = filesUnder(APP_ROOT, (name) => name === "page.tsx").filter(
       (file) =>
-        !file.startsWith(path.join(APP_ROOT, "(site)")) &&
-        !file.startsWith(ADMIN_ROOT),
+        !file.startsWith(path.join(APP_ROOT, "(site)")) && !isPrivate(file),
     );
     assert.deepEqual(
       strayPages.map(relative),

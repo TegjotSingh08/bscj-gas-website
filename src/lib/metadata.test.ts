@@ -38,7 +38,18 @@ const ADMIN_ROOT = path.join(APP_ROOT, "admin");
 const adminPages = allPages.filter((file) => file.startsWith(ADMIN_ROOT));
 
 /** Everything a customer or a crawler can reach. */
-const pages = allPages.filter((file) => !file.startsWith(ADMIN_ROOT));
+/**
+ * Public pages only.
+ *
+ * The canonical and Open Graph rules below are about how a crawler sees the
+ * site. Every authenticated surface is `noindex` and has no canonical to set,
+ * so the private route groups are excluded — add one here when you add one.
+ */
+const PRIVATE_ROOTS = [ADMIN_ROOT, path.join(APP_ROOT, "(portal)")];
+
+const pages = allPages.filter(
+  (file) => !PRIVATE_ROOTS.some((root) => file.startsWith(root)),
+);
 
 describe("there is one production origin", () => {
   test("it is the www host, over https", () => {
@@ -214,5 +225,67 @@ describe("the admin area is not part of the public site", () => {
       "utf8",
     );
     assert.equal(sitemap.includes("/admin"), false);
+  });
+});
+
+/**
+ * The agency portal plays by the same rules as the admin area.
+ *
+ * Exempting it from the public assertions would be enough to make the suite
+ * pass and would prove nothing. It is held to the opposite assertions instead.
+ */
+describe("the agency portal is not part of the public site", () => {
+  const portalRoot = path.join(APP_ROOT, "(portal)");
+  const portalPages = allPages.filter((file) => file.startsWith(portalRoot));
+
+  test("there is a portal surface to check", () => {
+    assert.ok(portalPages.length > 0, "no portal pages were found");
+  });
+
+  test("every portal page refuses indexing", () => {
+    for (const file of portalPages) {
+      assert.match(
+        readFileSync(file, "utf8"),
+        /robots:\s*\{[^}]*index:\s*false/,
+        `${path.relative(process.cwd(), file)} does not refuse indexing`,
+      );
+    }
+  });
+
+  test("no portal page declares a canonical or a share preview", () => {
+    for (const file of portalPages) {
+      const contents = readFileSync(file, "utf8");
+      const name = path.relative(process.cwd(), file);
+      assert.equal(/alternates:\s*\{\s*canonical:/.test(contents), false, name);
+      assert.equal(contents.includes("pageOpenGraph"), false, name);
+    }
+  });
+
+  test("the portal layout refuses indexing for anything beneath it", () => {
+    // A page added without its own metadata still inherits this.
+    const layout = readFileSync(
+      path.join(portalRoot, "portal", "layout.tsx"),
+      "utf8",
+    );
+    assert.match(layout, /robots:\s*\{[^}]*index:\s*false/);
+  });
+
+  test("the sitemap lists no portal route", () => {
+    const sitemap = readFileSync(
+      path.resolve(process.cwd(), "src/app/sitemap.ts"),
+      "utf8",
+    );
+    assert.equal(sitemap.includes("/portal"), false);
+  });
+
+  test("the route group is not a URL segment", () => {
+    // `(portal)` groups files. A link containing it would change the URL.
+    for (const file of portalPages) {
+      assert.equal(
+        /["\'`]\/?\(portal\)/.test(readFileSync(file, "utf8")),
+        false,
+        path.relative(process.cwd(), file),
+      );
+    }
   });
 });

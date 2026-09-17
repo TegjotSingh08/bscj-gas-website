@@ -91,7 +91,9 @@ verified, and an administrator exists — all confirmed 17 September 2026. Run
   confirmed, and an agency scope cannot see consumer work. No migration needed.
   *Still outstanding:* a reconciliation view listing calendar bookings that
   have no job row — worth having once there is real history to reconcile.
-- `/portal` shell, sign-in, organisation context.
+- ~~`/portal` shell, sign-in, organisation context.~~ ✅ **done, 17 September
+  2026**, with `/admin/organisations` to open and suspend agency accounts and
+  create their first owner. One auth system, two branded doors. No migration.
 - Landlords: list, create, edit.
 - Properties: list, create under new or existing landlord, edit. Postcode
   validated through the existing `lib/address` provider.

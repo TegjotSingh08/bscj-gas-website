@@ -57,10 +57,16 @@ export class WrongAudienceError extends Error {
   }
 }
 
-/** Where each role belongs when it arrives somewhere it does not. */
-function signInPath(): string {
-  return "/admin/login";
-}
+/**
+ * Where to send someone who is not signed in.
+ *
+ * Two doors to one lock. BSCJ staff and agency users are the same `app_user`
+ * rows checked by the same credential path, but an agency arriving at a page
+ * headed "BSCJ Admin" would reasonably think they were in the wrong place —
+ * so each audience gets its own branded sign-in and its own return path.
+ */
+const ADMIN_SIGN_IN = "/admin/login";
+const PORTAL_SIGN_IN = "/portal/login";
 
 // ---------------------------------------------------------------------------
 // Page guards — redirect, because a browser asked
@@ -69,18 +75,18 @@ function signInPath(): string {
 /** The signed-in administrator, or the login page. */
 export async function requireAdmin(): Promise<Session> {
   const session = await currentSession();
-  if (!session) redirect(signInPath());
-  if (session.user.role !== "admin") redirect(signInPath());
+  if (!session) redirect(ADMIN_SIGN_IN);
+  if (session.user.role !== "admin") redirect(ADMIN_SIGN_IN);
   return session;
 }
 
 /** The signed-in engineer or administrator, or the login page. */
 export async function requireEngineer(): Promise<Session> {
   const session = await currentSession();
-  if (!session) redirect(signInPath());
+  if (!session) redirect(ADMIN_SIGN_IN);
   // An administrator can work an engineer's screens; the reverse is not true.
   if (session.user.role !== "engineer" && session.user.role !== "admin") {
-    redirect(signInPath());
+    redirect(ADMIN_SIGN_IN);
   }
   return session;
 }
@@ -92,18 +98,31 @@ export async function requireEngineer(): Promise<Session> {
  * that it is nullable on the user record — here, it is not.
  */
 export async function requireAgent(): Promise<
-  Session & { organisationId: string }
+  Session & { organisationId: string; organisationName: string }
 > {
   const session = await currentSession();
-  if (!session) redirect(signInPath());
-  if (!isAgentRole(session.user.role)) redirect(signInPath());
+  if (!session) redirect(PORTAL_SIGN_IN);
+  /*
+    An administrator arriving at the portal is sent to the portal sign-in
+    rather than shown an agency's data. There is no "view as" yet, and
+    inventing one by letting staff through a scope check they do not satisfy
+    would be the wrong way to build it — see V2.8.
+  */
+  if (!isAgentRole(session.user.role)) redirect(PORTAL_SIGN_IN);
 
   const organisationId = session.user.agentOrganisationId;
-  // `scopeFor` has already refused an agency user without one; this is the
-  // type-level restatement of that, not a second check.
-  if (!organisationId) redirect(signInPath());
+  /*
+    `currentIdentity` has already refused an agency user with no organisation,
+    and one whose organisation is deactivated. This is the type-level
+    restatement of that, not a second check.
+  */
+  if (!organisationId) redirect(PORTAL_SIGN_IN);
 
-  return { ...session, organisationId };
+  return {
+    ...session,
+    organisationId,
+    organisationName: session.user.organisationName ?? "",
+  };
 }
 
 // ---------------------------------------------------------------------------

@@ -3,7 +3,7 @@ import "server-only";
 import { eq } from "drizzle-orm";
 
 import { getDb } from "@/lib/db/client";
-import { appUsers } from "@/lib/db/schema";
+import { agentOrganisations, appUsers } from "@/lib/db/schema";
 import { isAgentRole, type AppRole } from "./roles";
 import { verifyPassword } from "./password";
 
@@ -26,6 +26,8 @@ export type UserIdentity = {
   role: AppRole;
   /** Null for BSCJ staff. */
   agentOrganisationId: string | null;
+  /** The organisation, for rendering. Null for BSCJ staff. */
+  organisationName: string | null;
 };
 
 /** Normalised the same way everywhere, so case never decides who you are. */
@@ -53,11 +55,17 @@ export async function authenticateUser(
   const db = getDb();
   if (!db) return null;
 
-  const [user] = await db
-    .select()
+  const [row] = await db
+    .select({ user: appUsers, organisation: agentOrganisations })
     .from(appUsers)
+    .leftJoin(
+      agentOrganisations,
+      eq(agentOrganisations.id, appUsers.agentOrganisationId),
+    )
     .where(eq(appUsers.email, normaliseEmail(email)))
     .limit(1);
+
+  const user = row?.user;
 
   /*
     No early return on a missing user. Skipping the hash would make an unknown
@@ -68,8 +76,36 @@ export async function authenticateUser(
   const hash = user?.passwordHash ?? DUMMY_HASH;
   const correct = await verifyPassword(password, hash);
 
-  if (!user || !correct || !user.isActive) return null;
-  if (isAgentRole(user.role) && !user.agentOrganisationId) return null;
+  if (!row || !correct) return null;
+
+  return toIdentity(row);
+}
+
+/**
+ * Turns a joined row into an identity, or refuses it.
+ *
+ * Three refusals, all returning null so no caller can tell them apart:
+ *
+ * - the user is deactivated;
+ * - an agency user has no organisation, which is a data fault rather than a
+ *   credential failure, but would produce a session with no scope;
+ * - **the organisation itself is deactivated.** Suspending an agency has to
+ *   lock out its people, or "inactive" means nothing. Checking it here rather
+ *   than at each call site means there is one place it can be forgotten, and
+ *   it is not forgotten.
+ */
+function toIdentity(row: {
+  user: typeof appUsers.$inferSelect;
+  organisation: typeof agentOrganisations.$inferSelect | null;
+}): UserIdentity | null {
+  const { user, organisation } = row;
+
+  if (!user.isActive) return null;
+
+  if (isAgentRole(user.role)) {
+    if (!user.agentOrganisationId) return null;
+    if (!organisation || !organisation.isActive) return null;
+  }
 
   return {
     id: user.id,
@@ -77,6 +113,7 @@ export async function authenticateUser(
     name: user.name,
     role: user.role,
     agentOrganisationId: user.agentOrganisationId,
+    organisationName: organisation?.name ?? null,
   };
 }
 
@@ -104,22 +141,19 @@ export async function currentIdentity(id: string): Promise<UserIdentity | null> 
   const db = getDb();
   if (!db) return null;
 
-  const [user] = await db
-    .select()
+  const [row] = await db
+    .select({ user: appUsers, organisation: agentOrganisations })
     .from(appUsers)
+    .leftJoin(
+      agentOrganisations,
+      eq(agentOrganisations.id, appUsers.agentOrganisationId),
+    )
     .where(eq(appUsers.id, id))
     .limit(1);
 
-  if (!user || !user.isActive) return null;
-  if (isAgentRole(user.role) && !user.agentOrganisationId) return null;
+  if (!row) return null;
 
-  return {
-    id: user.id,
-    email: user.email,
-    name: user.name,
-    role: user.role,
-    agentOrganisationId: user.agentOrganisationId,
-  };
+  return toIdentity(row);
 }
 
 /** Records a successful sign-in. Best effort: never blocks the login. */

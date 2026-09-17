@@ -32,7 +32,29 @@ const SESSION_COOKIES = [
 ];
 
 /** Pages that must stay reachable, or there is no way in. */
-const PUBLIC_PRIVATE_PATHS = ["/admin/login"];
+const PUBLIC_PRIVATE_PATHS = ["/admin/login", "/portal/login"];
+
+/**
+ * Which sign-in page a surface belongs to.
+ *
+ * The portal and the admin area are the same credential check on the same
+ * table, but an agency sent to a page headed "BSCJ Admin" would reasonably
+ * think they were in the wrong place. Longest prefix first, so `/portal`
+ * cannot be matched by a shorter rule added later.
+ */
+const SIGN_IN_PAGES: readonly [string, string][] = [
+  ["/portal", "/portal/login"],
+  ["/api/portal", "/portal/login"],
+  ["/admin", "/admin/login"],
+  ["/api/admin", "/admin/login"],
+  ["/engineer", "/admin/login"],
+  ["/api/engineer", "/admin/login"],
+];
+
+function signInPageFor(pathname: string): string {
+  const match = SIGN_IN_PAGES.find(([prefix]) => pathname.startsWith(prefix));
+  return match ? match[1] : "/admin/login";
+}
 
 function hasSessionCookie(request: NextRequest): boolean {
   return SESSION_COOKIES.some((name) => request.cookies.has(name));
@@ -58,7 +80,7 @@ export function middleware(request: NextRequest) {
     return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   }
 
-  const login = new URL("/admin/login", request.url);
+  const login = new URL(signInPageFor(pathname), request.url);
   // Where they were heading, so signing in does not dump them on the dashboard.
   // Path and query only — never an absolute URL, which would make this an open
   // redirect.

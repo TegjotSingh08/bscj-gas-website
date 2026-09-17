@@ -11,9 +11,10 @@ Last updated: 17 September 2026.
 
 **V2.0 Foundation — COMPLETE AND OPERATIONAL, verified 17 September 2026.**
 
-**V2.1 Portfolio — in progress.** The first slice, persisting V1 bookings, is
-done and verified against the live Neon development database. Landlord,
-property and tenancy screens are next.
+**V2.1 Portfolio — in progress.** Two slices done and verified live: V1
+bookings persist as jobs, and agency accounts exist end to end (admin
+management, agent sign-in, the `/portal` shell). Landlord, property and
+tenancy screens are next.
 
 ## Where the code is
 
@@ -115,6 +116,37 @@ source `list`, `lifecycle=scheduled`, `scheduling_method=self_booked`,
 
 Verification rows were deleted afterwards; the database is back to zero jobs,
 customers, properties and activities.
+
+### Agency accounts and the portal (17 September 2026)
+
+`/admin/organisations` opens an agency, adds its first `agent_owner`, and
+suspends or reactivates either. `/portal` is the agency shell: branded sign-in
+at `/portal/login`, dashboard naming the signed-in user and their agency, sign
+out, and placeholder cards for Portfolio, Jobs, Compliance, Invoices and
+Support.
+
+**One auth system, two doors.** Staff and agency users are the same `app_user`
+rows checked by the same credential path and the same shared form; only the
+branding and the landing path differ. Middleware picks the sign-in page by
+prefix; `safeNext` keeps a return path inside the surface it came from.
+
+**Suspension is enforced in `toIdentity`**, which both `authenticateUser` and
+`currentIdentity` map through — so a suspended user or a suspended agency is
+refused at sign-in *and* on the next request of a live session, not when their
+token expires.
+
+**No migration was needed.** `agent_organisation.is_active` and
+`app_user.is_active` were already there.
+
+Proved live, then cleaned up: two agencies created with owners; duplicate email
+refused; agent authenticates and gets their own organisation; an agency sees
+zero consumer jobs and gets null for a consumer job id it knows; admin sees it;
+cross-agency access refused; suspending the agency and suspending the user both
+lock out immediately; a cross-organisation suspend attempt does nothing; no
+password hash appears in any admin read.
+
+**Naming note:** the brief said `agent_staff`; the applied enum says
+`agent_member`. Kept as-is rather than migrating an applied enum for a synonym.
 
 ## Completed work
 
