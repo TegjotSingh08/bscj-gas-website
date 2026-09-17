@@ -26,7 +26,7 @@ Read `V2_ARCHITECTURE.md` for the decisions behind this, and
 
 ---
 
-## V2.0 — Foundation ✅ **complete, 16 September 2026**
+## V2.0 — Foundation ✅ **complete and operational, verified 17 September 2026**
 
 The draft schema predated agent accounts and was reshaped **before the first
 migration was ever applied**, so `0000` was regenerated rather than corrected
@@ -79,9 +79,9 @@ commit.
 
 ## V2.1 — Portfolio
 
-**Do this first: provision Neon and apply `0000` to a branch.** Set
-`DATABASE_URL`, run `npm run db:migrate`, then `npm run admin:create`. Nothing
-below can be verified against a database that does not exist.
+**Prerequisite met.** Neon is provisioned, both migrations are applied and
+verified, and an administrator exists — all confirmed 17 September 2026. Run
+`npm run db:status` at any time; it is read-only.
 
 - **Persist V1 bookings** (moved from V2.0.3). After the calendar event exists
   and the emails have been attempted, write the job, the customer and the

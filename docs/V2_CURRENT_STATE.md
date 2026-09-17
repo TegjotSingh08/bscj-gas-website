@@ -9,20 +9,42 @@ Last updated: 17 September 2026.
 
 ## Current milestone
 
-**V2.0 Foundation — complete. V2.1 Portfolio is next.**
+**V2.0 Foundation — COMPLETE AND OPERATIONAL, verified 17 September 2026.**
+**V2.1 Portfolio is the next milestone.**
 
 ## Where the code is
 
-`main` is at `6bd7c91`. The branch `v2-compliance-platform` still has **no
-commits**: everything below is an uncommitted working-tree change.
+Branch `v2-compliance-platform`, at `44b047a`, three commits past the last V1
+commit (`6bd7c91`). Working tree clean.
 
-**V2 is not deployed, but the schema is now live on Neon.** Both migrations
-were applied on 17 September 2026 and verified with `npm run db:status`:
-22 tables, 20 enum types, `invoice_number_seq` starting at 1000 and never
-drawn from, and both recorded hashes matching the files on disk.
+**The branch is local only — it has no upstream and has not been pushed.**
+That is the one outstanding risk to V2.0: the work exists on one machine.
+
+**V2 is not deployed to production, but the schema is live on the Neon
+development database** and the admin surface works against it.
 
 **The schema is no longer free to reshape in place.** From here a change is a
 new migration, not an edit to `0000`.
+
+### Verification, 17 September 2026
+
+Every check below was read-only. No DDL, no writes, and the invoice sequence
+was inspected through `pg_sequences` rather than drawn from.
+
+| Checked | Result |
+| --- | --- |
+| Live schema vs `schema.ts` | 22/22 tables, **260 columns**, 0 differences |
+| Enum types | 20/20, **78 labels**, all in order |
+| Indexes | 10/10 unique, 60/60 others present |
+| Foreign keys | 54; **0 cascade off `job`**, so history cannot be deleted out from under itself |
+| Migration hashes | both match the files on disk |
+| Invoice sequence | `start=1000`, `last_value=null` — **BSCJ-001000 next, none consumed** |
+| Admin account | 1 row, `role=admin`, active, no organisation (staff), scrypt hash, has signed in |
+| Business data | 0 jobs, customers, invoices, certificates, organisations, settings |
+| V1 runtime modules | **byte-identical** to `6bd7c91` |
+| V1 pages | all 8 identical after the `(site)` move; no chrome lost |
+| Secrets tracked | none; `.env.local` ignored, only `.env.example` tracked |
+| Tests / typecheck / lint / build | 1067 pass, all clean |
 
 ### V2.0, as built
 
@@ -70,11 +92,12 @@ a property detail page.
 
 Two things to do first, in this order:
 
-1. ~~Configure Neon and apply `0000`.~~ **Done, 17 September 2026.** What
-   remains is `npm run admin:create` for a first administrator.
+1. ~~Configure Neon, apply `0000`, create an administrator.~~ **All done and
+   verified, 17 September 2026.**
 2. **Route every portfolio read through `organisationCondition`** from
    `lib/auth/scope.ts`. A handler that builds its own `WHERE` is the failure
    mode the whole design is arranged to make hard.
+3. **Push the branch.** V2.0 exists on one machine and nowhere else.
 
 ## Major decisions
 
@@ -152,13 +175,23 @@ Two things to do first, in this order:
    migrated and verified. `drizzle.config.ts` now loads `.env.local` itself, so
    `source .env.local` is no longer needed before `db:migrate`.
 
+## Known issues, V2
+
+- **The branch is unpushed.** No upstream is set. This is the highest-value
+  thing to fix and costs one command.
+- **Next 16 deprecates the `middleware` file convention** in favour of
+  `proxy`. The build warns; it still works and the route table shows it
+  active. Renaming touches the structural test that reads `src/middleware.ts`,
+  so it is queued for V2.8 polish rather than done under a verification pass.
+
 ## Known issues, unrelated to V2
 
-- **5 failing tests** in `src/app/api/availability/route.test.ts`. Clock-
-  dependent, not a production defect: they ask for the first Wednesday in the
-  offered window, get *today*, and today's 15:00 and 16:00 are inside the
-  12-hour notice window. They pass when run earlier in the day. Fix by pinning
-  a clock — queued for V2.8. 1060 of 1065 tests pass.
+- **Clock-dependent tests** in `src/app/api/availability/route.test.ts`. They
+  ask for the first Wednesday in the offered window; when that resolves to
+  *today* and the time is past roughly 10:00, today's 15:00 and 16:00 fall
+  inside the 12-hour notice window and five assertions fail. Not a production
+  defect — they pass on any other weekday, and the whole suite passes today.
+  Fix by pinning a clock; queued for V2.8.
 - `docs/business-details.md` says "Maximum bookings per day: 8"; the code and
   `CLAUDE.md` both say ten. The code is authoritative; the doc is stale.
 - `BOOKING_NOTIFICATION_EMAIL` is in `.env.example` but not in `.env.local`,
