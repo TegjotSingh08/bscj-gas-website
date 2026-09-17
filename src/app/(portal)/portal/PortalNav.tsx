@@ -15,11 +15,12 @@ export function PortalNav({
 }: {
   organisationName: string;
   userName: string;
-  current: "dashboard" | "portfolio" | "landlords";
+  current: "dashboard" | "portfolio" | "jobs" | "landlords";
 }) {
   const links = [
     { href: "/portal", label: "Dashboard", key: "dashboard" },
     { href: "/portal/portfolio", label: "Portfolio", key: "portfolio" },
+    { href: "/portal/jobs", label: "Jobs", key: "jobs" },
     { href: "/portal/landlords", label: "Landlords", key: "landlords" },
   ] as const;
 

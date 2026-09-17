@@ -123,16 +123,19 @@ V2.2 is the screens, the queries and the wiring, not the arithmetic.
   `resolvePrice`; write the result through `buildPriceSnapshot` onto the job.
 - Volume counters per organisation per month: submitted, completed, invoiced.
   Derived from job timestamps, not stored.
-- Agent job creation: landlord → property → service → tenant → deadline or
-  ASAP → submit.
-- Job reference and hashed scheduling token allocated on submission.
-- Job detail page for the agent; job list with search and filter.
+- ~~Agent job creation; job reference and hashed scheduling token on
+  submission; job list and detail.~~ ✅ **done, 17 September 2026.**
+  `/portal/portfolio/[id]/book`, `/portal/jobs`, `/portal/jobs/[id]`. Price
+  resolved and frozen server-side; idempotency on `job.idempotency_key`
+  namespaced by organisation; token stored only as a self-describing hash.
+  No migration. Search and filter on the job list wait for the dashboard.
 - Admin: pricing agreements, per-job price override with a reason.
 
-**Blocked on:** approved tier figures. The mechanism is complete and no figure
-is in the code; an organisation with no agreement, no commitment or no matching
-band pays list price, which is why this was safe to build first. Do not enter a
-figure until BSCJ approves one.
+**Still outstanding in V2.2:** admin screens for `pricing_agreement`,
+`pricing_agreement_line` and `volume_commitment`. The resolution path is built,
+tested and proved live against a hand-inserted agreement; what is missing is
+the UI to enter one. Blocked on approved tier figures — no figure is in the
+code, and an organisation with no agreement pays list price.
 
 **Done when:** an agent submits a job, the price is resolved on the server,
 and nothing the browser sends can change it.

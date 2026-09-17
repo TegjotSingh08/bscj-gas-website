@@ -94,6 +94,13 @@ export default async function PropertyPage({
               {[property.town, property.postcode].filter(Boolean).join(", ")}
             </p>
           </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <Link
+              href={`/portal/portfolio/${property.id}/book`}
+              className="rounded-xl bg-flame-500 px-5 py-3 text-sm font-bold text-white hover:bg-flame-600"
+            >
+              Book work
+            </Link>
           {activeCycle && (
             <span
               className={
@@ -107,6 +114,7 @@ export default async function PropertyPage({
               CP12 due {activeCycle.dueDate}
             </span>
           )}
+          </div>
         </div>
 
         <section className="mt-6 rounded-2xl border-2 border-navy-200 bg-white p-5">
@@ -225,13 +233,25 @@ export default async function PropertyPage({
           <h2 className="text-sm font-extrabold text-navy-900">Jobs</h2>
           {jobs.length === 0 ? (
             <p className="mt-2 text-sm text-navy-700">
-              No work booked for this property yet.
+              No work booked for this property yet.{" "}
+              <Link
+                href={`/portal/portfolio/${property.id}/book`}
+                className="font-bold text-flame-600 underline"
+              >
+                Book work
+              </Link>
+              .
             </p>
           ) : (
             <ul className="mt-2 divide-y divide-navy-100">
               {jobs.map((job) => (
                 <li key={job.id} className="py-2 text-sm">
-                  <span className="font-bold text-navy-900">{job.reference}</span>
+                  <Link
+                    href={`/portal/jobs/${job.id}`}
+                    className="font-bold text-flame-600 underline"
+                  >
+                    {job.reference}
+                  </Link>
                   <span className="text-navy-700">
                     {" "}
                     · {productFor(job.productId).subjectName} ·{" "}

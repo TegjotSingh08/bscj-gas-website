@@ -11,10 +11,12 @@ Last updated: 17 September 2026.
 
 **V2.0 Foundation — COMPLETE AND OPERATIONAL, verified 17 September 2026.**
 
-**V2.1 Portfolio — in progress.** Three slices done and verified live: V1
-bookings persist as jobs, agency accounts exist end to end, and the portfolio
-(landlords, properties, tenancies, compliance dates) is complete. Agent job
-creation is next, in V2.2.
+**V2.1 Portfolio — complete.** V1 bookings persist as jobs, agency accounts
+exist end to end, and the portfolio (landlords, properties, tenancies,
+compliance dates) works.
+
+**V2.2 Jobs — agent job creation complete.** An agency can book work against
+its own property. Tenant scheduling (V2.3) is next.
 
 ## Where the code is
 
@@ -185,6 +187,48 @@ id, nor attach a property to A's landlord; consumer records stayed out of the
 agency's portfolio and landlord list; duplicate protection held for exact,
 untidy, case and edit-onto-taken variants, with the index refusing a raw race;
 and the consumer job was untouched.
+
+### Agent job creation (17 September 2026)
+
+"Book work" on a property opens `/portal/portfolio/[id]/book`: pick the
+service, ASAP or a deadline, appliance count where the service prices by one,
+an optional note, and a server-calculated price shown before submission.
+`/portal/jobs` and `/portal/jobs/[id]` are the read-only views.
+
+**Everything that decides money, ownership or state is derived server-side.**
+`createAgentJob` takes an organisation from `requireAgent()`, a property id and
+a service id — there is no parameter for a price, reference, status,
+organisation or snapshot, and the action reads none from the form. The property
+is re-read under the organisation before anything is written.
+
+**The scheduling boundary is preserved.** The agent requests work; the tenant
+picks the time in V2.3. So no slot is held, no calendar event is written and no
+email is sent. A job lands in `tenant_outreach` with `source = portal`,
+`calendar_sync_state = not_required` and no appointment — that is the queue
+V2.3 will drive.
+
+**Idempotency** reuses `job.idempotency_key`, namespaced as
+`portal:<orgId>:<submissionKey>` so one agency's key can never collide with
+another's. The key is minted once per rendered form; a retry returns the
+existing job and mints no second reference or token.
+
+**Scheduling tokens** are minted with the job in the same transaction and
+stored only as a self-describing hash (`hmac$…` under
+`SCHEDULING_TOKEN_SECRET`, `sha256$…` without it) so a pepper can be introduced
+later without invalidating links already sent.
+
+**No migration.** The applied schema already carried every column.
+
+Proved live, then cleaned up (A–N): job created with correct lifecycle, source,
+scheduling method and frozen snapshots; reference valid and the **invoice
+sequence never drawn** (`last_value` still null); token hashed, expiring, and
+unmatched by a wrong value; list price with no agreement and the agreed £39.99
+tier price with one, extras charged on the agreed rate; retry returned the same
+job and minted no second token; Agency B reusing A's submission key and
+property id got `not_found` and created nothing; B could not read or book A's
+property or job; a refused write left no job, no orphan token, and every portal
+job had exactly one token; consumer jobs stayed out of agency scope; ADMIN saw
+all three.
 
 ## Completed work
 
