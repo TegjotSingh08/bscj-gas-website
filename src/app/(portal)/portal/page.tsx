@@ -1,8 +1,11 @@
 import type { Metadata } from "next";
 
+import Link from "next/link";
+
 import { requireAgent } from "@/lib/auth/session";
 import { business } from "@/lib/business";
-import { SignOutButton } from "./SignOutButton";
+import { portfolioSummary } from "@/lib/portfolio/queries";
+import { PortalNav } from "./PortalNav";
 
 export const metadata: Metadata = {
   title: "Dashboard",
@@ -29,10 +32,6 @@ export const dynamic = "force-dynamic";
 /** The surfaces this portal will grow. Named now so the shape is visible. */
 const SECTIONS = [
   {
-    title: "Portfolio",
-    description: "Landlords, properties and tenants.",
-  },
-  {
     title: "Jobs",
     description: "Work requested, scheduled and completed.",
   },
@@ -51,34 +50,48 @@ const SECTIONS = [
 ] as const;
 
 export default async function PortalDashboardPage() {
-  const { user, organisationName } = await requireAgent();
+  const { user, organisationId, organisationName } = await requireAgent();
+  const summary = await portfolioSummary(organisationId);
 
   return (
-    <main className="mx-auto max-w-5xl px-4 py-10">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <p className="text-xs font-bold uppercase tracking-wider text-flame-600">
-            BSCJ Gas &amp; Heating
-          </p>
-          <h1 className="mt-1 text-2xl font-extrabold text-navy-900 sm:text-3xl">
-            {organisationName}
-          </h1>
-          <p className="mt-1 text-sm text-navy-600">
-            Signed in as {user.name} ({user.email})
-          </p>
-        </div>
-        <SignOutButton />
+    <>
+    <PortalNav
+      organisationName={organisationName}
+      userName={user.name}
+      current="dashboard"
+    />
+    <main className="mx-auto max-w-5xl px-4 py-8">
+      <h1 className="text-2xl font-extrabold text-navy-900">Dashboard</h1>
+
+      <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {[
+          ["Properties", summary?.properties ?? 0],
+          ["Landlords", summary?.landlords ?? 0],
+          ["With a tenant", summary?.withTenant ?? 0],
+          ["With a CP12 date", summary?.withCompliance ?? 0],
+        ].map(([label, value]) => (
+          <div key={String(label)} className="rounded-2xl border-2 border-navy-200 bg-white p-5">
+            <p className="text-xs font-bold uppercase tracking-wide text-navy-600">
+              {label}
+            </p>
+            <p className="mt-1 text-2xl font-extrabold text-navy-900">{value}</p>
+          </div>
+        ))}
       </div>
 
-      <div className="mt-8 rounded-2xl border-2 border-navy-200 bg-white p-6">
-        <h2 className="text-lg font-extrabold text-navy-900">
-          Your portal is ready
-        </h2>
+      <div className="mt-6 rounded-2xl border-2 border-navy-200 bg-white p-6">
+        <h2 className="text-lg font-extrabold text-navy-900">Your portfolio</h2>
         <p className="mt-2 text-sm leading-relaxed text-navy-700">
-          Your account is open. The sections below are being built and will
-          appear here as they are finished. In the meantime, call or WhatsApp{" "}
-          {business.phoneDisplay} and we will arrange work for you directly.
+          Add the properties you look after and we will track their certificate
+          dates. Booking work from the portal is next; until then, call or
+          WhatsApp {business.phoneDisplay} and we will arrange it directly.
         </p>
+        <Link
+          href="/portal/portfolio"
+          className="mt-4 inline-block rounded-xl bg-flame-500 px-6 py-3 text-sm font-bold text-white hover:bg-flame-600"
+        >
+          Open portfolio
+        </Link>
       </div>
 
       <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -99,5 +112,6 @@ export default async function PortalDashboardPage() {
         ))}
       </div>
     </main>
+    </>
   );
 }

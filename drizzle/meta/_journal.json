@@ -15,6 +15,13 @@
       "when": 1789569723000,
       "tag": "0001_invoice_number_sequence",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789656000000,
+      "tag": "0002_property_uniqueness",
+      "breakpoints": true
     }
   ]
 }

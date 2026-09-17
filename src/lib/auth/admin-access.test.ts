@@ -19,8 +19,18 @@ const ADMIN_ROOT = path.join(APP_ROOT, "admin");
 /** The agency portal. Private, authenticated, and not part of the public site. */
 const PORTAL_ROOT = path.join(APP_ROOT, "(portal)");
 
-/** Every authenticated surface. Add a route group here when you add one. */
-const PRIVATE_ROOTS = [ADMIN_ROOT, PORTAL_ROOT];
+/**
+ * Every authenticated surface, pages and API alike. Add one here when you add
+ * one — the rules below are about what a *customer* can reach, and an endpoint
+ * behind `requireAgent()` is not that.
+ */
+const PRIVATE_ROOTS = [
+  ADMIN_ROOT,
+  PORTAL_ROOT,
+  path.join(APP_ROOT, "api", "admin"),
+  path.join(APP_ROOT, "api", "portal"),
+  path.join(APP_ROOT, "api", "engineer"),
+];
 
 const isPrivate = (file: string) =>
   PRIVATE_ROOTS.some((root) => file.startsWith(root));

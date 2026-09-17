@@ -547,16 +547,33 @@ describe("migrations are reviewable and reversible", () => {
     }
   });
 
-  test("the foundation is one migration, because none of it has been applied", () => {
+  test("the foundation is one migration, not a stack of corrections", () => {
     /*
-      Nothing is deployed and `DATABASE_URL` is set nowhere, so the schema was
-      reshaped in place rather than corrected by a stack of follow-up
-      migrations. That freedom ends the first time this runs against real data.
+      `0000` was reshaped in place while nothing had been applied, rather than
+      patched by follow-ups. That freedom ended when it first ran against real
+      data — everything after it is additive and forward-only, which is what
+      the ordering below asserts.
     */
-    assert.deepEqual(
-      journal.entries.map((entry) => entry.tag),
-      ["0000_v2_foundation", "0001_invoice_number_sequence"],
-    );
+    const tags = journal.entries.map((entry) => entry.tag);
+    assert.equal(tags[0], "0000_v2_foundation");
+    assert.equal(tags[1], "0001_invoice_number_sequence");
+    assert.deepEqual([...tags].sort(), tags, "migrations are out of order");
+  });
+
+  test("no migration after the foundation alters a foundation table", () => {
+    // The foundation is applied. A later migration may add to the schema; one
+    // that rewrote a table it already created would be editing applied history.
+    for (const entry of journal.entries.slice(2)) {
+      const sql = readFileSync(
+        path.resolve(process.cwd(), `drizzle/${entry.tag}.sql`),
+        "utf8",
+      );
+      assert.equal(
+        /\bDROP\s+(TABLE|COLUMN)\b/i.test(sql),
+        false,
+        `${entry.tag} drops something the foundation created`,
+      );
+    }
   });
 
   test("the destructive one says so", () => {

@@ -11,10 +11,10 @@ Last updated: 17 September 2026.
 
 **V2.0 Foundation — COMPLETE AND OPERATIONAL, verified 17 September 2026.**
 
-**V2.1 Portfolio — in progress.** Two slices done and verified live: V1
-bookings persist as jobs, and agency accounts exist end to end (admin
-management, agent sign-in, the `/portal` shell). Landlord, property and
-tenancy screens are next.
+**V2.1 Portfolio — in progress.** Three slices done and verified live: V1
+bookings persist as jobs, agency accounts exist end to end, and the portfolio
+(landlords, properties, tenancies, compliance dates) is complete. Agent job
+creation is next, in V2.2.
 
 ## Where the code is
 
@@ -147,6 +147,44 @@ password hash appears in any admin read.
 
 **Naming note:** the brief said `agent_staff`; the applied enum says
 `agent_member`. Kept as-is rather than migrating an applied enum for a synonym.
+
+### Portfolio (17 September 2026)
+
+`/portal/portfolio` lists every property with landlord, tenant and CP12 due
+date, searchable across address, postcode, landlord and tenant.
+`/portal/portfolio/new` adds one on a single page: pick or create the landlord
+inline, enter the postcode and the town fills in from the V1 provider, then
+optional tenant and optional certificate date. `/portal/portfolio/[id]` keeps
+**property, landlord and tenancy visibly apart** and shows the full tenancy
+history. `/portal/landlords` manages landlords; one landlord, many properties.
+
+**Decisions worth keeping.** Coverage is reported, not enforced — the
+twelve-mile radius governs public online booking, not what BSCJ will do for a
+managed agency. An empty tenancy form records *no tenancy* rather than a blank
+one. A missing certificate date reads "not known", never compliant or overdue.
+A tenant change closes the old tenancy and opens a new one; a compliance update
+supersedes rather than overwrites.
+
+**There is no premise lookup** and the flow never implies one: the agent still
+types the house number, exactly as a customer does on the public site.
+
+**New migration `0002_property_uniqueness`** — applied. A partial unique index
+on `(agent_organisation_id, postcode, lower(house_or_name))`. The application
+checks before inserting, but two submissions racing both see "not there"; only
+the index can refuse that, and a portfolio holding one address twice produces
+two jobs, two invoices and two renewal cycles. Partial so consumer bookings,
+which have no organisation, are unaffected. Addresses are canonicalised at the
+write, not only in the parser, so the index cannot be slipped past.
+
+Proved live, then cleaned up: landlord + property + tenancy + compliance
+created together; a second property reused the same landlord (1 landlord, 2
+properties); unknown tenant accepted; tenancy replacement left exactly one open
+and one closed record with the previous tenant intact; Agency B could not read
+or mutate any of Agency A's property, landlord, tenancy or compliance by direct
+id, nor attach a property to A's landlord; consumer records stayed out of the
+agency's portfolio and landlord list; duplicate protection held for exact,
+untidy, case and edit-onto-taken variants, with the index refusing a raw race;
+and the consumer job was untouched.
 
 ## Completed work
 

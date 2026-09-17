@@ -94,15 +94,11 @@ verified, and an administrator exists — all confirmed 17 September 2026. Run
 - ~~`/portal` shell, sign-in, organisation context.~~ ✅ **done, 17 September
   2026**, with `/admin/organisations` to open and suspend agency accounts and
   create their first owner. One auth system, two branded doors. No migration.
-- Landlords: list, create, edit.
-- Properties: list, create under new or existing landlord, edit. Postcode
-  validated through the existing `lib/address` provider.
-- Tenancies: record a tenant against a property; ending one starts a new one
-  rather than overwriting it.
-- Property detail page: address, landlord, current tenancy, compliance
-  position, job history, documents.
-- Current and next compliance deadline recorded per property, entered by hand
-  at this stage.
+- ~~Landlords, properties, tenancies, property detail, compliance dates.~~
+  ✅ **done, 17 September 2026.** `/portal/portfolio`, `/portal/portfolio/new`,
+  `/portal/portfolio/[id]`, `/portal/landlords`. Postcode through the existing
+  `lib/address` provider; coverage reported, not enforced. Tenancy changes
+  preserve history. One new migration, `0002_property_uniqueness`, applied.
 
 **Done when:** an agent can build a portfolio and see it, and cannot see
 another organisation's; and a consumer booking appears in `/admin` as a job
@@ -303,7 +299,8 @@ every sensitive action is attributable.
 | --- | --- | --- |
 | `0000` | V2.0 ✅ | The whole foundation — all 22 tables |
 | `0001` | V2.0 ✅ | Invoice number sequence, `BSCJ-` series from 1 |
-| `0002`+ | V2.1 onward | Only what experience shows is missing |
+| `0002` | V2.1 ✅ | Partial unique index: one address per agency |
+| `0003`+ | V2.2 onward | Only what experience shows is missing |
 
 `0000` carries every table the later phases need, including pricing,
 certificates, remedials, messages, compliance cycles and the audit log. Those
