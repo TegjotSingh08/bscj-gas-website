@@ -16,17 +16,21 @@ Last updated: 17 September 2026.
 `main` is at `6bd7c91`. The branch `v2-compliance-platform` still has **no
 commits**: everything below is an uncommitted working-tree change.
 
-**Nothing about V2 is deployed, and no migration has been applied** —
-`DATABASE_URL` is set nowhere, including production. `0000` was therefore
-reshaped in place rather than corrected by follow-up migrations. That freedom
-ends the first time it runs against real data.
+**V2 is not deployed, but the schema is now live on Neon.** Both migrations
+were applied on 17 September 2026 and verified with `npm run db:status`:
+22 tables, 20 enum types, `invoice_number_seq` starting at 1000 and never
+drawn from, and both recorded hashes matching the files on disk.
+
+**The schema is no longer free to reshape in place.** From here a change is a
+new migration, not an edit to `0000`.
 
 ### V2.0, as built
 
 | Area | Files | State |
 | --- | --- | --- |
 | Schema | `src/lib/db/schema.ts` | **22 tables.** Reshaped for agent accounts before first migration |
-| Migrations | `drizzle/0000_v2_foundation.sql`, `0001_invoice_number_sequence.sql`, both with down files | Regenerated, reviewed, unapplied |
+| Migrations | `drizzle/0000_v2_foundation.sql`, `0001_invoice_number_sequence.sql`, both with down files | **Applied to Neon, 17 September 2026**, hashes verified |
+| Migration tooling | `drizzle.config.ts`, `scripts/db-status.mjs` | Loads `.env.local`; `npm run db:status` reports state read-only |
 | Database client | `src/lib/db/client.ts`, `index.ts` | Neon HTTP + Drizzle, lazy, null-safe |
 | Roles and permissions | `src/lib/auth/roles.ts` | Capability matrix for the four roles |
 | Organisation scoping | `src/lib/auth/scope.ts` | Scope derivation, access checks, query filter |
@@ -66,9 +70,8 @@ a property detail page.
 
 Two things to do first, in this order:
 
-1. **Configure Neon and apply `0000` to a branch.** Nothing in V2.1 can be
-   verified against a database that does not exist. Set `DATABASE_URL`, run
-   `npm run db:migrate`, then `npm run admin:create` for a first administrator.
+1. ~~Configure Neon and apply `0000`.~~ **Done, 17 September 2026.** What
+   remains is `npm run admin:create` for a first administrator.
 2. **Route every portfolio read through `organisationCondition`** from
    `lib/auth/scope.ts`. A handler that builds its own `WHERE` is the failure
    mode the whole design is arranged to make hard.
@@ -145,7 +148,9 @@ Two things to do first, in this order:
 5. **Both generators are still untracked**, in `~/Gas Cert Generator/` and
    `~/Invoice Generator/`, on one machine. They should be under version
    control before V2.5 depends on them.
-6. **Neon is not provisioned.** Blocks V2.1 verification.
+6. ~~**Neon is not provisioned.**~~ **Done, 17 September 2026.** Provisioned,
+   migrated and verified. `drizzle.config.ts` now loads `.env.local` itself, so
+   `source .env.local` is no longer needed before `db:migrate`.
 
 ## Known issues, unrelated to V2
 

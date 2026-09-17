@@ -508,14 +508,19 @@ branch. A phase leaves the application working or it does not land.
 | `RESEND_API_KEY`, `BOOKING_EMAIL_FROM`, `BOOKING_EMAIL_REPLY_TO` | set | V1, unchanged |
 | `BOOKING_NOTIFICATION_EMAIL` | **missing locally** | Internal booking alerts |
 | `AUTH_SECRET` | set | Sessions |
-| `DATABASE_URL` | **not set anywhere** | Everything in V2 |
+| `DATABASE_URL` | set, migrated 17 Sep 2026 | Everything in V2. Pooled, for the runtime |
+| `DATABASE_URL_UNPOOLED` | optional, unset | Neon's direct string, used by drizzle-kit when present |
 | `SCHEDULING_TOKEN_SECRET` | reserved | Peppers tenant token hashes (V2.3) |
 | `BLOB_READ_WRITE_TOKEN` | reserved | Certificate and invoice PDFs (V2.5) |
 | `CRON_SECRET` | **new** | Authenticating cron endpoints (V2.6) |
 
-`DATABASE_URL` is the one that blocks progress. Until it is set, V2.0 can be
-typechecked, linted, tested and built — all of which pass — but no migration
-can be applied and nothing can be verified against real rows.
+`DATABASE_URL` was provisioned and both migrations applied on 17 September
+2026, verified with `npm run db:status`.
+
+drizzle-kit is a plain CLI and reads nothing but the ambient environment, so
+`drizzle.config.ts` loads `.env.local` itself with Node's built-in
+`process.loadEnvFile` — no dotenv dependency, and a real environment variable
+still wins over the file, which is what CI and production need.
 
 Nothing is `NEXT_PUBLIC_`. No credential and no service-area coordinate may
 ever reach the browser.
