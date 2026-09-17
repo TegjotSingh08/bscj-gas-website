@@ -1,5 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
 import {
   formatInvoiceNumber,
@@ -18,7 +20,7 @@ import {
 /**
  * Invoice numbering.
  *
- * V2 runs its own `BSCJ-000001` series rather than continuing the standalone
+ * V2 runs its own `BSCJ-001000` series rather than continuing the standalone
  * generator's hand-maintained `D-…` one. The rules that matter are that a
  * number is never reissued, never truncated, and never confusable with a job
  * reference.
@@ -27,10 +29,38 @@ describe("the format", () => {
   test("it is the prefix and six digits", () => {
     assert.equal(INVOICE_PREFIX, "BSCJ-");
     assert.equal(INVOICE_DIGITS, 6);
-    assert.equal(formatInvoiceNumber(1), "BSCJ-000001");
-    assert.equal(formatInvoiceNumber(2), "BSCJ-000002");
-    assert.equal(formatInvoiceNumber(154), "BSCJ-000154");
+    assert.equal(formatInvoiceNumber(1000), "BSCJ-001000");
+    assert.equal(formatInvoiceNumber(1001), "BSCJ-001001");
+    assert.equal(formatInvoiceNumber(1002), "BSCJ-001002");
     assert.equal(formatInvoiceNumber(999_999), "BSCJ-999999");
+  });
+
+  test("the first V2 invoice is BSCJ-001000", () => {
+    /*
+      The sequence starts at 1000 rather than at 1, so the first invoice is not
+      obviously the first. The padding is unchanged, so the series reads as an
+      ordinary six-digit number and has room for 998,999 more before it widens.
+
+      The start lives in drizzle/0001; this module formats whatever the
+      sequence hands it. The assertion below is the pairing of the two.
+    */
+    const migration = readFileSync(
+      path.resolve(process.cwd(), "drizzle/0001_invoice_number_sequence.sql"),
+      "utf8",
+    );
+    const start = Number(/START WITH (\d+)/.exec(migration)?.[1]);
+
+    assert.equal(start, 1000);
+    assert.equal(formatInvoiceNumber(start), "BSCJ-001000");
+    assert.equal(formatInvoiceNumber(start + 1), "BSCJ-001001");
+    assert.equal(formatInvoiceNumber(start + 2), "BSCJ-001002");
+  });
+
+  test("padding still applies below the starting point", () => {
+    // Nothing should ever draw one of these, but the format is the format:
+    // moving the start is a migration change, not a change to the shape.
+    assert.equal(formatInvoiceNumber(1), "BSCJ-000001");
+    assert.equal(formatInvoiceNumber(999), "BSCJ-000999");
   });
 
   test("a value beyond six digits is rendered in full, never wrapped", () => {
@@ -49,7 +79,7 @@ describe("the format", () => {
   });
 
   test("only the exact shape validates", () => {
-    assert.equal(isInvoiceNumber("BSCJ-000001"), true);
+    assert.equal(isInvoiceNumber("BSCJ-001000"), true);
     for (const value of [
       "BSCJ-00001",
       "BSCJ-0000001",
@@ -64,7 +94,7 @@ describe("the format", () => {
   });
 
   test("a number reads back to the sequence value that made it", () => {
-    for (const value of [1, 42, 154, 999_999]) {
+    for (const value of [1, 1000, 1001, 999_999]) {
       assert.equal(parseInvoiceNumber(formatInvoiceNumber(value)), value);
     }
   });

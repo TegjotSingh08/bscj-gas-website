@@ -272,8 +272,10 @@ A branded BSCJ invoice, populated from what the system already knows, reviewed
 and adjusted by an admin before it is issued, then frozen.
 
 **Numbering — confirmed 16 September 2026.** V2 runs its own series,
-`BSCJ-000001` upwards, allocated from a Postgres sequence so two invoices can
-never share a number. The standalone generator's hand-maintained `D-…` series
+`BSCJ-001000` upwards, allocated from a Postgres sequence so two invoices can
+never share a number. It starts at 1000 rather than at 1 so the first invoice
+is not obviously the first — a number counting from one tells whoever holds it
+how much work BSCJ has invoiced. The standalone generator's hand-maintained `D-…` series
 is **not** continued: two systems incrementing one series is how that happens.
 Gaps are expected — a sequence value drawn by a transaction that rolls back is
 never reused — and are not a fault.

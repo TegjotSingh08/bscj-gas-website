@@ -883,7 +883,7 @@ export const invoices = pgTable(
     billingCustomerId: uuid("billing_customer_id")
       .notNull()
       .references(() => customers.id, { onDelete: "restrict" }),
-    /** "BSCJ-000001". Allocated from a Postgres sequence. */
+    /** "BSCJ-001000". Allocated from a Postgres sequence. */
     number: text("number").notNull(),
     status: invoiceStatusEnum("status").notNull().default("draft"),
 

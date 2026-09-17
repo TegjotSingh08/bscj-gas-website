@@ -1,11 +1,16 @@
 /**
  * Invoice numbers.
  *
- * V2 runs its own series, `BSCJ-000001` upwards, confirmed 16 September 2026.
+ * V2 runs its own series, `BSCJ-001000` upwards, confirmed 17 September 2026.
  * The old hand-maintained `D-…` series belonging to the standalone invoice
  * generator is **not** continued: two systems incrementing one sequence is how
  * two invoices end up with the same number, and an accountant cannot tell
  * which of them is real.
+ *
+ * The series starts at 1000 so the first invoice is not obviously the first.
+ * The starting point lives in the migration, not here — this module formats
+ * whatever the sequence hands it, which is why moving the start is a one-line
+ * change to a file nothing has applied yet.
  *
  * Numbers come from a Postgres sequence. Every alternative is wrong under
  * concurrency: counting existing rows races, a "last number" column races

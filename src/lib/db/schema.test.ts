@@ -518,7 +518,10 @@ describe("uniqueness that the business depends on", () => {
       "utf8",
     );
     assert.match(migration, /CREATE SEQUENCE IF NOT EXISTS invoice_number_seq/);
-    assert.match(migration, /START WITH 1\b/);
+    // Starts at 1000, so the first invoice is not obviously the first. A
+    // number counting from one tells whoever holds it how much work the
+    // business has invoiced.
+    assert.match(migration, /START WITH 1000\b/);
   });
 });
 

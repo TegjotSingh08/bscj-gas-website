@@ -3,7 +3,7 @@
 **Read this first.** It exists so a new session does not have to re-audit the
 repository. Update it at the end of every piece of work.
 
-Last updated: 16 September 2026.
+Last updated: 17 September 2026.
 
 ---
 
@@ -39,7 +39,7 @@ ends the first time it runs against real data.
 | Job references | `src/lib/jobs/reference.ts` | Now refuses all-digit, so it cannot look like an invoice number |
 | Renewal rule | `src/lib/compliance/renewal.ts` | +12 months − 1 day, one implementation |
 | Pricing | `src/lib/pricing/tiers.ts`, `resolve.ts`, `snapshot.ts` | Tiers, resolution, frozen snapshot |
-| Invoice numbering | `src/lib/invoices/number.ts`, `allocate.ts` | `BSCJ-000001`, from a Postgres sequence |
+| Invoice numbering | `src/lib/invoices/number.ts`, `allocate.ts` | `BSCJ-001000` upwards, from a Postgres sequence |
 | Business identity | `src/lib/settings/business-identity.ts`, `store.ts` | Configurable identity, VAT off, nothing invented |
 | Admin shell | `src/app/admin/**` | Placeholder dashboard + login, on the new session module |
 | Staff tool | `scripts/create-admin.mjs` | Creates an admin or an engineer |
@@ -109,17 +109,23 @@ Two things to do first, in this order:
     row pointing at the one it supersedes.
 15. **`activity` and `audit_event` are separate tables.** One is the agent's
     timeline; the other is the security log.
+16. **A new agent account authorises no remedial spend.**
+    `remedial_authority_pence` defaults to `0`, so an engineer puts nothing
+    right without asking. Raising it is a deliberate, recorded decision per
+    account (`agent_organisation.remedial_authority_pence`) or per job
+    (`job.remedial_authority_pence`, which is null until someone sets it).
 
-## Blocker decisions — resolved 16 September 2026
+## Blocker decisions — resolved 16–17 September 2026
 
 | # | Decision | Where it lives |
 | --- | --- | --- |
 | 1 | **Renewal** = inspection date + 12 months − 1 day | `lib/compliance/renewal.ts`, one implementation, tested |
 | 2 | **VAT**: BSCJ is *not* registered. Modelled in full, switched off, no VAT wording rendered | `lib/settings/business-identity.ts`, `invoice.vat_*` |
-| 3 | **Invoice numbers**: new `BSCJ-000001` series from a Postgres sequence. The `D-` series is not continued | `lib/invoices/number.ts`, `drizzle/0001` |
+| 3 | **Invoice numbers**: new `BSCJ-######` series from a Postgres sequence, starting at `BSCJ-001000` (17 September 2026) so the first invoice is not obviously the first. The `D-` series is not continued | `lib/invoices/number.ts`, `drizzle/0001` |
 | 4 | **Identity is configuration**, not code: display name, legal entity, company number, address, contact, footer, VAT — all settings, snapshotted onto each invoice | `lib/settings/business-identity.ts`, `invoice.identity_snapshot` |
 | 5 | **Volume tiers** committed in advance per month; bands 1-14 … 100+; prices per service and tier, agent overrides supported; price frozen on the job | `lib/pricing/*`, `volume_commitment`, `pricing_agreement_line` |
 | 6 | **Generators** are reused, not rebuilt. Integration is V2.5 | — |
+| 7 | **Remedial authority for a new agent account is £0** — nothing is put right without asking. Confirmed 17 September 2026 | `agent_organisation.remedial_authority_pence` default `0` |
 
 ## Still open — need BSCJ input
 
@@ -133,8 +139,9 @@ Two things to do first, in this order:
    until they are filled. *(Needed for V2.5.)*
 3. **Invoice footer wording and payment terms.** Confirmed as "to be supplied
    separately". `canIssueInvoices()` refuses until they are. *(V2.5.)*
-4. **Default remedial authorisation threshold.** £0 — nothing without asking —
-   is the implemented default. Confirm it is right for a new account. *(V2.4.)*
+4. ~~**Default remedial authorisation threshold.**~~ **Confirmed 17 September
+   2026: £0.** A new agent account authorises nothing without asking. Anything
+   above zero is a deliberate, recorded decision per account or per job.
 5. **Both generators are still untracked**, in `~/Gas Cert Generator/` and
    `~/Invoice Generator/`, on one machine. They should be under version
    control before V2.5 depends on them.

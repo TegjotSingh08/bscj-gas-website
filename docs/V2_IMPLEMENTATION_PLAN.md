@@ -57,7 +57,7 @@ out.
 `invoices/number.ts`; `settings/business-identity.ts`; `jobs/derived.ts`.
 
 **One incidental fix.** `generateJobReference` now refuses an all-digit body,
-so a new reference can never be mistaken for a `BSCJ-000001` invoice number.
+so a new reference can never be mistaken for a `BSCJ-001000` invoice number.
 `isJobReference` still accepts one, because V1 issued them and they are in
 customers' inboxes.
 

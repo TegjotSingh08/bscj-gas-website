@@ -418,7 +418,7 @@ imported bank transactions.
 The layout logic is the valuable part and is reused. Three of the questions it
 raised were settled on 16 September 2026:
 
-- **The `D-` series is not continued.** V2 runs `BSCJ-000001` upwards from the
+- **The `D-` series is not continued.** V2 runs `BSCJ-001000` upwards from the
   Postgres sequence in `drizzle/0001`, which is atomic by construction and
   never reissues a value even when a transaction rolls back. Counting rows
   races; a "last number" column races; a timestamp is not a number an
