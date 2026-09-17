@@ -18,6 +18,11 @@ const APP_ROOT = path.resolve(ROOT, "src/app");
 const ADMIN_ROOT = path.join(APP_ROOT, "admin");
 /** The agency portal. Private, authenticated, and not part of the public site. */
 const PORTAL_ROOT = path.join(APP_ROOT, "(portal)");
+/**
+ * Tenant scheduling. Reached without an account, but not part of the public
+ * site either: noindex, no navigation, and its own signed session.
+ */
+const SCHEDULE_ROOT = path.join(APP_ROOT, "(schedule)");
 
 /**
  * Every authenticated surface, pages and API alike. Add one here when you add
@@ -27,6 +32,8 @@ const PORTAL_ROOT = path.join(APP_ROOT, "(portal)");
 const PRIVATE_ROOTS = [
   ADMIN_ROOT,
   PORTAL_ROOT,
+  SCHEDULE_ROOT,
+  path.join(APP_ROOT, "api", "schedule"),
   path.join(APP_ROOT, "api", "admin"),
   path.join(APP_ROOT, "api", "portal"),
   path.join(APP_ROOT, "api", "engineer"),

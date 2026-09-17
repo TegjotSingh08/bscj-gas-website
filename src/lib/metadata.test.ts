@@ -45,7 +45,13 @@ const adminPages = allPages.filter((file) => file.startsWith(ADMIN_ROOT));
  * site. Every authenticated surface is `noindex` and has no canonical to set,
  * so the private route groups are excluded — add one here when you add one.
  */
-const PRIVATE_ROOTS = [ADMIN_ROOT, path.join(APP_ROOT, "(portal)")];
+const PRIVATE_ROOTS = [
+  ADMIN_ROOT,
+  path.join(APP_ROOT, "(portal)"),
+  // Tenant scheduling: reached without an account, but noindex, without site
+  // navigation, and behind its own signed session. Not part of the public site.
+  path.join(APP_ROOT, "(schedule)"),
+];
 
 const pages = allPages.filter(
   (file) => !PRIVATE_ROOTS.some((root) => file.startsWith(root)),
@@ -287,5 +293,45 @@ describe("the agency portal is not part of the public site", () => {
         path.relative(process.cwd(), file),
       );
     }
+  });
+});
+
+/**
+ * Tenant scheduling is not part of the public site either.
+ *
+ * A scheduling link is not a search result, and the surface deliberately has
+ * no navigation back into the marketing site.
+ */
+describe("the tenant scheduling surface is not indexable", () => {
+  const scheduleRoot = path.join(APP_ROOT, "(schedule)");
+  const schedulePages = allPages.filter((file) => file.startsWith(scheduleRoot));
+
+  test("there is a scheduling surface to check", () => {
+    assert.ok(schedulePages.length > 0, "no scheduling pages were found");
+  });
+
+  test("the layout refuses indexing for everything beneath it", () => {
+    const layout = readFileSync(
+      path.join(scheduleRoot, "schedule", "layout.tsx"),
+      "utf8",
+    );
+    assert.match(layout, /robots:\s*\{[^}]*index:\s*false/);
+  });
+
+  test("no scheduling page declares a canonical or a share preview", () => {
+    for (const file of schedulePages) {
+      const contents = readFileSync(file, "utf8");
+      const name = path.relative(process.cwd(), file);
+      assert.equal(/alternates:\s*\{\s*canonical:/.test(contents), false, name);
+      assert.equal(contents.includes("pageOpenGraph"), false, name);
+    }
+  });
+
+  test("the sitemap lists no scheduling route", () => {
+    const sitemap = readFileSync(
+      path.resolve(process.cwd(), "src/app/sitemap.ts"),
+      "utf8",
+    );
+    assert.equal(sitemap.includes("/schedule"), false);
   });
 });

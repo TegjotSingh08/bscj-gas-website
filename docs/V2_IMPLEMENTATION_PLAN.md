@@ -161,9 +161,17 @@ The flow the whole product depends on, and the one with the most reuse.
   calendar write and the confirmations.
 - Invitation email, queued through `outbound_email`.
 
-**Done when:** a tenant can schedule from a link and from a reference, sees no
-price and no other property, and cannot reach `/book` or `/portal` from
-anywhere in the flow. Test the negative cases explicitly.
+✅ **Done, 17 September 2026.** All of the above, plus: the confirm endpoint
+takes the job from the session and refuses a caller without one independently
+of the UI; availability, hold ownership and the daily cap are all revalidated
+at confirmation; the status change is guarded by the status it expects; the
+calendar write is idempotent and outside the transaction; the confirmation
+email is queued as intent for the V2.6 drain. No migration.
+
+**Outstanding for V2.4:** nothing actually *sends* the invitation yet. Tokens
+are minted with every agency job and the flow works end to end from a link, but
+the link is not yet delivered — that is the outreach work in V2.7, and until
+then BSCJ sends it by hand.
 
 ---
 

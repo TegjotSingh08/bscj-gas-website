@@ -15,8 +15,11 @@ Last updated: 17 September 2026.
 exist end to end, and the portfolio (landlords, properties, tenancies,
 compliance dates) works.
 
-**V2.2 Jobs — agent job creation complete.** An agency can book work against
-its own property. Tenant scheduling (V2.3) is next.
+**V2.2 Jobs — complete.** An agency can book work against its own property.
+
+**V2.3 Tenant scheduling — complete.** A tenant reaches their own job through
+a link or a reference, picks a real slot on the existing availability engine
+and confirms it. Operations and the engineer view (V2.4) are next.
 
 ## Where the code is
 
@@ -230,6 +233,67 @@ property or job; a refused write left no job, no orphan token, and every portal
 job had exactly one token; consumer jobs stayed out of agency scope; ADMIN saw
 all three.
 
+### Tenant scheduling (17 September 2026)
+
+`/schedule/[token]` spends the invitation token at the door and replaces it
+with a signed, path-scoped session; `/schedule` is the reference-plus-postcode
+way in. `/schedule/appointment` is the picker, `/schedule/confirmed` the
+receipt. `/api/schedule/confirm` writes the appointment.
+
+**The session names one job and nothing else.** Signed with a key derived from
+`AUTH_SECRET` under its own label, `HttpOnly`, `SameSite=Lax`, scoped to
+`/schedule` so the browser never presents it to the portal, the admin area or
+the consumer API. Editing the job id or the expiry breaks the signature. There
+is **no job id in any scheduling URL** after the token hop — the simplest way
+to guarantee one cannot be substituted.
+
+**Both doors fail identically.** Unknown token, expired, revoked, wrong
+reference, wrong postcode, rate limited — one message. Manual entry is limited
+per caller *and* per reference, because per-IP alone misses many machines
+sweeping one reference. Reference and postcode are matched in a single query,
+so a real reference does not answer faster than a fake one.
+
+**Nothing about scheduling is forked.** The same `DatePicker`, `TimePicker`,
+`ReservationBar`, `/api/availability`, `/api/hold` and 30-minute Redis holds
+the public site uses, recomposed. At confirmation the hold is rechecked against
+the caller's own token, availability is re-read from Google, and the daily cap
+is counted under the same short lock — a hold is never taken as permission on
+its own. The status change is guarded by the status it expects to find, so two
+confirmations racing produce one appointment.
+
+**The calendar write is outside the transaction**, as the architecture
+requires. The job commits as `scheduled` with `calendar_sync_state = pending`;
+the event is written after, with an id derived from the job and the slot, so a
+retry collides rather than duplicating and a `409` is recorded as success. A
+failure leaves `failed` for the retry sweep — never a tenant told their booking
+failed after it worked.
+
+**Communication is intent only.** An `outbound_email` row is queued with a
+unique key; sending is the V2.6 drain. A mail outage cannot reach this
+transaction at all.
+
+The tenant sees the property, the service, the reference and the times. **No
+price, no landlord, no other property, and no navigation into the rest of the
+site.**
+
+**No migration.** The applied schema already carried every column.
+
+Proved live against Neon, Redis and Google Calendar (A–P), then cleaned up —
+including deleting the real calendar event the proof created. Highlights:
+token grants exactly its own job and not the agency's other one; expired and
+revoked tokens fail like unknown ones; both rate limits bite; a competing hold
+is refused and the atomic switch keeps the tenant's token; confirming with a
+foreign hold token is refused; confirmation set `scheduled`,
+`tenant_selected`, the right window and `pending`; a retry returned `already`
+with one appointment and one activity row; re-syncing created no second
+calendar event and a `failed` state re-synced cleanly; Agency B saw none of it;
+the invoice sequence was never drawn.
+
+**Also fixed here:** the clock-dependent availability test. It now picks the
+first matching weekday *after* today, so the afternoon-notice window cannot
+make it pass in the morning and fail in the afternoon. The whole suite is green
+at any hour.
+
 ## Completed work
 
 - Full repository audit (16 September 2026)
@@ -330,25 +394,22 @@ properties and tenancies.
    control before V2.5 depends on them.
 6. ~~**Neon is not provisioned.**~~ **Done, 17 September 2026.** Provisioned,
    migrated and verified. `drizzle.config.ts` now loads `.env.local` itself, so
-   `source .env.local` is no longer needed before `db:migrate`.
+   `source .env.local` is no longer needed before `db:migrate`.~~
 
 ## Known issues, V2
 
 - **The branch is unpushed.** No upstream is set. This is the highest-value
   thing to fix and costs one command.
 - **Next 16 deprecates the `middleware` file convention** in favour of
-  `proxy`. The build warns; it still works and the route table shows it
-  active. Renaming touches the structural test that reads `src/middleware.ts`,
-  so it is queued for V2.8 polish rather than done under a verification pass.
+  `proxy`. The build warns; it still works. Renaming touches several
+  structural tests that read `src/middleware.ts` by path, so it stays queued
+  for V2.8 rather than being folded into a feature milestone.
 
 ## Known issues, unrelated to V2
 
-- **Clock-dependent tests** in `src/app/api/availability/route.test.ts`. They
-  ask for the first Wednesday in the offered window; when that resolves to
-  *today* and the time is past roughly 10:00, today's 15:00 and 16:00 fall
-  inside the 12-hour notice window and five assertions fail. Not a production
-  defect — they pass on any other weekday, and the whole suite passes today.
-  Fix by pinning a clock; queued for V2.8.
+- ~~Clock-dependent tests in `src/app/api/availability/route.test.ts`.~~
+  **Fixed 17 September 2026** as part of V2.3: the helper now skips today, so
+  the notice window cannot make the suite time-of-day dependent.
 - `docs/business-details.md` says "Maximum bookings per day: 8"; the code and
   `CLAUDE.md` both say ten. The code is authoritative; the doc is stale.
 - `BOOKING_NOTIFICATION_EMAIL` is in `.env.example` but not in `.env.local`,

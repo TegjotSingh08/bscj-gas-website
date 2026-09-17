@@ -180,11 +180,30 @@ describe("blocking events, weekends and the daily cap", () => {
     return body.days.find((day) => day.date === date)?.slots.map((s) => s.label) ?? [];
   }
 
-  /** The first offered date that falls on the given London weekday. */
+  /**
+   * The first offered date on the given London weekday, **never today**.
+   *
+   * Today is deliberately skipped. The route reads the real clock, so on a day
+   * that happens to be the weekday under test the afternoon slots fall inside
+   * the 12-hour notice window and are correctly absent — which made these
+   * assertions pass in the morning and fail in the afternoon. Any later date
+   * has a full day of availability whatever time the suite runs at, which
+   * pins the behaviour without pinning a global clock the route does not
+   * accept.
+   */
   async function firstDateOnWeekday(weekday: number): Promise<string> {
     const { body } = await availability();
     assert.ok(body.days);
+
+    const today = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Europe/London",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+
     const match = body.days.find((day) => {
+      if (day.date <= today) return false;
       const [y, m, d] = day.date.split("-").map(Number);
       return new Date(Date.UTC(y, m - 1, d)).getUTCDay() === weekday;
     });
