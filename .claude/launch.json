@@ -6,6 +6,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
       "port": 3000
+    },
+    {
+      "name": "bscj-fixtures",
+      "runtimeExecutable": "./scripts/dev-with-fixtures.sh",
+      "runtimeArgs": [],
+      "port": 3100
     }
   ]
 }

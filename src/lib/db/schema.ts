@@ -115,9 +115,27 @@ export const jobLifecycleStatusEnum = pgEnum("job_lifecycle_status", [
   "cancelled",
 ]);
 
-/** Where the *money* is. Independent of the lifecycle above. */
+/**
+ * Where the *money* is. Independent of the lifecycle above.
+ *
+ * Four things that genuinely happen, kept apart because conflating any two
+ * of them loses a fact somebody will later need:
+ *
+ * - **`draft`** — editable, and holds no invoice number. An abandoned draft
+ *   must not consume a number whose absence a business then has to explain.
+ * - **`issued`** — a number is allocated, the identity, payer, lines, totals
+ *   and PDF are frozen, and nothing edits it again. Added in `0006`.
+ * - **`sent`** — a provider *accepted* an email carrying it. Not that it
+ *   arrived, and emphatically not that it was paid.
+ * - **`paid`** — an administrator recorded a payment. V2 takes no payments;
+ *   this is somebody saying money turned up.
+ *
+ * `void` is the only way to undo an issue, and it keeps the number: a
+ * reissued number is two documents claiming to be the same invoice.
+ */
 export const invoiceStatusEnum = pgEnum("invoice_status", [
   "draft",
+  "issued",
   "sent",
   "paid",
   "void",
@@ -369,6 +387,19 @@ export const customers = pgTable(
     email: text("email").notNull(),
     /** Canonical +447XXXXXXXXX, normalised by `lib/booking/contact.ts`. */
     phone: text("phone").notNull(),
+    /*
+      Where the bills go, which is not where the work happens.
+
+      A property has an address and so does the person paying for work on it,
+      and they are routinely different — an agency in one town billing for a
+      flat in another. Nothing substitutes one for the other: an invoice with
+      no billing address on file requires somebody to type one, and typing it
+      here is what stops them typing it again next month.
+
+      Null and empty are both "not supplied". Added in `0006`.
+    */
+    billingAddressLines: jsonb("billing_address_lines"),
+    billingPostcode: text("billing_postcode"),
     isActive: boolean("is_active").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -916,9 +947,41 @@ export const invoices = pgTable(
     billingCustomerId: uuid("billing_customer_id")
       .notNull()
       .references(() => customers.id, { onDelete: "restrict" }),
-    /** "BSCJ-001000". Allocated from a Postgres sequence. */
-    number: text("number").notNull(),
+    /**
+     * "BSCJ-001000". Allocated from a Postgres sequence, **at issue**.
+     *
+     * Nullable since `0006`: a draft has no number. Drawing one when a draft
+     * is created would consume a value every abandoned draft then leaves a
+     * gap for — and a gap an accountant has to account for is worse than a
+     * draft with no number at all.
+     */
+    number: text("number"),
     status: invoiceStatusEnum("status").notNull().default("draft"),
+
+    /**
+     * The job this invoice is for, when it is for exactly one.
+     *
+     * Redundant against `invoice_line.job_id` and deliberately so: it is the
+     * column a partial unique index can hang on, which is what makes a
+     * second active invoice for the same job impossible rather than merely
+     * unlikely. Null for a consolidated invoice, which belongs to a period
+     * and many jobs — and the index ignores nulls, so that shape stays open.
+     */
+    primaryJobId: uuid("primary_job_id").references(() => jobs.id, {
+      onDelete: "restrict",
+    }),
+
+    /**
+     * What the job was quoted, carried onto the invoice when the draft is
+     * created.
+     *
+     * The invoice may legitimately differ — an extra appliance found on the
+     * day, an agreed reduction — and that difference is a fact worth being
+     * able to see. Keeping the quote here means an adjustment is *visible*
+     * rather than inferred by re-pricing the job, which would produce
+     * today's answer to last March's question.
+     */
+    quotedTotalPence: integer("quoted_total_pence"),
 
     /** The period a consolidated invoice covers. Null for a per-job invoice. */
     periodStart: date("period_start"),
@@ -934,13 +997,44 @@ export const invoices = pgTable(
 
     /** Business identity as it stood when this was issued. */
     identitySnapshot: jsonb("identity_snapshot"),
+    /**
+     * The payer's name and billing address, frozen at issue.
+     *
+     * An agency that moves office must not retrospectively re-address an
+     * invoice already in somebody's accounts. Held apart from the identity
+     * snapshot because one is who sent it and the other is who owes it.
+     */
+    billingSnapshot: jsonb("billing_snapshot"),
 
     issuedAt: timestamp("issued_at", { withTimezone: true }),
+    issuedBy: uuid("issued_by").references(() => appUsers.id, {
+      onDelete: "set null",
+    }),
     dueDate: date("due_date"),
     sentAt: timestamp("sent_at", { withTimezone: true }),
+    /** When payment was recorded — the moment somebody typed it. */
     paidAt: timestamp("paid_at", { withTimezone: true }),
+    /** The day the money arrived, as the administrator states it. */
+    paidOn: date("paid_on"),
     /** How payment was recorded, when an admin marks it paid by hand. */
     paidNote: text("paid_note"),
+    paidBy: uuid("paid_by").references(() => appUsers.id, {
+      onDelete: "set null",
+    }),
+
+    /*
+      Voiding, which is the only way to undo an issue.
+
+      The number stays on the row. Releasing it for reuse would put two
+      documents into the world claiming to be the same invoice, and the
+      second one would be the only one anybody could find.
+    */
+    voidedAt: timestamp("voided_at", { withTimezone: true }),
+    voidedBy: uuid("voided_by").references(() => appUsers.id, {
+      onDelete: "set null",
+    }),
+    /** Required by the application whenever an invoice is voided. */
+    voidReason: text("void_reason"),
     documentId: uuid("document_id").references(() => documents.id, {
       onDelete: "set null",
     }),
@@ -959,8 +1053,24 @@ export const invoices = pgTable(
     index("invoice_organisation_idx").on(table.agentOrganisationId),
     index("invoice_billing_customer_idx").on(table.billingCustomerId),
     index("invoice_status_idx").on(table.status),
+    index("invoice_primary_job_idx").on(table.primaryJobId),
+    /*
+      One live invoice per job.
+
+      Partial, on `status <> 'void'`, so a mistake can be voided and the job
+      invoiced again — which is the whole point of voiding. Enforced by the
+      database rather than by a read-then-write in the application, because
+      two administrators pressing "raise an invoice" at the same moment is
+      exactly the case a read-then-write does not cover.
+
+      Declared in `0006` as raw SQL; Drizzle carries the name here so the
+      application can recognise the violation it throws.
+    */
   ],
 );
+
+/** The partial unique index declared in `0006`, by name. */
+export const ONE_ACTIVE_INVOICE_PER_JOB = "invoice_active_job_key";
 
 /**
  * One billable line.

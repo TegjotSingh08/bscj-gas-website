@@ -81,7 +81,8 @@ type EmailKind =
   | "tenant-appointment"
   | "late-booking-agent"
   | "late-booking-internal"
-  | "certificate-release";
+  | "certificate-release"
+  | "invoice-issue";
 
 /**
  * The one place an email is actually sent.
@@ -294,7 +295,8 @@ export async function sendOutboxEmail({
     | "tenant-appointment"
     | "late-booking-agent"
     | "late-booking-internal"
-    | "certificate-release";
+    | "certificate-release"
+    | "invoice-issue";
   to: string;
   email: RenderedEmail;
   reference: string;

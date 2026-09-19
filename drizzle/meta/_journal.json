@@ -43,6 +43,13 @@
       "when": 1790100000000,
       "tag": "0005_outbound_recipient_address",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790200000000,
+      "tag": "0006_invoicing",
+      "breakpoints": true
     }
   ]
 }

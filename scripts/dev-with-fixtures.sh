@@ -21,10 +21,21 @@ export GOOGLE_PRIVATE_KEY="$(openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_
 export GOOGLE_CALENDAR_ID="fixture-calendar"
 export UPSTASH_REDIS_REST_URL="https://fixture-redis.invalid"
 export UPSTASH_REDIS_REST_TOKEN="fixture-token"
-export RESEND_API_KEY=""
+# A throwaway key, so the send path actually *runs* and the interceptor
+# answers it. `api.resend.com` is replaced by the stub above for the whole
+# process, so this value cannot reach Resend — and with an empty key the code
+# short-circuits as "not configured" and no message is ever built, which makes
+# the email path impossible to verify at all.
+export RESEND_API_KEY="${RESEND_API_KEY:-fixture-resend-key}"
+export BOOKING_EMAIL_FROM="${BOOKING_EMAIL_FROM:-fixtures@example.invalid}"
 export AUTH_SECRET="fixture-auth-secret-for-local-browser-tests"
 export SCHEDULING_TOKEN_SECRET="fixture-scheduling-secret"
 export BSCJ_FIXTURE_STATE="${BSCJ_FIXTURE_STATE:-/tmp/bscj-fixture-state.json}"
+# A document store on this machine, so certificates and invoices can actually
+# be written and read back. The local driver refuses to load in production, so
+# this cannot follow the code anywhere it should not be.
+export BSCJ_DOCUMENT_STORE="${BSCJ_DOCUMENT_STORE:-local}"
+export BSCJ_DOCUMENT_DIR="${BSCJ_DOCUMENT_DIR:-/tmp/bscj-documents}"
 # The interceptor refuses to install without this, so a stray NODE_OPTIONS
 # cannot stub anybody's network by accident.
 export BSCJ_TEST_FIXTURES=1

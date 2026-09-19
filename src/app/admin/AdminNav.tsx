@@ -15,8 +15,10 @@ import { SignOutButton } from "./SignOutButton";
 export type AdminSection =
   | "dashboard"
   | "jobs"
+  | "invoices"
   | "organisations"
   | "reconcile"
+  | "settings"
   | "day";
 
 export function AdminNav({
@@ -29,9 +31,11 @@ export function AdminNav({
   const links = [
     { href: "/admin", label: "Dashboard", key: "dashboard" },
     { href: "/admin/jobs", label: "Jobs", key: "jobs" },
+    { href: "/admin/invoices", label: "Invoices", key: "invoices" },
     { href: "/admin/organisations", label: "Agencies", key: "organisations" },
     { href: "/admin/reconcile", label: "Reconciliation", key: "reconcile" },
     { href: "/engineer", label: "Engineer’s day", key: "day" },
+    { href: "/admin/settings", label: "Business details", key: "settings" },
   ] as const;
 
   return (

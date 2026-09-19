@@ -6,19 +6,24 @@ import { formatLongDate } from "@/lib/booking/time";
 /**
  * Telling somebody their gas safety record is ready.
  *
- * **The certificate is not attached.** It is a document about a property,
- * held privately, and email is not a place to put one: a forwarded message
- * carries it to whoever the recipient forwards to, a mailbox breach carries
- * it further, and neither is recoverable. The message says the record
- * exists, states the facts that are already on it, and points at the place
- * it can be read by somebody the application has authenticated.
+ * **The certificate is attached**, and it is the exact released PDF — the
+ * worker fetches the stored document and attaches it rather than rendering
+ * anything again. A recipient with no portal account has no other way to get
+ * a record about their own property, and telling them it exists somewhere
+ * they cannot reach is not telling them anything.
  *
- * That also keeps this consistent with every other message here: nothing is
- * sent that a recipient could not already see, and the addresses are
- * resolved at send time rather than carried in a queue.
+ * The wording here said the opposite until V2.8. It was written before the
+ * attachment existed and was not revisited when it did, so every released
+ * certificate went out with its PDF attached and a line underneath saying it
+ * was not. Recorded rather than quietly fixed, because a message that
+ * contradicts itself is the kind of fault a recipient notices first.
  *
- * No price appears. A certificate is a compliance record; what the work
- * cost belongs on an invoice, and there is no invoice.
+ * The addresses are still never carried in a queue row as a role alone: an
+ * administrator approves a specific address, and the worker re-checks
+ * entitlement before it sends.
+ *
+ * No price appears. A certificate is a compliance record; what the work cost
+ * belongs on an invoice.
  */
 
 export type CertificateFacts = {
@@ -106,7 +111,7 @@ export function renderCertificateReleaseEmail(
     );
   }
   footer.push(
-    "The document is not attached. It is held securely and can be downloaded by signing in, or we can send it another way if you ask.",
+    "The record is attached to this email as a PDF. It is also held securely, so we can send it again if you need it.",
   );
   footer.push(
     `Questions: ${escapeHtml(business.phone)} · ${escapeHtml(business.emailGeneral)}`,

@@ -26,6 +26,16 @@ export const OUTBOX_KINDS = {
     sent, and two recipients are two rows that succeed or fail apart.
   */
   certificate: "certificate-release",
+  /*
+    An issued invoice, to one explicitly chosen recipient.
+
+    Keyed on the invoice and the recipient — an invoice has no versions, so
+    there is nothing else to distinguish one send from another — plus the
+    approval number, for the same reason the certificate key carries one: a
+    corrected address is a *new* intent and must not be deduplicated away by
+    the provider as a repeat of the message it already accepted.
+  */
+  invoice: "invoice-issue",
 } as const;
 
 export type OutboxKind = (typeof OUTBOX_KINDS)[keyof typeof OUTBOX_KINDS];
@@ -214,6 +224,77 @@ export function certificateFromKey(key: string): string | null {
 export function approvalFromKey(key: string): number | null {
   const parts = key.split(":");
   if (parts.length !== 4 || parts[0] !== OUTBOX_KINDS.certificate) return null;
+  const approval = Number.parseInt(parts[3], 10);
+  return Number.isInteger(approval) && approval > 0 ? approval : null;
+}
+
+// ---------------------------------------------------------------------------
+// Invoices
+// ---------------------------------------------------------------------------
+
+/**
+ * An issued invoice, keyed on the invoice, the recipient and the approval.
+ *
+ * The same three-part shape as a certificate, and for the same reason: this
+ * key is also the provider's idempotency key, so a **retry** of one intent
+ * must keep it and a **re-approval** to a corrected address must not.
+ *
+ * An invoice has no version component because an issued invoice is never
+ * reissued — correcting one is a void and a new invoice, which has its own
+ * id and therefore its own keys.
+ */
+export function invoiceKey(
+  invoiceId: string,
+  recipient: OutboxRecipient,
+  approval = 1,
+): string {
+  return `${OUTBOX_KINDS.invoice}:${invoiceId}:${recipient}:${approval}`;
+}
+
+/** One row per recipient the administrator actually chose. */
+export function invoiceRows(input: {
+  /**
+   * Required. V2.8 issues per-job invoices only, and the worker needs the job
+   * to describe the property the invoice is for. A consolidated invoice, when
+   * it exists, will need a row shape that does not name one.
+   */
+  jobId: string;
+  invoiceId: string;
+  recipients: readonly {
+    recipient: OutboxRecipient;
+    address: string;
+    /** 1 for the first approval, higher for a re-approval. */
+    approval?: number;
+  }[];
+}): OutboxRow[] {
+  return input.recipients.map(({ recipient, address, approval }) => ({
+    jobId: input.jobId,
+    kind: OUTBOX_KINDS.invoice,
+    recipient,
+    recipientAddress: address,
+    idempotencyKey: invoiceKey(input.invoiceId, recipient, approval ?? 1),
+  }));
+}
+
+/** The invoice a key was written for, or null if it names none. */
+export function invoiceFromKey(key: string): string | null {
+  const parts = key.split(":");
+  // kind : invoiceId : recipient : approval
+  if (parts.length !== 4 || parts[0] !== OUTBOX_KINDS.invoice) return null;
+  return parts[1] || null;
+}
+
+/**
+ * Which approval an invoice key belongs to, so the next one can be numbered.
+ *
+ * Separate from `approvalFromKey` rather than generalised, because that
+ * function guards on the certificate kind and widening it would let a key of
+ * one kind be read as the other — which is how a certificate's provider key
+ * and an invoice's could collide.
+ */
+export function invoiceApprovalFromKey(key: string): number | null {
+  const parts = key.split(":");
+  if (parts.length !== 4 || parts[0] !== OUTBOX_KINDS.invoice) return null;
   const approval = Number.parseInt(parts[3], 10);
   return Number.isInteger(approval) && approval > 0 ? approval : null;
 }

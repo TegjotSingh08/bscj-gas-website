@@ -47,9 +47,24 @@ function sourceFiles(directory: string): string[] {
   return found;
 }
 
+/*
+  Generated binary, encoded as text.
+
+  `fonts.generated.ts` is four TrueType subsets in base64. It contains no
+  prose at all, and matching a phrase inside it is a false positive by
+  construction — "poa" appears in the encoding of a font, not in anything a
+  customer could read. Excluded rather than allowed for, because allowing for
+  it would mean weakening a rule that applies to every real file.
+*/
+const GENERATED_BINARY = [path.join("src", "lib", "invoices", "pdf", "fonts.generated.ts")];
+
+function isGeneratedBinary(file: string): boolean {
+  return GENERATED_BINARY.some((generated) => file.endsWith(generated));
+}
+
 /** Everything the site is built from. Tests ship nothing to a customer. */
 const files = sourceFiles(SOURCE_ROOT).filter(
-  (file) => !file.endsWith(".test.ts"),
+  (file) => !file.endsWith(".test.ts") && !isGeneratedBinary(file),
 );
 
 /**

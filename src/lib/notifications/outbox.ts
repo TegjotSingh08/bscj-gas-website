@@ -9,6 +9,7 @@ import {
   certificates,
   customers,
   documents,
+  invoices,
   jobs,
   outboundEmails,
   properties,
@@ -28,6 +29,8 @@ import {
   renderTenantInvitationEmail,
 } from "@/lib/email/tenant-scheduling";
 import { renderCertificateReleaseEmail } from "@/lib/email/certificate-release";
+import { renderInvoiceEmail } from "@/lib/email/invoice-issue";
+import { formatPence, isIssued, type InvoiceStatus } from "@/lib/invoices/model";
 import {
   internalNotificationRecipient,
   MAX_ATTACHMENT_BYTES,
@@ -42,6 +45,8 @@ import {
   approvalFromKey,
   certificateFromKey,
   confirmationKey,
+  invoiceApprovalFromKey,
+  invoiceFromKey,
   lateBookingKey,
   LATE_BOOKING_RECIPIENTS,
   OUTBOX_KINDS,
@@ -103,6 +108,7 @@ const ALL_KINDS: string[] = [
   OUTBOX_KINDS.confirmation,
   OUTBOX_KINDS.lateBooking,
   OUTBOX_KINDS.certificate,
+  OUTBOX_KINDS.invoice,
 ];
 
 /** The statuses from which a tenant may still act on an invitation link. */
@@ -409,6 +415,16 @@ async function deliverRow(row: ClaimedRow): Promise<RowOutcome> {
   */
   if (row.kind === OUTBOX_KINDS.certificate) {
     return deliverCertificate(db, row, loaded);
+  }
+
+  /*
+    An invoice is about a **document**, not an appointment, for the same
+    reason a certificate is: the work has happened, the diary entry may long
+    since have been tidied away, and holding a bill behind a calendar event
+    nobody needs any more would simply mean it never goes out.
+  */
+  if (row.kind === OUTBOX_KINDS.invoice) {
+    return deliverInvoice(db, row, loaded);
   }
 
   /*
@@ -728,6 +744,232 @@ async function deliverCertificate(
   }
 
   return finish(db, row, result);
+}
+
+/**
+ * An issued invoice, to one chosen recipient, with the PDF attached.
+ *
+ * Four things are re-checked at send time rather than trusted from the queue,
+ * because minutes or hours may have passed:
+ *
+ * - **The invoice is still issued.** One voided in between must not go out:
+ *   a bill nobody owes is worse than a bill sent late, and voiding it was
+ *   somebody's deliberate decision.
+ * - **The document still exists.** An invoice row whose PDF has gone is a
+ *   fault, not something to announce.
+ * - **The address, as approved.** Frozen on the row; the worker sends to that
+ *   and does not re-resolve, so an edit in between cannot redirect it.
+ * - **The recipient is still entitled to it.** Freezing the address is about
+ *   not being redirected; it is not licence to send a bill to somebody who
+ *   has stopped being the payer.
+ *
+ * **The stored bytes are attached, never a re-render.** What the customer
+ * receives has to be the document that was issued — rendering again here
+ * would pick up whatever the settings say today.
+ */
+async function deliverInvoice(
+  db: NonNullable<ReturnType<typeof getDb>>,
+  row: ClaimedRow,
+  loaded: LoadedJob,
+): Promise<RowOutcome> {
+  const { job, property } = loaded;
+
+  const invoiceId = invoiceFromKey(row.idempotencyKey);
+  if (!invoiceId) return stand(db, row.id, "invoice_key_unreadable");
+
+  const [invoice] = await db
+    .select({
+      id: invoices.id,
+      number: invoices.number,
+      status: invoices.status,
+      issuedAt: invoices.issuedAt,
+      dueDate: invoices.dueDate,
+      totalPence: invoices.totalPence,
+      billingCustomerId: invoices.billingCustomerId,
+      agentOrganisationId: invoices.agentOrganisationId,
+      documentId: invoices.documentId,
+      filename: documents.filename,
+      blobKey: documents.blobKey,
+    })
+    .from(invoices)
+    .leftJoin(documents, eq(documents.id, invoices.documentId))
+    .where(eq(invoices.id, invoiceId))
+    .limit(1);
+
+  if (!invoice) return stand(db, row.id, "invoice_missing");
+
+  if (!isIssued(invoice.status as InvoiceStatus) || !invoice.number || !invoice.issuedAt) {
+    return stand(db, row.id, "invoice_not_issued");
+  }
+  if (!invoice.documentId || !invoice.filename || !invoice.blobKey) {
+    return stand(db, row.id, "invoice_document_missing");
+  }
+
+  const recipient = row.recipient as OutboxRecipient;
+  const to =
+    row.recipientAddress ??
+    (recipient === "agent" ? loaded.organisationEmail : loaded.customerEmail);
+
+  if (!to) {
+    return await missing(
+      db,
+      row,
+      recipient === "agent" ? "agent_email_missing" : "customer_email_missing",
+    );
+  }
+
+  const eligible = await invoiceRecipientStillEligible(
+    db,
+    invoice.agentOrganisationId,
+    invoice.billingCustomerId,
+    recipient,
+    to,
+  );
+  if (!eligible.ok) {
+    await db
+      .update(outboundEmails)
+      .set({ state: "failed", lastError: eligible.reason, updatedAt: new Date() })
+      .where(eq(outboundEmails.id, row.id));
+    return "failed";
+  }
+
+  /*
+    The document itself, fetched now.
+
+    A failure here is not a failure of the message — the store may be
+    briefly unreachable — so the attempt is given back and the row stays
+    queued. Sending an invoice email with no invoice attached would be worse
+    than sending it late.
+  */
+  const stored = await getDocument(invoice.blobKey);
+  if (!stored.ok) {
+    await refund(db, row);
+    return "stillQueued";
+  }
+
+  if (stored.bytes.byteLength > MAX_ATTACHMENT_BYTES) {
+    // Not retryable: the file will be the same size next time.
+    return stand(db, row.id, "attachment_too_large");
+  }
+
+  const email = renderInvoiceEmail({
+    number: invoice.number,
+    address: addressOf(property),
+    postcode: property.postcode,
+    issuedOn: invoice.issuedAt.toISOString().slice(0, 10),
+    dueDate: invoice.dueDate,
+    totalFormatted: formatPence(invoice.totalPence),
+    reference: job.reference,
+    /*
+      The agency reads it in their own account as well. A private customer
+      has no account and needs none — the PDF is attached, which is the whole
+      reason this message carries one.
+    */
+    portalLink:
+      recipient === "agent" ? `${business.url}/portal/invoices/${invoice.id}` : null,
+    timeZone: bookingConfig.timeZone,
+  });
+
+  const result = await sendOutboxEmail({
+    kind: "invoice-issue",
+    to,
+    email,
+    reference: job.reference,
+    /*
+      **One intent, one provider key**, taken from the row's own key so the
+      two can never drift apart — the mistake §20.f found in the certificate
+      path. A retry keeps it; a re-approval to a corrected address is a
+      different row with a different approval number and therefore a
+      different key, so the corrected message is not deduplicated away.
+    */
+    idempotencySuffix: `inv-${invoice.id}-${recipient}-${
+      invoiceApprovalFromKey(row.idempotencyKey) ?? 1
+    }`,
+    attachments: [{ filename: invoice.filename, content: stored.bytes }],
+  });
+
+  if (result.status === "sent") {
+    /*
+      Recorded only on acceptance. `sent` means the provider took it — not
+      that it arrived, and emphatically not that it was paid: the invoice
+      moves to `sent`, which is a different column from `paid`.
+    */
+    try {
+      await db.batch([
+        db
+          .update(documents)
+          .set({
+            sentAt: new Date(),
+            sentTo: sql`COALESCE(${documents.sentTo}, '[]'::jsonb) || ${JSON.stringify([
+              {
+                recipient,
+                address: to,
+                at: new Date().toISOString(),
+                number: invoice.number,
+                attached: true,
+              },
+            ])}::jsonb`,
+          })
+          .where(eq(documents.id, invoice.documentId)),
+        db
+          .update(invoices)
+          .set({ status: "sent", sentAt: new Date(), updatedAt: new Date() })
+          // Only from `issued`. A payment recorded in the meantime is a later
+          // fact than this send and must not be walked back by it.
+          .where(and(eq(invoices.id, invoice.id), eq(invoices.status, "issued"))),
+      ] as unknown as Parameters<typeof db.batch>[0]);
+    } catch {
+      // The message went. A missing note about it is not worth a retry that
+      // would send it again.
+    }
+  }
+
+  return finish(db, row, result);
+}
+
+/**
+ * Is this recipient still entitled to the invoice?
+ *
+ * Deliberately **not** `recipientStillEligible`: that one compares against
+ * the *job's* billing customer, and an invoice may legitimately have been
+ * addressed to a different related payer. Asking the job would revoke a
+ * perfectly valid send.
+ */
+async function invoiceRecipientStillEligible(
+  db: NonNullable<ReturnType<typeof getDb>>,
+  organisationId: string | null,
+  payerId: string,
+  recipient: OutboxRecipient,
+  approvedAddress: string,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  if (recipient === "agent") {
+    if (!organisationId) return { ok: false, reason: "agency_no_longer_on_invoice" };
+    const [org] = await db
+      .select({ email: agentOrganisations.email, active: agentOrganisations.isActive })
+      .from(agentOrganisations)
+      .where(eq(agentOrganisations.id, organisationId))
+      .limit(1);
+
+    if (!org) return { ok: false, reason: "agency_missing" };
+    if (org.active === false) return { ok: false, reason: "agency_deactivated" };
+    if (org.email !== approvedAddress) {
+      return { ok: false, reason: "approved_address_changed" };
+    }
+    return { ok: true };
+  }
+
+  const [payer] = await db
+    .select({ email: customers.email, active: customers.isActive })
+    .from(customers)
+    .where(eq(customers.id, payerId))
+    .limit(1);
+
+  if (!payer) return { ok: false, reason: "payer_missing" };
+  if (payer.active === false) return { ok: false, reason: "customer_deactivated" };
+  if (payer.email !== approvedAddress) {
+    return { ok: false, reason: "approved_address_changed" };
+  }
+  return { ok: true };
 }
 
 /**

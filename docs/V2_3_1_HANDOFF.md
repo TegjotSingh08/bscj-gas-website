@@ -2361,3 +2361,428 @@ the log is append-only and was never a fixture.
   before this code is deployed — migrate, then deploy.
 - **The CO-alarm question is still open** and deliberately undecided.
 - Nothing in §13.6 is closed.
+
+---
+
+# 21. V2.8 — invoicing
+
+**In progress.** Each stage is recorded here as it completes, so the work can
+be picked up from this file alone.
+
+## 21.1 Checkpoint
+
+Started from `v2-compliance-platform` at `43ecd5b` ("Add certificate upload,
+review, release and delivery"), working tree clean — confirmed, not assumed.
+
+Scope: **single-job invoices**. Completed job → editable draft → reviewed,
+issued PDF → private agency access and optional email attachment → manually
+recorded payment. Consolidated monthly invoicing, online payments and
+automatic chasing are deliberately out.
+
+## 21.2 The generator, reused
+
+`~/Invoice Generator/` was read and **not modified**. It remains the tool BSCJ
+uses. Exactly one thing was copied out of it: the `FONTS` object — four
+Carlito subsets and their metrics — extracted by
+`scripts/extract-invoice-fonts.mjs` into
+`src/lib/invoices/pdf/fonts.generated.ts`, so the copy is reproducible rather
+than a 240 KB blob taken on trust.
+
+| Face | Name | Bytes | SHA-256 |
+|---|---|---|---|
+| `reg` | Carlito | 42,100 | `fca72489…` |
+| `bold` | Carlito-Bold | 44,664 | `bfa12f9e…` |
+| `ital` | Carlito-Italic | 41,664 | `25800895…` |
+| `bi` | Carlito-BoldItalic | 50,452 | `c6cbca14…` |
+
+Carlito is metric-compatible with Calibri, which is what the existing invoices
+are set in — which is why the measured coordinates still land where they did.
+SIL Open Font Licence 1.1, redistributable as part of a larger work.
+
+**Deliberately not copied:** the company name, tagline, qualifications list and
+services strapline; the telephone number; the three lines of bank details in
+the payment footer; the `D-…` numbering; the landlord book; the month-folder
+server; the payments tracker; and `2026 Invoices/` — eight months of issued
+invoices for real customers. None of it is in this repository.
+
+The **layout and the painter are the valuable part**, and both were ported:
+
+| Ported to | From | What changed |
+|---|---|---|
+| `src/lib/invoices/pdf/painter.ts` | `Painter`, `PDFPainter`, `textWidth`, `wrapText` | TypeScript; `CanvasPainter` became `SvgPainter` so the preview renders server-side |
+| `src/lib/invoices/pdf/layout.ts` | `L` and `paintInvoice` | Identity strings became configuration; the body became a list of lines |
+| `src/lib/invoices/pdf/render.ts` | `renderInvoice` / `previewInvoice` | Two entry points over one `paintInvoice` |
+
+**No new dependency.** The original writes the PDF by hand — objects, an xref
+table, embedded TrueType — and that is kept. Adding a PDF library to draw
+sixty positioned strings would cost a megabyte of server bundle and a font
+pipeline, and would move every measured coordinate.
+
+Two deliberate departures from the original:
+
+1. **Nothing about the business is in the code.** `identity`, `terms` and
+   `vat` arrive as arguments and are frozen onto the invoice at issue. An
+   unconfigured field prints nothing; there is no placeholder.
+2. **The body is a list of lines.** The single-line case draws exactly where
+   it used to — property at 447.60, description from 422.10, amount at
+   418.80 — so a customer who has had one of these before receives the same
+   document, not a redesign. Quantity is rendered as a "2 × £15.00" detail
+   line rather than a new column, because the original has no quantity column
+   and this does not invent one.
+
+VAT rows are implemented and drawn **only** when registration is on. BSCJ is
+not registered, so no VAT line, number or wording appears — printing
+"VAT £0.00" would be a statement about tax status.
+
+`BusinessIdentity` gained three optional fields — `tagline`, `qualifications`,
+`serviceLines` — for the three lines under the company name. Optional, absent
+by default, and not part of `missingInvoiceIdentityFields`.
+
+Verified: a two-line invoice renders to a 187,888-byte PDF with no layout
+warnings, rasterised and inspected visually against the original design.
+
+## 21.3 The data layer
+
+### Migration 0006 — written, **not applied**
+
+`drizzle/0006_invoicing.sql`, with a down file, additive throughout. Nothing
+has been run against any database; the development database is untouched.
+
+| Change | Why |
+|---|---|
+| `invoice_status` gains **`issued`**, before `sent` | Issue, provider acceptance and payment are three facts. `draft → sent → paid` had no state for a numbered invoice with a PDF that nobody has emailed |
+| `invoice.number` becomes **nullable** | A draft holds no number. One drawn by an abandoned draft is a gap somebody has to explain |
+| `invoice.primary_job_id` + partial unique index `invoice_active_job_key` where `status <> 'void'` | **One live invoice per job**, enforced by the database. Two administrators pressing the button at once is exactly what a read-then-write does not stop. Void is excluded so a mistake can be voided and the job invoiced again |
+| `invoice.quoted_total_pence` | What the job was quoted, carried onto the invoice. An adjustment becomes visible rather than inferred by re-pricing the job |
+| `invoice.billing_snapshot` | The payer and their address, frozen. An agency that moves office must not retrospectively re-address an invoice already in somebody's accounts |
+| `invoice.issued_by`, `paid_on`, `paid_by`, `voided_at`, `voided_by`, `void_reason` | An invoice that cannot say who issued it is a document with no author |
+| `customer.billing_address_lines`, `billing_postcode` | Where the bills go, which is **not** where the work happens |
+
+`ALTER TYPE … ADD VALUE` is transactional on PostgreSQL 12+ and the value is
+only declared here, never written in the same migration, so the
+cannot-use-it-yet restriction does not bite.
+
+### Modules
+
+| File | What it owns |
+|---|---|
+| `src/lib/invoices/model.ts` | Pure: statuses, pence arithmetic, line validation, billing address, issue blockers, due dates |
+| `src/lib/invoices/invoices.ts` | Drafts, reads, preview, issue, mark paid, void, counters |
+| `src/lib/invoices/delivery.ts` | Recipients, queue, re-approval, the send history |
+| `src/lib/email/invoice-issue.ts` | The message. The PDF **is** attached and it says so |
+| `src/lib/notifications/outbox.ts` | `deliverInvoice`, beside `deliverCertificate` |
+
+### The decisions inside it
+
+- **Money is integer pence everywhere.** Pounds exist only at the two edges —
+  what an administrator types and what is printed — and both conversions are
+  in one module. `poundsToPence` refuses more than two decimal places rather
+  than rounding something the typist did not decide.
+- **Nothing is re-priced.** A draft is built from `job.price_snapshot` and
+  `job.price_total_pence`. No call to `resolvePrice` exists anywhere in the
+  invoicing code. The appliance extra is a separate line, because "£45 plus
+  two appliances at £15" is what happened.
+- **The job's price is never written.** An invoice that differs from the quote
+  records the difference — `quoted_total_pence`, plus `adjusted` on the audit
+  event — and leaves the agreement alone.
+- **The server recomputes every figure.** The form posts a description, a
+  quantity and a unit price and nothing else.
+- **The payer is explicit.** The job's `billing_customer_id` is the initial
+  selection; an admin may choose a different **related** payer — the
+  commissioning customer, the billed customer, or the property owner, and
+  nobody else. A posted id is checked against that list. Choosing differently
+  changes this invoice, never the job's billing policy.
+- **Billing address is never substituted.** Missing one blocks issue with a
+  message that says the property address is not a substitute.
+- **A number is drawn once**, at issue, by `UPDATE … WHERE status='draft' AND
+  number IS NULL`. A retry finds it and reuses it. A draft that has attempted
+  issue therefore holds a number and can no longer be deleted — it is voided
+  instead, which keeps both the number and the fact that an attempt happened.
+- **Storage first, database second**, and the compensating delete looks the
+  row up by `blob_key` before removing anything — §20.f's lesson, applied
+  here rather than relearned.
+- **Issue, acceptance and payment stay apart.** `deliverInvoice` moves
+  `issued → sent` only, so a payment recorded in the meantime is not walked
+  back by a send that finished afterwards.
+- **A re-approval is a new row with the next approval number**, giving a new
+  provider key. The earlier row keeps its address and its error.
+- **Engineers get nothing.** `readDocumentFor` now keys on `document.kind`: an
+  engineer assigned to the job may read its certificate and is refused its
+  invoice, and an agency sees an invoice only once it is issued.
+
+Existing checks re-run: **1,720 tests pass**, typecheck and lint clean. Two
+existing assertions were updated rather than worked around — the invoice
+status enum, and the public-copy scanner, which was matching "poa" inside
+base64 font data.
+
+## 21.4 The interface
+
+| Surface | What it is |
+|---|---|
+| `/admin/invoices` | Every invoice, newest first, drafts included. Configuration banner at the top, because the fix is not something the person trying to issue can do in the moment |
+| `/admin/invoices/[id]` | One invoice. **Changes shape with the status** rather than greying controls out: a draft gets the editor and the issue gate, an issued one gets the document, the email controls and payment, and there is no code path on the page that edits an issued invoice |
+| `/admin/settings` | The business details a person must supply. VAT is shown and **not** editable — registering affects every document issued afterwards and needs a rate and a date |
+| `/admin/jobs/[id]` | An Invoice section: the invoices raised, and "Raise an invoice" for completed work with no live invoice |
+| `/portal/invoices` and `/portal/invoices/[id]` | The agency's own issued invoices, read-only, with the PDF behind the one authenticated document route |
+
+- **The preview is the document.** It is `paintInvoice` rendered through
+  `SvgPainter` — same coordinates, same wrapping, same overflow warnings as the
+  PDF. Not an HTML mock-up, which would drift.
+- **Issuing is behind a typed word**, not a second button, for the same reason
+  releasing a certificate asks somebody to open the PDF first.
+- **No nested forms.** The §20.f fault — a retry `<form>` inside the queue
+  `<form>`, silently dropped by the browser — is avoided by joining the
+  checkboxes to their form with the `form` attribute. Asserted live:
+  `document.querySelectorAll("form form").length === 0`.
+- The running total in the editor is a convenience and is **discarded on
+  submit**; the server recomputes from description, quantity and unit price.
+
+## 21.5 Migration 0006 applied to development
+
+Approved explicitly, and confirmed before running:
+
+| Check | Result |
+|---|---|
+| Target | `neondb` at `ep-crimson-math-za016rum-pooler…eu-west-2` — the development database `.env.local` names. **Production was not touched** |
+| Outstanding | Exactly one: `0006_invoicing` |
+| Statements | **19**, separated by 19 `--> statement-breakpoint` markers. Verified by counting the file rather than by eye — an earlier draft of this table said 23, which double-counted the four `DO $$ … END $$` blocks as their inner lines |
+| What those 19 are | 1 × `ALTER TYPE … ADD VALUE`; 1 × `ALTER COLUMN … DROP NOT NULL`; 9 × `ADD COLUMN IF NOT EXISTS` (7 on `invoice`, 2 on `customer`); 4 × `ADD CONSTRAINT` inside `DO $$` blocks, so re-running is harmless; 2 × `CREATE INDEX` (one of them the partial unique index). Full text in `drizzle/0006_invoicing.sql` |
+| Destructive statements | **None.** No `DROP TABLE`, `DROP COLUMN`, `DELETE`, `TRUNCATE` or `UPDATE`; the only `ON DELETE`/`ON UPDATE` matches are foreign-key clauses |
+| Invoice numbering | No `ALTER SEQUENCE`, `setval` or `RESTART`. Untouched |
+| Business records before | 0 jobs, customers, properties, organisations, invoices, documents, certificates, emails, settings; 1 `app_user`; 35 `audit_event` |
+| Business records after | Identical. Sequence still `last_value 1000, is_called false` |
+
+## 21.6 Verification
+
+### Gates — actual exit codes, unfiltered
+
+| Gate | Result |
+|---|---|
+| `npm test` | **1,801 pass, 0 fail**, 340 suites |
+| `npx tsc --noEmit` | exit 0 |
+| `npm run lint` | 0 errors, 1 pre-existing warning (`outbox.test.ts`) |
+| `npm run build` | Compiled successfully; `/admin/invoices`, `/admin/invoices/[id]`, `/admin/settings`, `/portal/invoices`, `/portal/invoices/[id]` all dynamic, none prerendered, none in the sitemap |
+
+91 of those tests are new and cover the arithmetic, the line validation, the
+billing address, the issue gate, the statuses, the due dates, VAT in both
+positions, the outbox keys, the PDF and the text metrics. Five more cover the
+certificate email wording. Every fixture in them is visibly fictional.
+
+Two **structural** tests are worth naming, because they guard rules that are
+easy to break by accident:
+
+- no invoicing module imports `@/lib/pricing/resolve` or calls `resolvePrice`;
+- no invoicing module contains `.update(jobs)` at all, so the job's price,
+  snapshot and lifecycle are out of reach by construction rather than by care.
+
+### The journey, end to end on isolated fixtures
+
+Google, Upstash and Resend intercepted in-process; local document store;
+`scripts/seed-invoicing-fixture.mjs` for the rows.
+
+| Step | Result |
+|---|---|
+| Uncompleted job | **No invoice control offered** — "An invoice is raised once the work is completed" |
+| Completed agency job → raise | Draft created, prefilled **£45.00 + 2 × £15.00 = £75.00** from the stored snapshot, appliance extra as its own line |
+| Issue gate, before anything | Refused on **both** counts: no billing address ("the property address is not a substitute"), and the eight empty settings **named** |
+| `/admin/settings` | Fictional configuration saved; screen flips to "Everything an invoice needs is configured" |
+| Edit: reword a line, add "Agreed reduction, access delay" at −£5.00 | Saved. Total **£70.00**, and the screen says **−£5.00 against the quote. The job's own price is unchanged** |
+| Billing address typed | Stored on the customer, postcode normalised `wv2 2bb` → `WV2 2BB` |
+| Confirmation typed as "yes" | Refused; **sequence still `1000, is_called false`** — nothing was drawn |
+| Confirmation typed as "ISSUE" | **BSCJ-001000**, 188,010-byte PDF stored, `sha256 4f75807e…`, due 03/10/2026, editor gone |
+| PDF inspected visually | Correct: masthead, table frame, underlined service address, quantity detail line, payment footer, **no DRAFT stamp, no VAT anywhere** |
+| Agency A download | **200**, `sha256 4f75807e…` — byte-identical to the stored object. `private, no-store`, `inline; filename="BSCJ-001000.pdf"` |
+| Agency B | **404** on the document, **404** on the invoice page, list says "Nothing invoiced yet" |
+| Engineer (assigned to that very job) | **404** on the document; `/admin/*` redirects; `/portal/*` redirects; no price and no mention of an invoice on their own job page |
+| Email approved for both recipients | 2 rows queued, addresses frozen, **no address in either key** |
+| Drain | 2 accepted; **attachment `sha256 4f75807e…`, 188,010 bytes on both** — identical to the stored object. Invoice moved `issued → sent` |
+| Agency address changed, re-approval offered | Screen says "Approved for an address that is no longer the one on file" |
+| Re-approve the **unchanged** payer | Refused: "already been sent this invoice at the address on file" |
+| Re-approve the **corrected** agency | **New row, approval 2, new key**; the approval-1 row untouched with its old address |
+| Drain | 1 accepted, to `…corrected@…`, same PDF, provider key `…-agent-2`. **All three provider keys distinct** |
+| Mark paid, dated 2027-01-01 | Refused: "A payment cannot arrive in the future" |
+| Mark paid, dated today, with a note | `paid`, recorded with the date and the note |
+| Job page afterwards | Control gone: "This job has a live invoice. Void it before raising another" |
+
+### What was proved about concurrency and failure
+
+| Question | How it was answered | Result |
+|---|---|---|
+| Two live invoices for one job? | Direct insert past the application | Refused, `23505 invoice_active_job_key` |
+| A genuine race on a job with no invoice? | Three concurrent inserts | **Exactly one** succeeded |
+| Two invoices sharing a number? | Direct insert of a duplicate | Refused, `23505 invoice_number_key` |
+| Does voiding free the job? | Void, then insert again | Accepted |
+| Does a retry redraw a number? | A number written to a draft, then issue | **Reused `BSCJ-001001`; the sequence did not advance** |
+| An issued invoice edited through the library? | `updateInvoiceDraft` on an issued row | Refused |
+| Issued twice? Paid twice? Discarded? | Each called directly | All three refused |
+| A payer the client chose but the job does not know? | Posted a foreign customer id | Refused: "That payer is not related to this job" |
+| Issuing with no storage? | `BSCJ_DOCUMENT_DIR` removed | Refused, **no number drawn** |
+| Emailing a draft? | `queueInvoiceEmail` on a draft | Refused |
+| An engineer or the wrong agency writing? | `voidInvoice` with each session | Both threw `NotPermittedError` |
+| Did the job's price survive all of it? | Read after the £70 invoice | **`price_total_pence` 7500, snapshot `totalPence` 7500** |
+
+### Defects this phase found in its own work
+
+1. **`export { EMPTY }` from a `"use server"` file.** A server-action module
+   may export only async functions; the constant failed the whole module at
+   runtime with a 500 the moment the job page rendered. **The production build
+   did not catch it** — the rule is enforced when the actions loader evaluates
+   the module. Found in the browser on the first click. Removed, with a comment
+   saying why.
+2. **The fixture cleanup deleted organisations before their users.**
+   `app_user.agent_organisation_id` restricts, so the delete failed and left
+   two organisations behind while reporting success. Fixed and re-run.
+
+### Corrected alongside: the certificate email contradicted itself
+
+Not part of invoicing, and fixed here because it was found here. The released
+certificate email said "The document is not attached" — wording written in V2.6
+and never revisited when §20.b started attaching the PDF. Every released
+certificate went out with its document attached and a line underneath saying it
+was not. Corrected in both the HTML and the plain text (they are built from one
+list of strings), and `src/lib/email/certificate-release.test.ts` now asserts
+the claim in both parts. **§19.6 above is left as written** — it records what
+was true at the time, and rewriting history to hide a defect is how the defect
+gets made again.
+
+### Development invoice numbers consumed — not reset
+
+`BSCJ-001000` (the journey invoice) and `BSCJ-001001` (the retry probe). The
+sequence is at `last_value 1001, is_called true`, so **`BSCJ-001002` is next on
+the development database**. It was deliberately **not** reset: a sequence that
+can be wound back is not one an accountant can rely on, and gaps are expected
+by design. Production's sequence is untouched and still starts at
+`BSCJ-001000`.
+
+### Cleanup
+
+Every fixture row removed, both stored objects deleted, and the fictional
+business settings removed. Final development state: **0 jobs, customers,
+properties, organisations, invoices, invoice lines, documents, certificates,
+queued emails, activities and settings; 1 `app_user` — the real administrator.**
+The 49 `audit_event` rows are preserved: the log is append-only and was never a
+fixture.
+
+## 21.7 What this phase did not do
+
+- **Consolidated monthly invoicing.** The data model carries it — a header with
+  many lines, `invoice_line.job_id` nullable, `period_start`/`period_end`
+  present — and nothing builds one. `primary_job_id` is null for that shape and
+  the partial unique index ignores it, so it stays open.
+- **Credit notes.** Correcting an issued invoice is a void and a new invoice.
+  A credit note is a different document with its own numbering decision.
+- **Online payments.** V2 takes none. `paid` is a person recording that money
+  turned up somewhere else.
+- **Automatic chasing.** No reminder, no escalation, no overdue email. The
+  outreach windows and escalation thresholds are configuration BSCJ has not
+  supplied.
+- **A dashboard figure for what is owed.** `countUnpaidInvoices()` and
+  `countJobsAwaitingInvoice()` exist and only the second is displayed.
+
+## 21.8 What BSCJ still has to supply
+
+Nothing below is invented, and until each is supplied the application says so
+rather than guessing. **Drafts work throughout; only issuing is blocked.**
+
+| Required before a real invoice can be issued | Where it goes |
+|---|---|
+| Trading name, as printed | `business.identity.displayName` |
+| Legal entity — the contracting company | `business.identity.legalName` |
+| Address and postcode | `business.identity.addressLines`, `postcode` |
+| Email, as printed | `business.identity.email` |
+| Footer wording | `business.identity.footerText` |
+| Payment terms, as printed | `invoice.terms.paymentTerms` |
+| How to pay — **bank details live here, not in code** | `invoice.terms.paymentInstructions` |
+
+Optional and empty: company number, telephone, website, Gas Safe registration,
+the tagline, the qualifications line, the services strapline, and the number of
+days to pay — **leave that empty and no due date is printed**, because "30
+days" is a commercial decision nobody has recorded.
+
+The VAT position stays as confirmed on 16 September 2026: **not registered**,
+modelled in full, switched off, and not editable from the settings screen.
+
+## 21.9 Activation gaps
+
+- **Migration 0006 is applied to development only.** Production needs it before
+  this code is deployed — migrate, then deploy.
+- **No Blob store is provisioned**, so invoices would have nowhere to live in
+  production. Unchanged from §20: attach a store so `BLOB_READ_WRITE_TOKEN` is
+  injected, then deploy. The issue gate already refuses when storage is not
+  ready, so a deployment without it cannot produce an invoice with no PDF.
+- **The email path has still not been run against real Resend.** It is verified
+  against the in-process stub, including attachment digests.
+- Nothing in §13.6 is closed.
+
+## 21.10 Close-out — overflow, found by rendering an extreme invoice
+
+The journey in §21.6 used realistic data and was clean. A deliberately extreme
+one — a 79-character payer name, a seven-line billing address, a long service
+address, five priced lines with quantities, five lines of payment details, a
+two-sentence terms paragraph and a paragraph-length legal footer — was rendered
+and inspected. **It found two faults that produced no warning at all.**
+
+| Fault | What it did | Fix |
+|---|---|---|
+| **The telephone and the email printed on top of one another.** Both were drawn on one baseline, one left-anchored and one right-anchored, with no width limit on either | A long number and a long address grew towards each other until the text was unreadable. Nothing was reported | Each side is capped at its half of the row (230pt) and fitted there, which makes the collision impossible. A value that will not fit its half even at the floor size is reported, and the geometric check is kept as an independent guard on the invariant |
+| **The payment terms had no width constraint at all** | A sentence of any length was drawn centred and ran off **both** edges of the page, losing its first and last words — on the one field a customer may have to act on. Nothing was reported | Wrapped to 470pt over up to two lines. Beyond that it is reported and names what is not printed. The block moved from y=38 to y=46 so a second line cannot land on the footer's ascenders |
+
+Three more silent truncations were made explicit, and every remaining
+`fitSize` call in the layout became `fitOrOverflow`:
+
+- **What is dropped is now named, not counted.** "The billing address is 7
+  lines" became "…and only 4 fit. Not printed: Some District, Example Town /
+  West Midlands / WV2 2BB." The lines that fall off the end of a UK address are
+  the town and the postcode — the two a payment most needs — and counting them
+  does not tell anybody which line to shorten. The same applies to payment
+  details, where the line that vanishes is an account number or an IBAN.
+- **A page that cannot print every line now says the total does not add up.**
+  Previously the loop stopped and warned about the line, while the total below
+  still included everything — a page whose own figures disagree. That is stated
+  in its own right rather than left to be inferred.
+- **Masthead fields report when no size fits.** `fitSize` shrinks to a floor and
+  then draws anyway; `fitOrOverflow` says whether it actually worked, and the
+  trading name, tagline, qualifications, services lines, payer name, service
+  address, each line amount and the total all report it. `fitSize` is now
+  private, so the silent one cannot be reached by accident.
+
+One thing that was **not** an overflow: `custName.maxW` was 300, carried over
+from the original generator, where names were short. An ordinary agency name —
+"Customer Name: …Lettings (Wolverhampton) Limited" — measures 328pt at full
+size, so the limit shrank real names for no reason and, once reporting was
+added, would have blocked them. Nothing sits to the right of that line, so it
+is now 480.
+
+**Nothing is truncated silently anywhere on the page**, and a warning is not
+cosmetic: `issueInvoice` refuses while any warning stands, so a page that
+reports a problem cannot reach a customer. Twelve tests cover these cases,
+including one asserting that refusal still exists in `invoices.ts`.
+
+Re-rendered afterwards: the extreme invoice has no overlap, no clipping and no
+unreported loss, and the ordinary invoice of §21.6 is **byte-identical at
+187,888 bytes** — the changes touch only the cases that were broken.
+
+**Gates after this work:** `npm test` **1,813 pass, 0 fail**; `tsc --noEmit`
+exit 0; `eslint` 0 errors and the one pre-existing warning; `npm run build`
+compiled successfully.
+
+## 21.11 Development tooling added (not application code)
+
+Three files, none of which `src` imports and none of which can reach a
+production bundle:
+
+| File | What it is |
+|---|---|
+| `scripts/extract-invoice-fonts.mjs` | Lifts the four Carlito subsets out of the standalone generator. Its only purpose is to make `fonts.generated.ts` reproducible rather than a 240 KB blob taken on trust: re-run it against the original and the output must be identical |
+| `scripts/seed-invoicing-fixture.mjs` | Four jobs, two agencies and four accounts for driving the invoicing screens. Refuses without `BSCJ_ALLOW_FIXTURE_SEED=1`; every row is marked `INVFIX` or on `@example.invalid`; `--clean` removes exactly what it wrote. It deliberately writes **no business settings**, so the issue gate is seen refusing before anyone fills them in |
+| `.claude/launch.json` | A `bscj-fixtures` entry on port 3100, running the existing stubbed-services script |
+
+`scripts/dev-with-fixtures.sh` gained four exports. Two are the local document
+store, so a certificate or an invoice can actually be written and read back —
+the local driver refuses to load in production, so it cannot follow the code
+anywhere it should not. The other two are a throwaway Resend key and a from
+address: with `RESEND_API_KEY=""` the send path short-circuits as "not
+configured" and no message is ever built, which made the email path impossible
+to verify at all. `api.resend.com` is replaced by the in-process stub for the
+whole process, so the value cannot reach Resend, and both use `${VAR:-default}`
+so an explicit value still wins.

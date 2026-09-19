@@ -33,6 +33,10 @@ import {
   listPendingDocuments,
 } from "@/lib/documents/certificates";
 import { storageStatus } from "@/lib/storage/documents";
+import { listJobInvoices } from "@/lib/invoices/invoices";
+import { formatPence } from "@/lib/invoices/model";
+import { RaiseInvoice } from "../RaiseInvoice";
+import { InvoiceStatusPill } from "../../invoices/StatusPill";
 import { AdminNav } from "../../AdminNav";
 
 export const metadata: Metadata = {
@@ -104,15 +108,31 @@ export default async function AdminJobPage({
     hasAppointment: job.appointmentStart !== null,
   };
 
-  const [engineers, timeline, notifications, pendingDocuments, allCertificates, recipients] =
-    await Promise.all([
+  const [
+    engineers,
+    timeline,
+    notifications,
+    pendingDocuments,
+    allCertificates,
+    recipients,
+    invoices,
+  ] = await Promise.all([
       listEngineers(scope),
       jobTimeline(scope, job.id),
       fetchNotificationStates(job.id),
       listPendingDocuments(job.id),
       listJobCertificates(job.id),
       certificateRecipientAddresses(job.id),
+      listJobInvoices(job.id),
     ]);
+
+  /*
+    "Live" means not voided. A job with a voided invoice and nothing else may
+    be invoiced again — which is the whole reason voiding exists — so the
+    control is offered from the state of the invoices, not from whether any
+    have ever been raised.
+  */
+  const liveInvoice = invoices.find((invoice) => invoice.status !== "void") ?? null;
 
   const currentCertificate =
     allCertificates.find((c) => c.status === "issued") ?? null;
@@ -396,6 +416,51 @@ export default async function AdminJobPage({
                 ))}
               </ul>
             </div>
+          )}
+        </section>
+
+        <section className="mt-4 rounded-2xl border-2 border-navy-200 bg-white p-5">
+          <h2 className="text-sm font-extrabold text-navy-900">Invoice</h2>
+
+          {invoices.length === 0 && status !== "completed" && (
+            <p className="mt-2 text-sm text-navy-700">
+              An invoice is raised once the work is completed.
+            </p>
+          )}
+
+          {invoices.length > 0 && (
+            <ul className="mt-2 grid gap-2">
+              {invoices.map((invoice) => (
+                <li
+                  key={invoice.id}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-navy-50 px-4 py-3"
+                >
+                  <span className="text-sm">
+                    <Link
+                      href={`/admin/invoices/${invoice.id}`}
+                      className="font-bold text-navy-900 hover:underline"
+                    >
+                      {invoice.number ?? "Draft"}
+                    </Link>
+                    <span className="ml-3 text-navy-700">
+                      {formatPence(invoice.totalPence)}
+                    </span>
+                  </span>
+                  <InvoiceStatusPill status={invoice.status} />
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {status === "completed" && liveInvoice === null && (
+            <RaiseInvoice jobId={job.id} />
+          )}
+
+          {liveInvoice !== null && (
+            <p className="mt-2 text-xs text-navy-600">
+              This job has a live invoice. Void it before raising another —
+              which keeps its number and the reason it was withdrawn.
+            </p>
           )}
         </section>
 

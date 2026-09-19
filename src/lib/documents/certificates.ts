@@ -14,6 +14,7 @@ import {
   certificates,
   customers,
   documents,
+  invoices,
   jobs,
   outboundEmails,
 } from "@/lib/db/schema";
@@ -23,6 +24,10 @@ import {
   putDocument,
   storageStatus,
 } from "@/lib/storage/documents";
+import {
+  isIssued as isInvoiceIssued,
+  type InvoiceStatus,
+} from "@/lib/invoices/model";
 import { checkPdf } from "./validate";
 import {
   canUploadCertificate,
@@ -994,12 +999,19 @@ export type DocumentAccess =
 /**
  * A document's bytes, for a caller who has proved they may have them.
  *
- * The permission is decided here, from the database, for every request:
+ * The permission is decided here, from the database, for every request, and
+ * it depends on what **kind** of document it is:
  *
- * - **BSCJ staff** — an administrator, or the engineer the job is assigned
- *   to. An engineer who is not on the job is a stranger to it.
- * - **An agency** — its own organisation's documents, and **only once
- *   released**. An uploaded, unreviewed PDF is not theirs to see.
+ * - **A certificate** — BSCJ staff, or the engineer the job is assigned to
+ *   (an engineer who is not on the job is a stranger to it), or the owning
+ *   agency once it has been released. An uploaded, unreviewed PDF is not
+ *   theirs to see.
+ * - **An invoice** — BSCJ staff, or the owning agency once it has been
+ *   issued. **Never an engineer**, on or off the job: an engineer carries no
+ *   `invoice:read` anywhere in this application, and a restricted interface
+ *   that happens to hand over an agency's negotiated rate is not restricted.
+ *   A draft or voided invoice is BSCJ's working document and reaches nobody
+ *   else.
  * - **Nobody else.** A tenant's scheduling session is a token for choosing
  *   an appointment; it has never been an identity and it grants nothing
  *   here.
@@ -1025,18 +1037,37 @@ export async function readDocumentFor(
       jobId: documents.jobId,
       assignedEngineerId: jobs.assignedEngineerId,
       jobOrganisationId: jobs.agentOrganisationId,
+      kind: documents.kind,
       certificateId: certificates.id,
       certificateStatus: certificates.status,
+      invoiceId: invoices.id,
+      invoiceStatus: invoices.status,
     })
     .from(documents)
     .leftJoin(jobs, eq(jobs.id, documents.jobId))
     .leftJoin(certificates, eq(certificates.documentId, documents.id))
+    .leftJoin(invoices, eq(invoices.documentId, documents.id))
     .where(eq(documents.id, documentId))
     .limit(1);
 
   if (!row) return { ok: false, status: 404, error: "Not found." };
 
-  const released = row.certificateId !== null;
+  const isInvoice = row.kind === "invoice";
+
+  /*
+    "Released" means a different thing for each kind, and both are read from
+    the row that owns the document rather than from the document itself:
+
+    - a **certificate** is released once a certificate row points at it;
+    - an **invoice** is released once its invoice row is issued, sent or
+      paid. A draft has been approved by nobody and a voided one was
+      withdrawn.
+  */
+  const released = isInvoice
+    ? row.invoiceId !== null &&
+      isInvoiceIssued((row.invoiceStatus ?? "draft") as InvoiceStatus)
+    : row.certificateId !== null;
+
   let permitted = false;
 
   switch (scope.kind) {
@@ -1045,8 +1076,13 @@ export async function readDocumentFor(
       permitted = true;
       break;
     case "assigned":
-      // The engineer on the job, whether or not it has been released.
-      permitted = row.assignedEngineerId === scope.userId;
+      /*
+        The engineer on the job — for a certificate, which is the record of
+        work they did. **Never for an invoice.** They have no `invoice:read`
+        capability anywhere in this application, and being assigned to a job
+        is not a route around that.
+      */
+      permitted = !isInvoice && row.assignedEngineerId === scope.userId;
       break;
     case "organisation":
       /*

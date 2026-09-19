@@ -35,6 +35,9 @@ const COMPLETE: BusinessIdentity = {
   website: "https://example.com",
   gasSafeNumber: "000000",
   footerText: "To be confirmed before issue.",
+  tagline: null,
+  qualifications: null,
+  serviceLines: [],
 };
 
 const COMPLETE_TERMS = {

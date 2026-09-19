@@ -44,6 +44,19 @@ export type BusinessIdentity = {
   gasSafeNumber: string | null;
   /** Confirmed separately before invoices are issued. Never invented. */
   footerText: string | null;
+
+  /*
+    The three optional lines under the name on a printed document.
+
+    The invoice layout BSCJ already uses carries a tagline, a list of
+    qualifications and a services strapline beneath the company name. They
+    are optional here and absent by default: the layout leaves the space
+    empty rather than printing anything nobody has confirmed, and a
+    qualification nobody has typed is a claim this code will not make.
+  */
+  tagline: string | null;
+  qualifications: string | null;
+  serviceLines: string[];
 };
 
 export const EMPTY_BUSINESS_IDENTITY: BusinessIdentity = {
@@ -58,6 +71,9 @@ export const EMPTY_BUSINESS_IDENTITY: BusinessIdentity = {
   website: null,
   gasSafeNumber: null,
   footerText: null,
+  tagline: null,
+  qualifications: null,
+  serviceLines: [],
 };
 
 /**
@@ -134,6 +150,9 @@ export function parseBusinessIdentity(value: unknown): BusinessIdentity {
     website: optionalString(raw.website),
     gasSafeNumber: optionalString(raw.gasSafeNumber),
     footerText: optionalString(raw.footerText),
+    tagline: optionalString(raw.tagline),
+    qualifications: optionalString(raw.qualifications),
+    serviceLines: stringList(raw.serviceLines),
   };
 }
 

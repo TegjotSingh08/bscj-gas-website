@@ -280,9 +280,15 @@ describe("money and state", () => {
       [...schema.jobLifecycleStatusEnum.enumValues],
       [...JOB_LIFECYCLE_STATUSES],
     );
+    /*
+      `issued` was added in `0006`. Issue, provider acceptance and payment are
+      three different facts, and `draft → sent → paid` had no state for a real
+      invoice with a number and a PDF that nobody has emailed — which is what
+      an invoice handed over in person or downloaded from the portal is.
+    */
     assert.deepEqual(
       [...schema.invoiceStatusEnum.enumValues],
-      ["draft", "sent", "paid", "void"],
+      ["draft", "issued", "sent", "paid", "void"],
     );
     for (const financial of ["invoiced", "paid", "certificate_issued"]) {
       assert.equal(
