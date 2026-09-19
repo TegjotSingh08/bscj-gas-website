@@ -5,6 +5,8 @@ import { notFound } from "next/navigation";
 import { requireAdmin } from "@/lib/auth/session";
 import { getOrganisationForAdmin } from "@/lib/organisations/admin";
 import {
+  resendInvitationAction,
+  revokeInvitationAction,
   setOrganisationActiveAction,
   setUserActiveAction,
 } from "../actions";
@@ -148,26 +150,73 @@ export default async function AdminOrganisationPage({
                     {user.isActive ? "active" : "suspended"} ·{" "}
                     {user.lastLoginAt ? "has signed in" : "never signed in"}
                   </p>
+                  {/*
+                    The onboarding state, said plainly. A null `passwordSetAt`
+                    is the only thing that distinguishes "invited" from "set
+                    up", and an administrator looking at a stalled agency needs
+                    to see it without opening a database.
+                  */}
+                  {!user.passwordSetAt && (
+                    <p className="mt-1 text-xs font-bold text-flame-600">
+                      Invitation outstanding — no password set yet
+                    </p>
+                  )}
                 </div>
-                <form action={setUserActiveAction}>
-                  <input
-                    type="hidden"
-                    name="organisationId"
-                    value={organisation.id}
-                  />
-                  <input type="hidden" name="userId" value={user.id} />
-                  <input
-                    type="hidden"
-                    name="isActive"
-                    value={user.isActive ? "false" : "true"}
-                  />
-                  <button
-                    type="submit"
-                    className="rounded-lg border-2 border-navy-200 px-3 py-1.5 text-xs font-bold text-navy-900 hover:border-navy-600"
-                  >
-                    {user.isActive ? "Suspend" : "Reactivate"}
-                  </button>
-                </form>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {!user.passwordSetAt && user.isActive && (
+                    <>
+                      <form action={resendInvitationAction}>
+                        <input
+                          type="hidden"
+                          name="organisationId"
+                          value={organisation.id}
+                        />
+                        <input type="hidden" name="userId" value={user.id} />
+                        <button
+                          type="submit"
+                          className="rounded-lg border-2 border-navy-200 px-3 py-1.5 text-xs font-bold text-navy-900 hover:border-navy-600"
+                        >
+                          Resend invitation
+                        </button>
+                      </form>
+                      <form action={revokeInvitationAction}>
+                        <input
+                          type="hidden"
+                          name="organisationId"
+                          value={organisation.id}
+                        />
+                        <input type="hidden" name="userId" value={user.id} />
+                        <button
+                          type="submit"
+                          className="rounded-lg border-2 border-navy-200 px-3 py-1.5 text-xs font-bold text-navy-900 hover:border-navy-600"
+                        >
+                          Withdraw
+                        </button>
+                      </form>
+                    </>
+                  )}
+
+                  <form action={setUserActiveAction}>
+                    <input
+                      type="hidden"
+                      name="organisationId"
+                      value={organisation.id}
+                    />
+                    <input type="hidden" name="userId" value={user.id} />
+                    <input
+                      type="hidden"
+                      name="isActive"
+                      value={user.isActive ? "false" : "true"}
+                    />
+                    <button
+                      type="submit"
+                      className="rounded-lg border-2 border-navy-200 px-3 py-1.5 text-xs font-bold text-navy-900 hover:border-navy-600"
+                    >
+                      {user.isActive ? "Suspend" : "Reactivate"}
+                    </button>
+                  </form>
+                </div>
               </li>
             ))}
           </ul>

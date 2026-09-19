@@ -26,8 +26,6 @@ const VALID_ORG = { name: "Acme Lettings", email: "office@acme.invalid" };
 const VALID_OWNER = {
   name: "A Person",
   email: "owner@acme.invalid",
-  password: "a-long-enough-password",
-  passwordConfirm: "a-long-enough-password",
 };
 
 describe("opening an agency account", () => {
@@ -96,29 +94,14 @@ describe("opening an agency account", () => {
 });
 
 describe("the agency's first user", () => {
-  test("a name, an email and a strong password are required", () => {
+  test("a name and an email are enough — there is no password to set", () => {
     const parsed = parseOwner(form(VALID_OWNER));
     assert.equal(parsed.ok, true);
   });
 
-  test("the staff password rule applies, because it is the same table", () => {
-    const parsed = parseOwner(
-      form({ ...VALID_OWNER, password: "short", passwordConfirm: "short" }),
-    );
-    assert.equal(parsed.ok, false);
-    assert.ok(!parsed.ok && parsed.errors.password);
-  });
-
-  test("a mistyped repeat is caught", () => {
-    const parsed = parseOwner(
-      form({ ...VALID_OWNER, passwordConfirm: "something-else-entirely" }),
-    );
-    assert.equal(parsed.ok, false);
-    assert.ok(!parsed.ok && parsed.errors.passwordConfirm);
-  });
-
   test("the email is normalised the same way sign-in normalises it", () => {
-    // Or the account could be created under an address nobody can sign in with.
+    // Or the account could be created under an address nobody can sign in with
+    // — and, now, under an address the invitation would never reach.
     const parsed = parseOwner(
       form({ ...VALID_OWNER, email: "  Owner@ACME.Invalid  " }),
     );
@@ -126,14 +109,19 @@ describe("the agency's first user", () => {
     assert.equal(parsed.value.email, "owner@acme.invalid");
   });
 
-  test("the password is never returned anywhere but the value to hash", () => {
-    const parsed = parseOwner(form(VALID_OWNER));
+  test("a password submitted anyway is ignored, not honoured", () => {
+    /*
+      The form no longer offers the field, but a server action is a public
+      endpoint and anyone can post whatever they like at it. The parser must
+      **drop** an unexpected password rather than carry it through to a place
+      that might one day hash it — which would quietly restore the flow this
+      milestone removed, with no field on screen to show it.
+    */
+    const parsed = parseOwner(
+      form({ ...VALID_OWNER, password: "smuggled-in-anyway" }),
+    );
     assert.ok(parsed.ok);
-    assert.deepEqual(Object.keys(parsed.value).sort(), [
-      "email",
-      "name",
-      "password",
-    ]);
+    assert.deepEqual(Object.keys(parsed.value).sort(), ["email", "name"]);
   });
 });
 

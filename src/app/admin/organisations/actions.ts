@@ -16,6 +16,8 @@ import {
   type FieldErrors,
 } from "@/lib/organisations/validation";
 import { recordAudit } from "@/lib/audit/record";
+import { inviteUser } from "@/lib/auth/onboarding";
+import { revokeCredentials } from "@/lib/auth/credentials";
 
 /**
  * Agency account management.
@@ -93,12 +95,101 @@ export async function createOwnerAction(
     kind: "organisation.user.created",
     subjectType: "app_user",
     subjectId: result.id,
-    // Never the password, and never the hash.
+    // Never a password — there is none — and never a token.
     detail: { organisationId, role: "agent_owner" },
   });
 
+  /*
+    The account exists; now invite them to set a password.
+
+    Two steps rather than one, because they fail differently. An account with
+    no invitation is one click from being fixed and is visible on this screen
+    as "invitation outstanding". An invitation for an account that failed to
+    create is a link to nothing. So the account is committed first, and a
+    failure to queue the message is reported as exactly that — the
+    administrator can press *Resend invitation* and nothing is lost.
+  */
+  const invited = await inviteUser({ userId: result.id });
+
+  await recordAudit({
+    actorUserId: session.user.id,
+    kind: "account.invitation.queued",
+    subjectType: "app_user",
+    subjectId: result.id,
+    // The outcome, never the credential. No token is even minted yet — the
+    // worker does that at send time.
+    detail: { organisationId, outcome: invited.status },
+  });
+
   revalidatePath(`/admin/organisations/${organisationId}`);
-  return { message: "User created." };
+
+  return {
+    message:
+      invited.status === "queued"
+        ? "User created. An invitation is on its way — it does not contain a password, and nobody at BSCJ can see the one they choose."
+        : "User created, but the invitation could not be queued. Use “Resend invitation”.",
+  };
+}
+
+/**
+ * Sends the invitation again.
+ *
+ * Deliberately a *control*, not a free action: `inviteUser` refuses a second
+ * message within `RESEND_INTERVAL_SECONDS` and is rate limited per account for
+ * the day, so an administrator holding the button down queues one message and
+ * an automated caller gets nowhere.
+ *
+ * **Resending does not invalidate the first invitation.** The earlier link may
+ * well have arrived, and breaking it to be tidy would strand somebody
+ * mid-signup. Each is single-use, purpose-bound and expiring, and redeeming
+ * any one of them revokes the rest in the same statement.
+ */
+export async function resendInvitationAction(form: FormData): Promise<void> {
+  const session = await requireAdmin();
+  requireCapability(session, "user:manage");
+
+  const organisationId = String(form.get("organisationId") ?? "");
+  const userId = String(form.get("userId") ?? "");
+
+  const result = await inviteUser({ userId });
+
+  await recordAudit({
+    actorUserId: session.user.id,
+    kind: "account.invitation.resent",
+    subjectType: "app_user",
+    subjectId: userId,
+    detail: { organisationId, outcome: result.status },
+  });
+
+  revalidatePath(`/admin/organisations/${organisationId}`);
+}
+
+/**
+ * Withdraws every outstanding invitation for a user.
+ *
+ * For the case an administrator notices the address was wrong. The rows are
+ * revoked rather than deleted, because "an invitation was issued to that
+ * address and withdrawn" is exactly what the security log has to be able to
+ * answer afterwards.
+ */
+export async function revokeInvitationAction(form: FormData): Promise<void> {
+  const session = await requireAdmin();
+  requireCapability(session, "user:manage");
+
+  const organisationId = String(form.get("organisationId") ?? "");
+  const userId = String(form.get("userId") ?? "");
+
+  const revoked = await revokeCredentials(userId);
+
+  await recordAudit({
+    actorUserId: session.user.id,
+    kind: "account.invitation.revoked",
+    subjectType: "app_user",
+    subjectId: userId,
+    detail: { organisationId, revoked },
+  });
+
+  revalidatePath(`/admin/organisations/${organisationId}`);
 }
 
 export async function setOrganisationActiveAction(form: FormData): Promise<void> {

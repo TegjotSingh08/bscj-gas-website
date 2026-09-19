@@ -28,6 +28,12 @@ export type UserIdentity = {
   agentOrganisationId: string | null;
   /** The organisation, for rendering. Null for BSCJ staff. */
   organisationName: string | null;
+  /**
+   * Incremented whenever every existing session for this account must stop
+   * working. Compared against the value signed into the token — see
+   * `lib/auth/session.ts`.
+   */
+  sessionVersion: number;
 };
 
 /** Normalised the same way everywhere, so case never decides who you are. */
@@ -68,10 +74,17 @@ export async function authenticateUser(
   const user = row?.user;
 
   /*
-    No early return on a missing user. Skipping the hash would make an unknown
-    address answer in a millisecond and a known one in a few hundred, which is
-    a user-enumeration oracle anyone can measure. Verifying against a dummy
-    hash costs the same as the real thing.
+    No early return on a missing user, and none on a missing hash either.
+    Skipping the work would make an unknown address answer in a millisecond
+    and a known one in a few hundred, which is a user-enumeration oracle
+    anyone can measure. Verifying against a dummy costs the same as the real
+    thing.
+
+    A **null hash is an invited account nobody has set up yet**, and it is
+    treated identically: the same work, the same time, the same `null` back.
+    Short-circuiting on it would make "invited, not yet accepted" measurable
+    from the login form — which is a list of exactly the addresses worth
+    sending a forged invitation to.
   */
   const hash = user?.passwordHash ?? DUMMY_HASH;
   const correct = await verifyPassword(password, hash);
@@ -114,6 +127,7 @@ function toIdentity(row: {
     role: user.role,
     agentOrganisationId: user.agentOrganisationId,
     organisationName: organisation?.name ?? null,
+    sessionVersion: user.sessionVersion,
   };
 }
 

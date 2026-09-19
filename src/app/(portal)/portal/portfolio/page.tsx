@@ -80,12 +80,20 @@ export default async function PortfolioPage({
               </p>
             )}
           </div>
-          <Link
-            href="/portal/portfolio/new"
-            className="rounded-xl bg-flame-500 px-5 py-3 text-sm font-bold text-white hover:bg-flame-600"
-          >
-            Add property
-          </Link>
+          <div className="flex flex-wrap gap-2">
+            <Link
+              href="/portal/portfolio/import"
+              className="rounded-xl border-2 border-navy-200 px-5 py-3 text-sm font-bold text-navy-900 hover:border-navy-600"
+            >
+              Import from a spreadsheet
+            </Link>
+            <Link
+              href="/portal/portfolio/new"
+              className="rounded-xl bg-flame-500 px-5 py-3 text-sm font-bold text-white hover:bg-flame-600"
+            >
+              Add property
+            </Link>
+          </div>
         </div>
 
         <form method="get" className="mt-6 flex gap-2">

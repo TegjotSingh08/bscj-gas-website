@@ -4,8 +4,8 @@ import { and, asc, count, eq, isNull } from "drizzle-orm";
 
 import { getDb } from "@/lib/db/client";
 import { agentOrganisations, appUsers, jobs } from "@/lib/db/schema";
-import { hashPassword } from "@/lib/auth/password";
 import { normaliseEmail } from "@/lib/auth/app-user";
+import { revokeCredentials } from "@/lib/auth/credentials";
 import type { OrganisationInput, OwnerInput } from "./validation";
 
 /**
@@ -81,6 +81,13 @@ export async function getOrganisationForAdmin(id: string) {
       role: appUsers.role,
       isActive: appUsers.isActive,
       lastLoginAt: appUsers.lastLoginAt,
+      /*
+        Null means the invitation has not been accepted. This is the whole
+        onboarding state the screen needs, and it is a timestamp rather than
+        the hash — the hash is still never selected, so a later change to what
+        this page renders cannot leak one.
+      */
+      passwordSetAt: appUsers.passwordSetAt,
     })
     .from(appUsers)
     .where(eq(appUsers.agentOrganisationId, id))
@@ -138,6 +145,16 @@ export async function createOrganisation(
 /**
  * Adds the agency's first user, or another one later.
  *
+ * **The account is created with no password.** `password_hash` is left null,
+ * which is the honest record of "invited, not yet accepted", and the caller
+ * then raises an invitation through the outbox — see `lib/auth/onboarding.ts`.
+ * Nobody types a password on somebody else's behalf, so there is no password
+ * to communicate and nothing to leak in the communicating.
+ *
+ * Creating the account and queueing the invitation are deliberately two steps.
+ * An account that exists with no invitation is recoverable in one click; an
+ * invitation for an account that failed to create is not recoverable at all.
+ *
  * The email is unique across the whole `app_user` table, staff included, so a
  * clash is reported as a duplicate rather than surfacing a constraint error.
  * Which account already holds the address is deliberately not said: an
@@ -169,8 +186,14 @@ export async function createOrganisationUser(
         agentOrganisationId: organisationId,
         email,
         name: input.name,
-        // Hashed here and nowhere else. The plain value never leaves this call.
-        passwordHash: await hashPassword(input.password),
+        /*
+          Null, deliberately. There is no password yet and nobody is going to
+          invent one: the invitation the caller queues next is what lets this
+          person choose their own. `authenticateUser` refuses a null hash at
+          exactly the cost of refusing a wrong one, so the state cannot be
+          detected from the login form.
+        */
+        passwordHash: null,
         role,
       })
       .onConflictDoNothing({ target: appUsers.email })
@@ -209,7 +232,15 @@ export async function setOrganisationActive(
   }
 }
 
-/** Activates or suspends one user, without touching the rest of the agency. */
+/**
+ * Activates or suspends one user, without touching the rest of the agency.
+ *
+ * **Suspending also stands down every outstanding credential.** An invitation
+ * or a reset link already in an inbox would otherwise still be redeemable, and
+ * "suspended" would mean "cannot sign in, unless they happen to be holding a
+ * link we sent last week". Redemption re-checks the account anyway, so this is
+ * belt and braces — but it is the belt that makes the rule readable.
+ */
 export async function setOrganisationUserActive(
   organisationId: string,
   userId: string,
@@ -230,6 +261,9 @@ export async function setOrganisationUserActive(
           eq(appUsers.agentOrganisationId, organisationId),
         ),
       );
+
+    if (!isActive) await revokeCredentials(userId);
+
     return true;
   } catch {
     return false;

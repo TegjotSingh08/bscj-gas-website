@@ -264,6 +264,34 @@ export const complianceCycleStatusEnum = pgEnum("compliance_cycle_status", [
   "cancelled",
 ]);
 
+/**
+ * What an account credential is for.
+ *
+ * The purpose is **part of the credential**, not a label beside it: it is
+ * mixed into the hash (see `lib/auth/credential-token.ts`) and matched in the
+ * `WHERE` of every redemption. A reset token presented at the invitation door
+ * therefore fails to hash to anything stored, rather than relying on a check
+ * somebody could forget to write.
+ */
+export const accountCredentialPurposeEnum = pgEnum("account_credential_purpose", [
+  /** The first password on an account BSCJ opened. */
+  "invitation",
+  /** A password the holder of the address asked to replace. */
+  "password_reset",
+]);
+
+/** How a reviewed portfolio import ended. */
+export const portfolioImportStatusEnum = pgEnum("portfolio_import_status", [
+  /** Claimed by a confirmation that has not yet reported back. */
+  "running",
+  /** Every row that was meant to be written was written. */
+  "complete",
+  /** Some rows were written and some were not. Both counts are recorded. */
+  "partial",
+  /** Nothing was written. */
+  "failed",
+]);
+
 // ---------------------------------------------------------------------------
 // Accounts and people
 // ---------------------------------------------------------------------------
@@ -341,8 +369,29 @@ export const appUsers = pgTable(
     ),
     email: text("email").notNull(),
     name: text("name").notNull(),
-    /** scrypt, salted per user. See `lib/auth/password.ts`. */
-    passwordHash: text("password_hash").notNull(),
+    /**
+     * scrypt, salted per user. See `lib/auth/password.ts`.
+     *
+     * **Null until the person sets one.** BSCJ opens an account and sends an
+     * invitation; nobody types a password on their behalf. A null here is the
+     * honest record of "invited, not yet accepted" — `authenticateUser`
+     * refuses it, at the same cost as a wrong password, so the state is not
+     * observable from the login form.
+     */
+    passwordHash: text("password_hash"),
+    /** When a password was last set. Null means the invitation is outstanding. */
+    passwordSetAt: timestamp("password_set_at", { withTimezone: true }),
+    /**
+     * Bumped whenever every existing session for this user must stop working.
+     *
+     * Sessions are JWTs, so there is no session table to delete from. The
+     * version is signed into the token at sign-in and compared against this
+     * column on every request that makes a decision — the same re-read
+     * `currentIdentity` already performs, at no extra cost. A password reset
+     * increments it, and every token issued before that moment is refused on
+     * its next request rather than at its eight-hour expiry.
+     */
+    sessionVersion: integer("session_version").notNull().default(0),
     role: appRoleEnum("role").notNull().default("admin"),
     /** Reserved for TOTP. Null until second-factor work is done. */
     totpSecret: text("totp_secret"),
@@ -359,6 +408,115 @@ export const appUsers = pgTable(
     uniqueIndex("app_user_email_key").on(table.email),
     index("app_user_organisation_idx").on(table.agentOrganisationId),
     index("app_user_role_idx").on(table.role),
+  ],
+);
+
+/**
+ * A single-use credential for getting into an account: an invitation, or a
+ * password reset.
+ *
+ * **Deliberately not `scheduling_token`.** That table's rows are reusable on
+ * purpose — a tenant may open their link, close it and come back — and
+ * reusability is exactly the property a credential that sets a password must
+ * not have. Sharing one table would mean one `usedAt` column meaning two
+ * opposite things, and one day meaning the wrong one.
+ *
+ * Four rules, and the schema carries each of them:
+ *
+ * - **Only the hash is stored.** The plain token is handed to exactly one
+ *   caller, travels into one email, and exists nowhere else. A leaked row is
+ *   not a working link. The hash is purpose-bound, so a row of one purpose
+ *   cannot be redeemed as the other even if the column were ignored.
+ * - **Single-use, atomically.** `consumedAt` is set by the same conditional
+ *   `UPDATE` that reads the row, so two browsers submitting at once produce
+ *   exactly one winner. *Opening* a link sets nothing — it is spent when a
+ *   password is actually submitted.
+ * - **Expiring.** `expiresAt` is checked in that same statement.
+ * - **Revocable.** Redeeming one revokes the rest for that user, and BSCJ can
+ *   revoke an outstanding invitation without deleting the record that it was
+ *   sent.
+ *
+ * Rows are kept after use. "This invitation was redeemed on the 4th" is a
+ * question the security log has to be able to answer.
+ */
+export const accountCredentials = pgTable(
+  "account_credential",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => appUsers.id, { onDelete: "cascade" }),
+    purpose: accountCredentialPurposeEnum("purpose").notNull(),
+    /** `<algorithm>$<digest>`, over the purpose and the token together. */
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    /** Set once, by the statement that redeems it. Never set by opening it. */
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    /** The administrator who caused it, where one did. Null for a self-serve reset. */
+    createdByUserId: uuid("created_by_user_id").references(() => appUsers.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("account_credential_hash_key").on(table.tokenHash),
+    index("account_credential_user_idx").on(table.userId, table.purpose),
+    index("account_credential_expires_idx").on(table.expiresAt),
+  ],
+);
+
+/**
+ * One reviewed CSV import, and what it did.
+ *
+ * The row exists so a confirmation can be **retried without importing twice**.
+ * `planDigest` covers the whole reviewed plan — every row, every resolution
+ * the agent chose, and a nonce minted when the preview was built — so
+ * re-submitting one preview is recognised, while genuinely uploading the same
+ * file again is a new preview and therefore allowed.
+ *
+ * It is claimed before anything is written, by an insert that the unique index
+ * arbitrates, so two browsers pressing Confirm together produce one import.
+ *
+ * `result` holds per-row outcomes, which is what makes a partial failure
+ * reportable as what it was rather than as "some of it worked". **No raw file
+ * is kept** — only the outcome of rows the agent had already reviewed.
+ */
+export const portfolioImports = pgTable(
+  "portfolio_import",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    agentOrganisationId: uuid("agent_organisation_id")
+      .notNull()
+      .references(() => agentOrganisations.id, { onDelete: "restrict" }),
+    createdByUserId: uuid("created_by_user_id")
+      .notNull()
+      .references(() => appUsers.id, { onDelete: "restrict" }),
+    /** The reviewed plan, hashed. The arbiter of "have I already run this?". */
+    planDigest: text("plan_digest").notNull(),
+    /** What the agent called the file. Presentation only; never re-read. */
+    filename: text("filename"),
+    rowCount: integer("row_count").notNull(),
+    status: portfolioImportStatusEnum("status").notNull().default("running"),
+    createdCount: integer("created_count").notNull().default(0),
+    updatedCount: integer("updated_count").notNull().default(0),
+    skippedCount: integer("skipped_count").notNull().default(0),
+    failedCount: integer("failed_count").notNull().default(0),
+    /** Per-row outcomes. Never the uploaded bytes. */
+    result: jsonb("result"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("portfolio_import_plan_key").on(
+      table.agentOrganisationId,
+      table.planDigest,
+    ),
+    index("portfolio_import_organisation_idx").on(table.agentOrganisationId),
   ],
 );
 
@@ -1238,6 +1396,17 @@ export const outboundEmails = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     jobId: uuid("job_id").references(() => jobs.id, { onDelete: "cascade" }),
+    /**
+     * The account this message is about, for the kinds that are about an
+     * account rather than a job.
+     *
+     * An invitation and a password reset have no job, and never will. Both
+     * columns being nullable is what lets one queue carry both without a
+     * second worker, a second retry policy and a second set of mistakes.
+     */
+    appUserId: uuid("app_user_id").references(() => appUsers.id, {
+      onDelete: "cascade",
+    }),
     /** e.g. "tenant-scheduling-invitation". */
     kind: text("kind").notNull(),
     recipient: text("recipient").notNull(),
@@ -1268,6 +1437,7 @@ export const outboundEmails = pgTable(
     uniqueIndex("outbound_email_idempotency_key").on(table.idempotencyKey),
     index("outbound_email_state_idx").on(table.state),
     index("outbound_email_job_idx").on(table.jobId),
+    index("outbound_email_user_idx").on(table.appUserId),
   ],
 );
 

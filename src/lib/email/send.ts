@@ -82,7 +82,9 @@ type EmailKind =
   | "late-booking-agent"
   | "late-booking-internal"
   | "certificate-release"
-  | "invoice-issue";
+  | "invoice-issue"
+  | "account-invitation"
+  | "account-password-reset";
 
 /**
  * The one place an email is actually sent.
@@ -296,7 +298,9 @@ export async function sendOutboxEmail({
     | "late-booking-agent"
     | "late-booking-internal"
     | "certificate-release"
-    | "invoice-issue";
+    | "invoice-issue"
+    | "account-invitation"
+    | "account-password-reset";
   to: string;
   email: RenderedEmail;
   reference: string;

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { currentSession } from "@/lib/auth/session";
@@ -38,6 +39,15 @@ export default async function AdminLoginPage({
         </p>
 
         <LoginForm next={next} />
+
+        <p className="mt-4 text-sm">
+          <Link
+            href="/account/forgot"
+            className="font-bold text-flame-600 underline"
+          >
+            Forgotten your password?
+          </Link>
+        </p>
       </div>
     </main>
   );

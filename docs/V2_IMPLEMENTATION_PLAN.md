@@ -300,6 +300,82 @@ every sensitive action is attributable.
 
 **Done when:** BSCJ can onboard a new letting agent without a developer.
 
+### Onboarding and import — done, 19 September 2026
+
+Both halves are built, tested and verified in a browser against the fixture
+harness. Migration `0007_account_onboarding` is applied to development.
+
+**Secure onboarding.** Administrator-chosen initial passwords are gone. BSCJ
+creates the account with **no password at all** (`app_user.password_hash` is
+now nullable, which is the record of "invited, not yet accepted") and an
+expiring, single-use invitation goes out through the existing retryable
+outbox. Key decisions:
+
+- **`account_credential` is a new table, not a reuse of `scheduling_token`.**
+  A tenant's scheduling link is deliberately *reusable*; a credential that
+  sets a password must be spent exactly once. One table would mean one
+  `used_at` column carrying two opposite rules.
+- **Purpose-bound cryptographically.** The purpose is inside the hash, not a
+  column beside it, so an invitation token presented at the reset door hashes
+  to nothing on file. Verified in both directions.
+- **Opening a link spends nothing.** Mail clients prefetch and scanners follow
+  links; a credential consumed on open is reliably dead before its owner sees
+  the form. It is spent by the submission, in one atomic `UPDATE ... WITH`.
+- **Session revocation without a session table.** `app_user.session_version`
+  is signed into the JWT and compared against the column on every request that
+  makes a decision — the row is already being read, so it costs nothing. A
+  password reset increments it and every earlier token is refused on its next
+  request rather than at its eight-hour expiry.
+- **Self-service reset** at `/account/forgot`, answering identically for a real
+  address, an unknown one, a suspended account and a rate limit.
+- **Resend is a control**, not a free action: a two-minute interval plus a
+  per-account daily limit. Resending never invalidates an earlier invitation —
+  the first may well have arrived — and redeeming any one revokes the rest.
+
+**Reviewed CSV import** at `/portal/portfolio/import`: template → upload →
+preview → explicit confirmation → results. Key decisions:
+
+- **The uploaded file is never retained.** The parsed, reviewed plan travels
+  to the browser in an HMAC-signed envelope bound to the organisation, with a
+  nonce and a one-hour expiry, and comes back with the submission. No
+  temporary file, no cleanup job, nothing left by an abandoned preview.
+- **Confirmation is retry-safe by the database.** A unique index on
+  `portfolio_import (agent_organisation_id, plan_digest)` arbitrates; the
+  loser reads the winner's result rather than being refused. The nonce is what
+  lets the same *file* be uploaded again later while the same *review* cannot
+  run twice.
+- **Nothing is silently overwritten.** Conflicts default to leaving the record
+  alone, every difference states its effect, and a tenancy is replaced (old
+  one ended, kept) and a compliance position superseded (old one kept) rather
+  than edited. A **blank** column is "this file does not say", never "end the
+  tenancy".
+- **Two differences are reported and never applied**: moving a property to a
+  different landlord, and changing its street. Both re-parent or redirect real
+  work and belong on the property's own screen.
+- **Ambiguous dates are refused, not guessed.** `YYYY-MM-DD` and `DD/MM/YYYY`
+  only; two-digit years and month-first order are named and rejected, and
+  every parsed date is shown back in long form in the preview.
+- **Importing creates no jobs, contacts no tenant and books nothing.** Held by
+  a structural test over the whole import directory, not only by behaviour.
+
+CSV only, labelled as such on every screen; an `.xlsx` is refused by name with
+the one-line instruction that fixes it.
+
+**Closeout, 19 September 2026.** Three scenarios re-run; one defect found and
+fixed. A **stale approval** could overwrite a record changed between preview
+and Confirm — it ended a third person's tenancy under an approval given for
+somebody else. Closed by `fingerprintOf`: the state each conflict was judged
+against is hashed into the signed envelope and re-checked against a fresh read
+before anything is written. Credential supersession and interrupted-import
+re-upload both held with no change needed. No automatic import recovery was
+added — re-uploading is already safe — but a stalled run is now reported on the
+import page, without counts, because a stalled row's counters are not the truth.
+Full results and the complete outstanding launch list are in
+`V2_CURRENT_STATE.md`.
+
+**Still not done in V2.9:** the agent-facing public page and the operational
+runbook.
+
 ---
 
 ## Migrations, environment and services
@@ -311,12 +387,21 @@ every sensitive action is attributable.
 | `0000` | V2.0 ✅ | The whole foundation — all 22 tables |
 | `0001` | V2.0 ✅ | Invoice number sequence, `BSCJ-` series from 1 |
 | `0002` | V2.1 ✅ | Partial unique index: one address per agency |
-| `0003`+ | V2.2 onward | Only what experience shows is missing |
+| `0003`–`0006` | V2.2–V2.8 | Calendar reconciliation, job work record, outbound recipient, invoicing |
+| `0007` | V2.9 ✅ | `account_credential`, `portfolio_import`, nullable `password_hash`, `session_version`, `outbound_email.app_user_id` |
 
 `0000` carries every table the later phases need, including pricing,
 certificates, remedials, messages, compliance cycles and the audit log. Those
 phases should need no migration at all — and if one turns out to, that is
 information worth having early rather than a sign the foundation was wrong.
+
+**`0007` is the first phase that genuinely needed new tables**, and the
+information that gives is the useful kind. `account_credential` exists because
+an account credential is single-use and a tenant's scheduling token is
+deliberately reusable — the foundation modelled one of those and not the
+other. `portfolio_import` exists because "have I already run this import?" is
+a question only the database can answer safely when two browsers ask at once.
+Neither is a sign `0000` was wrong; both are capabilities V2.9 introduced.
 
 Every one is generated SQL, committed, reviewed, has a down file, and is
 applied to a Neon branch before production.

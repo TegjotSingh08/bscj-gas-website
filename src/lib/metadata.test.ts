@@ -51,6 +51,11 @@ const PRIVATE_ROOTS = [
   // Tenant scheduling: reached without an account, but noindex, without site
   // navigation, and behind its own signed session. Not part of the public site.
   path.join(APP_ROOT, "(schedule)"),
+  // Account setup: invitations and password resets. Reached with no session
+  // at all — that is the point — but noindex, without site navigation, and
+  // unreachable without a credential that was emailed. Not part of the public
+  // site, and there is nothing here for a crawler to prefer a canonical of.
+  path.join(APP_ROOT, "(account)"),
   // The engineer's own screens: noindex, no navigation, no share preview, and
   // carrying an address, an access note and a tenant's phone number.
   path.join(APP_ROOT, "engineer"),

@@ -67,6 +67,17 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         token.sub = identity.id;
         token.role = identity.role;
         token.organisationId = identity.agentOrganisationId ?? null;
+        /*
+          The account's session version at the moment of sign-in.
+
+          The one value on this token that is actually compared against the
+          database rather than re-read past — and only in the refusing
+          direction: `lib/auth/session.ts` refuses a token whose version is
+          behind the column. It can end a session; it can never create one.
+          That is what makes a password reset take effect on the next request
+          instead of in eight hours.
+        */
+        token.sessionVersion = identity.sessionVersion;
       }
       return token;
     },
@@ -82,6 +93,14 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         session.user.role = isAppRole(token.role) ? token.role : "admin";
         session.user.organisationId =
           typeof token.organisationId === "string" ? token.organisationId : null;
+        /*
+          Defaulted to 0, which is the column's default. A token issued before
+          this field existed therefore reads as version 0 and keeps working
+          against an account nobody has reset — rather than every existing
+          session being invalidated by a deploy.
+        */
+        session.user.sessionVersion =
+          typeof token.sessionVersion === "number" ? token.sessionVersion : 0;
       }
       return session;
     },

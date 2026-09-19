@@ -13,7 +13,6 @@
 import { normaliseEmail } from "@/lib/booking/contact";
 import { normaliseUkMobile } from "@/lib/booking/contact";
 import { normalisePostcode } from "@/lib/address/format";
-import { passwordProblem } from "@/lib/auth/password";
 
 export type FieldErrors = Record<string, string>;
 
@@ -107,7 +106,7 @@ export function parseOrganisation(form: FormData): ParsedOrganisation {
   };
 }
 
-export type OwnerInput = { name: string; email: string; password: string };
+export type OwnerInput = { name: string; email: string };
 
 export type ParsedOwner =
   | { ok: true; value: OwnerInput }
@@ -116,13 +115,15 @@ export type ParsedOwner =
 /**
  * Validates the agency's first user.
  *
- * The password is set by the administrator and typed by them, so nothing is
- * generated, displayed or stored in the clear — it goes straight to
- * `hashPassword`. A single-use invitation link, which is the better shape, is
- * V2.9; until then this is the honest minimum rather than a mailed password.
+ * **No password.** It used to take one, typed by the administrator, who then
+ * had to communicate it somehow — and "somehow" is a text message, a phone
+ * call or an email with a password in it. The account is now created without
+ * one and an invitation is sent; the person sets their own, and nobody at BSCJ
+ * ever knows it.
  *
- * The strength rule is the one already used for staff accounts. An agency
- * account reaches the same database.
+ * That also means there is no strength rule to apply here. It applies where
+ * the password is actually chosen — see `lib/auth/password.ts`, called from
+ * the invitation form — which is the only place a password now exists.
  */
 export function parseOwner(form: FormData): ParsedOwner {
   const errors: FieldErrors = {};
@@ -133,20 +134,7 @@ export function parseOwner(form: FormData): ParsedOwner {
   const email = normaliseEmail(text(form.get("email")));
   if (!email.ok) errors.email = "Enter a valid email address.";
 
-  const password = typeof form.get("password") === "string"
-    ? String(form.get("password"))
-    : "";
-  const problem = passwordProblem(password);
-  if (problem) errors.password = problem;
-
-  if (text(form.get("passwordConfirm")) !== password.trim() && !errors.password) {
-    errors.passwordConfirm = "Those passwords do not match.";
-  }
-
   if (Object.keys(errors).length > 0) return { ok: false, errors };
 
-  return {
-    ok: true,
-    value: { name, email: email.ok ? email.email : "", password },
-  };
+  return { ok: true, value: { name, email: email.ok ? email.email : "" } };
 }

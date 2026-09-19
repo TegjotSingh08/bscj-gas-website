@@ -29,7 +29,24 @@ export type Session = {
   scope: AccessScope;
 };
 
-/** The signed-in user, or null. */
+/**
+ * The signed-in user, or null.
+ *
+ * Two things have to hold, and the second is what a JWT session otherwise
+ * cannot express:
+ *
+ * 1. The user still exists and is still allowed in — re-read every request,
+ *    so a suspension takes effect immediately.
+ * 2. **The token was issued since the account's last session reset.** Sessions
+ *    are stateless, so there is no row to delete when a password changes;
+ *    instead every token carries the `session_version` it was signed under,
+ *    and a version behind the column is refused here. That is the smallest
+ *    mechanism that makes "resetting my password signs out the person reading
+ *    my email" true, and it costs nothing — the row is already being read.
+ *
+ * A token from before the field existed reads as 0, which matches the column
+ * default, so deploying this does not sign everybody out.
+ */
 export async function currentSession(): Promise<Session | null> {
   const token = await auth();
   const id = token?.user?.id;
@@ -37,6 +54,15 @@ export async function currentSession(): Promise<Session | null> {
 
   const user = await currentIdentity(id);
   if (!user) return null;
+
+  const issuedUnder = token.user?.sessionVersion ?? 0;
+  /*
+    Any mismatch, not just a token that is behind. A token claiming a version
+    *ahead* of the column is not a newer session — nothing issues one — so it
+    is a forged or replayed value and is refused by the same comparison rather
+    than trusted for being larger.
+  */
+  if (issuedUnder !== user.sessionVersion) return null;
 
   return { user, scope: scopeFor(user) };
 }

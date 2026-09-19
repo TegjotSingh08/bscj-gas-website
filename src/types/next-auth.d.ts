@@ -16,12 +16,22 @@ declare module "next-auth" {
       role: AppRole;
       /** Null for BSCJ staff. */
       organisationId: string | null;
+      /**
+       * The account's session version at the moment this token was issued.
+       *
+       * The one field on the token that **is** load-bearing, and it is
+       * load-bearing in the refusing direction only: `currentSession` compares
+       * it with the column and refuses a mismatch. It can make a session stop
+       * working; it can never make one work.
+       */
+      sessionVersion: number;
     } & DefaultSession["user"];
   }
 
   interface User {
     role?: AppRole;
     agentOrganisationId?: string | null;
+    sessionVersion?: number;
   }
 }
 
@@ -29,5 +39,6 @@ declare module "next-auth/jwt" {
   interface JWT {
     role?: AppRole;
     organisationId?: string | null;
+    sessionVersion?: number;
   }
 }

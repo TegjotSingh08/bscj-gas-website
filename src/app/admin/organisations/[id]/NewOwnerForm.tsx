@@ -8,13 +8,11 @@ import { Field, submitClass } from "../form-parts";
 /**
  * Adding the agency's first user.
  *
- * The administrator types the password and communicates it to the agency
- * themselves. Nothing is generated, nothing is displayed back, and nothing is
- * emailed — it goes straight to `hashPassword` on the server and the plain
- * value never leaves that call.
- *
- * A single-use invitation link is the better shape and is V2.9. This is the
- * honest minimum until then, rather than a password mailed in plain text.
+ * **No password field.** It used to have two, typed by the administrator, who
+ * then had to get the password to the agency somehow — and every "somehow" is
+ * a password sitting in a text message or an inbox. The account is created
+ * without one and an expiring, single-use invitation goes out; the person
+ * chooses their own, and nobody at BSCJ ever sees it.
  */
 export function NewOwnerForm({ organisationId }: { organisationId: string }) {
   const [state, action, pending] = useActionState<ActionState, FormData>(
@@ -45,31 +43,16 @@ export function NewOwnerForm({ organisationId }: { organisationId: string }) {
           autoComplete="off"
           error={state.errors?.email}
         />
-        <Field
-          name="password"
-          label="Initial password"
-          type="password"
-          required
-          autoComplete="new-password"
-          error={state.errors?.password}
-        />
-        <Field
-          name="passwordConfirm"
-          label="Repeat password"
-          type="password"
-          required
-          autoComplete="new-password"
-          error={state.errors?.passwordConfirm}
-        />
       </div>
 
-      <p className="mt-2 text-xs text-navy-600">
-        At least 12 characters. Give it to the agency yourself — it is never
-        shown again and never emailed.
+      <p className="mt-3 text-xs text-navy-600">
+        Check the address carefully — the invitation goes there and nowhere
+        else. It carries no password: they choose their own, and it stops
+        working once used or after 14 days.
       </p>
 
       <button type="submit" disabled={pending} className={submitClass}>
-        {pending ? "Creating…" : "Create owner"}
+        {pending ? "Creating…" : "Create user and invite"}
       </button>
     </form>
   );

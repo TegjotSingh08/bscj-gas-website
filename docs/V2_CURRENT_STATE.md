@@ -3,7 +3,7 @@
 **Read this first.** It exists so a new session does not have to re-audit the
 repository. Update it at the end of every piece of work.
 
-Last updated: 17 September 2026.
+Last updated: 19 September 2026.
 
 ---
 
@@ -19,7 +19,21 @@ compliance dates) works.
 
 **V2.3 Tenant scheduling — complete.** A tenant reaches their own job through
 a link or a reference, picks a real slot on the existing availability engine
-and confirms it. Operations and the engineer view (V2.4) are next.
+and confirms it.
+
+**V2.4 Operations and engineer — complete.**
+
+**V2.5 Certificates — complete.** Upload, review, release, delivery.
+
+**V2.8 Invoicing — complete.** Draft, issue, deliver, settle.
+
+**V2.9 Onboarding and import — complete, 19 September 2026, uncommitted.**
+Agency owners are invited by expiring single-use link and set their own
+password; BSCJ never chooses or sees one. A password reset ends existing
+sessions immediately. Agencies import their portfolio from CSV through a
+reviewed preview that writes nothing until confirmed. Migration `0007` is
+applied to development. **Still outstanding for V2.9:** the agent-facing
+public page and the operational runbook.
 
 ## Where the code is
 
@@ -34,6 +48,46 @@ development database** and the admin surface works against it.
 
 **The schema is no longer free to reshape in place.** From here a change is a
 new migration, not an edit to `0000`.
+
+## Onboarding and account credentials — the shape to know
+
+1. **`app_user.password_hash` is nullable**, and null means *invited, not yet
+   accepted*. `authenticateUser` refuses it at exactly the cost of refusing a
+   wrong password, so the state is not measurable from the login form.
+2. **`account_credential` is a separate table from `scheduling_token`, on
+   purpose.** A tenant's scheduling link is reusable by design; an account
+   credential is single-use. One table would mean one `used_at` column
+   carrying two opposite rules, and one day carrying the wrong one.
+3. **The purpose is inside the hash**, not beside it, so a reset token
+   presented at the invitation door matches nothing — the separation survives
+   a forgotten `WHERE` clause.
+4. **Opening a link consumes nothing.** Mail clients prefetch; scanners follow.
+   The credential is spent by the submission, in one atomic statement, so two
+   browsers racing produce exactly one winner.
+5. **`app_user.session_version` is how a JWT session is revoked.** Signed into
+   the token, compared against the column on the row every request already
+   re-reads. A reset increments it; every earlier token dies on its next
+   request. A token from before the field existed reads as `0`, which is the
+   column default, so deploying it signs nobody out.
+6. **Nothing logs a token, ever.** The plain value exists in the worker that
+   minted it and in the message body. `redactToken()` returns `<token>` — not
+   a prefix, because eight characters of sixty-four is still a head start.
+
+## Portfolio import — the shape to know
+
+7. **No uploaded file is retained.** The reviewed plan travels in an
+   HMAC-signed envelope bound to the organisation, with a nonce and a one-hour
+   expiry. An abandoned preview leaves nothing behind at all.
+8. **`portfolio_import (agent_organisation_id, plan_digest)` is unique**, and
+   that index — not a read-then-write — is what makes confirmation retry-safe.
+   The loser of a double-submit is shown what the winner did.
+9. **Conflicts default to doing nothing**, every difference states its effect
+   in plain words, and history is preserved: a tenancy is replaced rather than
+   overwritten, a compliance position superseded rather than edited.
+10. **A blank column is "not stated", never an instruction.** An omitted tenant
+    column does not end a tenancy; an omitted date does not clear one.
+11. **An import creates no job, contacts no tenant and books nothing.** Held by
+    a structural test over the whole import directory.
 
 ### Verification, 17 September 2026
 
@@ -373,6 +427,155 @@ properties and tenancies.
 | 5 | **Volume tiers** committed in advance per month; bands 1-14 … 100+; prices per service and tier, agent overrides supported; price frozen on the job | `lib/pricing/*`, `volume_commitment`, `pricing_agreement_line` |
 | 6 | **Generators** are reused, not rebuilt. Integration is V2.5 | — |
 | 7 | **Remedial authority for a new agent account is £0** — nothing is put right without asking. Confirmed 17 September 2026 | `agent_organisation.remedial_authority_pence` default `0` |
+
+## V2.9 closeout — verified 19 September 2026
+
+Three scenarios were run against the development database and the fixture
+harness. One real defect was found and fixed; the other two held.
+
+**1. A superseded credential must never set a password.** Held, with no gap.
+Two invitations for one account: redeeming the newer refuses the older and the
+password is unchanged. The same across purposes — an outstanding *invitation*
+is dead once a *reset* has been redeemed. Two **different** valid credentials
+submitted concurrently produce exactly one winner, six runs out of six, with
+`session_version` incremented once.
+
+The mechanism is designed rather than emergent, which was worth confirming: the
+winner's `revoked` CTE sets `revoked_at`, and the loser's `claimed` guard
+includes `revoked_at IS NULL`. Under READ COMMITTED the loser's UPDATE blocks on
+the row lock, then re-evaluates its `WHERE` against the committed row and
+matches nothing. No deadlock occurred in any run. Opening a link still consumes
+nothing: five opens leave `consumed_at` and `revoked_at` null and the credential
+still redeems.
+
+**2. A stale approval must not overwrite a changed record. — DEFECT FOUND AND
+FIXED.** It was real and it was destructive. An agent approved "replace Nina
+with Priya"; a colleague changed the tenant to Sam before Confirm; the import
+ended **Sam's** tenancy under an approval nobody had given for Sam. The agent
+never saw Sam.
+
+The fix is `fingerprintOf` in `lib/portfolio/import/plan.ts`: the state each
+conflict was judged against is hashed, carried **inside the signed envelope**,
+and re-checked against a fresh read at write time. Any movement and the row is
+left completely alone with "This property changed after you reviewed it".
+Verified for the tenancy case and the certificate-date case, and verified not to
+false-positive: an untouched record still applies normally, and a phone number
+reformatted from `01902 000000` to `+441902000000` is not treated as an edit.
+A database read failure yields an empty snapshot, which makes every conflict
+skip rather than apply on a guess.
+
+**3. An interrupted import must be safe to re-upload.** Held. A five-row import
+was killed after two rows, leaving its row on `running` with no result. The
+agent re-uploads the same file: the preview reports the two as "already match"
+and offers the remaining three, the new nonce makes it a new review rather than
+a blocked repeat, and confirming wrote exactly three. Afterwards: five
+properties one per address, one tenancy each with none ended, one compliance
+cycle each with none superseded, and one landlord row reused across all five.
+No duplicate properties, no tenancy replacement churn, no compliance history
+churn.
+
+**No automatic recovery was added**, because none is needed to prevent those
+defects — re-uploading already produces the right outcome. What was added is
+**honest reporting**: `listUnfinishedImports` surfaces a stalled run on the
+import page. It deliberately shows **no counts**, because a stalled row's
+counters are still at zero and that is not the truth; it says we cannot tell how
+far it got and that re-uploading is how to find out.
+
+### Migration 0007 — actual status
+
+`0007_account_onboarding` is **applied to the development database only**
+(19 September 2026). It has **not** been applied to production, and production
+has no V2 deployment to apply it to. `npm run db:status` reports 8 of 8 applied,
+24 tables, 22 enums. The invoice sequence was not touched: `last_value` is
+`1001`, so the next number is still `BSCJ-001002`, exactly as before this phase.
+
+No further migration was created during closeout — the fix in (2) carries its
+state inside the existing signed envelope and needed no schema change.
+
+### Fixture data
+
+This phase's fixtures were removed: `Fixture Lettings`, `Rival Lettings`, their
+users, properties, landlords, tenancies, compliance cycles, import records,
+credentials and queued messages, plus the `@example.invalid` staff account.
+**Preserved:** the real `admin@bscj-solutions.com`, and all 62 `audit_event`
+rows — the log is append-only and is the record of what this phase did.
+
+---
+
+## Outstanding before launch — the complete list
+
+Everything below is inherited from earlier phases as well as this one. It is the
+full list, not the pilot subset.
+
+### Blocked on BSCJ supplying information
+
+1. **Agent pricing figures.** The tier mechanism is built and tested; no figure
+   is in the code. Nothing can be quoted to an agent until real numbers are
+   approved. Until then an organisation with no agreement pays list price.
+   *(V2.2.)*
+2. **Legal entity.** BSCJ Solutions was expected to incorporate around
+   4–5 October 2026. Nothing is hard-coded — it is a settings edit — but the
+   settings are empty and **no invoice can be issued** until they are filled.
+   *(V2.5.)*
+3. **Invoice footer wording and payment terms.** "To be supplied separately".
+   `canIssueInvoices()` refuses until they exist. *(V2.5.)*
+4. **A CP12 renewal interval** is configuration and is still empty. The rule
+   `inspection + 12 months − 1 day` is implemented and tested, but nothing has
+   been confirmed as the business's own policy.
+
+### Blocked on work not yet done
+
+5. **Admin screens for pricing agreements**, `pricing_agreement_line` and
+   `volume_commitment`. The resolution path works and is proved against a
+   hand-inserted agreement; there is no UI to enter one. Gated behind (1).
+   *(V2.2.)*
+6. **Both generators are still untracked**, in `~/Gas Cert Generator/` and
+   `~/Invoice Generator/`, on one machine. They should be in version control.
+7. **A reconciliation view** listing calendar bookings with no job row. *(V2.1.)*
+8. **The agent-facing public page** explaining the managed service. No pricing
+   tiers unless and until they are approved. *(V2.9, not done.)*
+9. **The operational runbook**: what to do when a calendar sync fails, an email
+   will not send, a tenant cannot be reached, a certificate needs correcting.
+   *(V2.9, not done.)*
+10. **Optional TOTP for admin accounts.** `app_user.totp_secret` exists and is
+    unused. *(V2.8.)*
+11. **Impersonation / "view as"** for supporting an agent. Deliberately absent:
+    `requireAgent()` refuses an administrator rather than inventing one.
+
+### Deployment and configuration
+
+12. **The branch is still unpushed**, with no upstream. The work exists on one
+    machine. This remains the highest-value, lowest-cost thing to fix.
+13. **V2 is not deployed.** No production environment has any of it.
+14. **Environment variables required in production**, none of which are set
+    there yet:
+    - `DATABASE_URL` — nothing works without it
+    - `AUTH_SECRET` — **account credentials and import envelopes fail closed
+      without it.** New hard dependency from V2.9
+    - `SCHEDULING_TOKEN_SECRET` — tenant links *(V2.3)*
+    - `BLOB_READ_WRITE_TOKEN` — document storage *(V2.5)*
+    - `CRON_SECRET` — the outbox schedule *(V2.6)*
+    - `RESEND_API_KEY`, `BOOKING_EMAIL_FROM` — all outbound mail
+    - `BOOKING_NOTIFICATION_EMAIL` — also missing locally, so internal booking
+      alerts are silently not sent in development
+15. **A schedule on `/api/cron/outbox`.** Without it nothing in the queue is
+    ever sent: no tenant invitation, no certificate, no invoice, and **no
+    account invitation or password reset**. An agency invited with no schedule
+    running simply never hears from us.
+16. **Migration 0007 must be applied** to any database V2 is deployed against.
+    It is applied to development only.
+
+### Known issues
+
+17. **Next 16 deprecates the `middleware` file convention** in favour of
+    `proxy`. The build warns and still works. Renaming touches structural tests
+    that read `src/middleware.ts` by path.
+18. `docs/business-details.md` says "Maximum bookings per day: 8"; the code and
+    `CLAUDE.md` say ten. The code is authoritative; the doc is stale.
+19. One pre-existing lint warning: an unused `invitationRow` import in
+    `src/lib/notifications/outbox.test.ts`. Predates this phase.
+
+---
 
 ## Still open — need BSCJ input
 

@@ -77,15 +77,39 @@ const normalised = email.trim().toLowerCase();
   resets their password and reactivates them; it must not silently promote an
   engineer to an administrator because someone left the argument off.
 */
+/*
+  `password_set_at` and `session_version` are both maintained here, because
+  this command sets a password and the application reads both:
+
+  - **`password_set_at`** is what distinguishes "invited, not yet accepted"
+    from "set up". Leaving it null would show a colleague who is signing in
+    perfectly happily as having an outstanding invitation.
+  - **`session_version`** is incremented on an *existing* user, so resetting
+    somebody's password from the terminal ends their existing sessions exactly
+    as a self-service reset does. A password changed because it may have been
+    exposed, that leaves the old sessions alive, has not been changed.
+*/
 const [row] = await sql`
-  INSERT INTO app_user (email, name, password_hash, role)
-  VALUES (${normalised}, ${name}, ${passwordHash}, ${role})
+  INSERT INTO app_user (email, name, password_hash, role, password_set_at)
+  VALUES (${normalised}, ${name}, ${passwordHash}, ${role}, now())
   ON CONFLICT (email) DO UPDATE
     SET password_hash = EXCLUDED.password_hash,
         name = EXCLUDED.name,
+        password_set_at = now(),
+        session_version = app_user.session_version + 1,
         is_active = true,
         updated_at = now()
   RETURNING id, email, name, role, created_at
+`;
+
+/*
+  Any invitation or reset link outstanding for this account is stood down.
+  A password has just been set by somebody with database access; an emailed
+  link that still works is a spare key nobody is watching.
+*/
+await sql`
+  UPDATE account_credential SET revoked_at = now()
+  WHERE user_id = ${row.id} AND consumed_at IS NULL AND revoked_at IS NULL
 `;
 
 console.log("User ready:");

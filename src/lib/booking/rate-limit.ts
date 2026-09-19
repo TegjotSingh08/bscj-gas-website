@@ -88,4 +88,15 @@ export const rateLimits = {
   booking: { limit: 8, windowSeconds: 600 },
   /** Postcode checks are cheap and a customer may correct a typo a few times. */
   postcode: { limit: 30, windowSeconds: 600 },
+  /**
+   * Opening or submitting an account invitation or reset link.
+   *
+   * Generous enough for a person who reloads, gets the password rules wrong
+   * twice and starts again; nowhere near enough to sweep a token space. The
+   * tokens are 32 bytes, so the limit is about the database and the keyed hash
+   * this endpoint performs on anything it is handed, not about guessability.
+   */
+  accountCredential: { limit: 20, windowSeconds: 600 },
+  /** Asking for a reset email. Deliberately tight: it sends somebody mail. */
+  passwordResetRequest: { limit: 5, windowSeconds: 600 },
 } as const;

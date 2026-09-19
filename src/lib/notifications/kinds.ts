@@ -36,12 +36,44 @@ export const OUTBOX_KINDS = {
     the provider as a repeat of the message it already accepted.
   */
   invoice: "invoice-issue",
+  /*
+    Account access: an invitation, and a password reset.
+
+    Both are about an **account**, not a job, and are the first kinds in this
+    queue that are. They are here rather than sent inline for exactly the
+    reason everything else is: an administrator opening an agency must not
+    watch an email go out before the account exists, and must not be told the
+    account failed because a mail provider was briefly unreachable.
+
+    Each is keyed on the moment it was raised, like a tenant invitation and
+    for the same reason: a second one is a deliberate act — a resend, or
+    somebody asking again — not a duplicate to collapse.
+  */
+  accountInvitation: "account-invitation",
+  passwordReset: "account-password-reset",
 } as const;
 
 export type OutboxKind = (typeof OUTBOX_KINDS)[keyof typeof OUTBOX_KINDS];
 
+/**
+ * The kinds that are about an account rather than a job.
+ *
+ * The worker branches on this **before** it tries to load a job, because
+ * these rows deliberately have no `job_id` and never will.
+ */
+export const ACCOUNT_SCOPED_KINDS: OutboxKind[] = [
+  OUTBOX_KINDS.accountInvitation,
+  OUTBOX_KINDS.passwordReset,
+];
+
 /** Who a row is for. A role, never an address — resolved at send time. */
-export type OutboxRecipient = "tenant" | "agent" | "bscj" | "customer";
+export type OutboxRecipient =
+  | "tenant"
+  | "agent"
+  | "bscj"
+  | "customer"
+  /** The account holder themselves. The only address a credential may go to. */
+  | "account";
 
 /** The kinds whose message describes a specific appointment. */
 export const APPOINTMENT_SCOPED_KINDS: OutboxKind[] = [
@@ -117,7 +149,10 @@ export function appointmentFromKey(key: string): Date | null {
 // ---------------------------------------------------------------------------
 
 export type OutboxRow = {
-  jobId: string;
+  /** Null for the account-scoped kinds, which describe no job. */
+  jobId: string | null;
+  /** Set only for the account-scoped kinds. */
+  appUserId?: string;
   kind: string;
   recipient: string;
   /** Frozen at queue time for the kinds a person approves. See the schema. */
@@ -297,4 +332,46 @@ export function invoiceApprovalFromKey(key: string): number | null {
   if (parts.length !== 4 || parts[0] !== OUTBOX_KINDS.invoice) return null;
   const approval = Number.parseInt(parts[3], 10);
   return Number.isInteger(approval) && approval > 0 ? approval : null;
+}
+
+// ---------------------------------------------------------------------------
+// Account access
+// ---------------------------------------------------------------------------
+
+/**
+ * An invitation or a reset, keyed on the moment it was raised.
+ *
+ * Two of either for one account are a legitimate thing to want — the first was
+ * never opened, the address was mistyped, somebody asked again — so the key
+ * must not collapse them. What decides whether a second one is warranted is
+ * the resend control and the rate limit, not a unique index.
+ */
+export function accountAccessKey(
+  kind: OutboxKind,
+  userId: string,
+  issuedAt: Date,
+): string {
+  return `${kind}:${userId}:${issuedAt.toISOString()}`;
+}
+
+/**
+ * The single row for an invitation or a reset.
+ *
+ * **No address is frozen onto it.** The recipient is resolved at send time
+ * from the account itself, which is the only address an account credential may
+ * ever go to — freezing one would mean a row could outlive a corrected email
+ * and send a working link somewhere the account no longer is.
+ */
+export function accountAccessRow(input: {
+  userId: string;
+  kind: OutboxKind;
+  issuedAt: Date;
+}): OutboxRow {
+  return {
+    jobId: null,
+    appUserId: input.userId,
+    kind: input.kind,
+    recipient: "account",
+    idempotencyKey: accountAccessKey(input.kind, input.userId, input.issuedAt),
+  };
 }

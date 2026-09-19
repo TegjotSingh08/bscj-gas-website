@@ -6,6 +6,7 @@ import { getDb } from "@/lib/db/client";
 import {
   activities,
   agentOrganisations,
+  appUsers,
   certificates,
   customers,
   documents,
@@ -38,8 +39,15 @@ import {
 } from "@/lib/email/send";
 import { getDocument } from "@/lib/storage/documents";
 import { createSchedulingToken } from "@/lib/scheduling/token";
+import { issueCredential } from "@/lib/auth/credentials";
+import { CREDENTIAL_LIFETIME_HOURS } from "@/lib/auth/credential-token";
+import {
+  renderAccountInvitationEmail,
+  renderPasswordResetEmail,
+} from "@/lib/email/account-access";
 import type { DeadlineSource } from "@/lib/scheduling/deadline";
 import {
+  ACCOUNT_SCOPED_KINDS,
   appointmentFromKey,
   APPOINTMENT_SCOPED_KINDS,
   approvalFromKey,
@@ -109,6 +117,8 @@ const ALL_KINDS: string[] = [
   OUTBOX_KINDS.lateBooking,
   OUTBOX_KINDS.certificate,
   OUTBOX_KINDS.invoice,
+  OUTBOX_KINDS.accountInvitation,
+  OUTBOX_KINDS.passwordReset,
 ];
 
 /** The statuses from which a tenant may still act on an invitation link. */
@@ -228,6 +238,7 @@ export async function drainOutbox(
   let rows: {
     id: string;
     jobId: string | null;
+    appUserId: string | null;
     kind: string;
     recipient: string;
     recipientAddress: string | null;
@@ -240,6 +251,7 @@ export async function drainOutbox(
       .select({
         id: outboundEmails.id,
         jobId: outboundEmails.jobId,
+        appUserId: outboundEmails.appUserId,
         kind: outboundEmails.kind,
         recipient: outboundEmails.recipient,
         recipientAddress: outboundEmails.recipientAddress,
@@ -360,6 +372,8 @@ type LoadedJob = {
 type ClaimedRow = {
   id: string;
   jobId: string | null;
+  /** Set for the account-scoped kinds, which carry no job. */
+  appUserId: string | null;
   kind: string;
   recipient: string;
   /** Frozen at queue time for the kinds a person approves. */
@@ -370,7 +384,21 @@ type ClaimedRow = {
 
 async function deliverRow(row: ClaimedRow): Promise<RowOutcome> {
   const db = getDb();
-  if (!db || !row.jobId) return "stillQueued";
+  if (!db) return "stillQueued";
+
+  /*
+    Account access is handled **before anything reaches for a job**, because
+    these rows deliberately have none. Putting the branch here rather than
+    inside the job loader is the difference between one queue that carries two
+    shapes of intent and a worker that quietly parks every invitation as
+    "still queued" forever — which is what the old `!row.jobId` guard below
+    would have done to them.
+  */
+  if (ACCOUNT_SCOPED_KINDS.includes(row.kind as never)) {
+    return deliverAccountAccess(db, row);
+  }
+
+  if (!row.jobId) return "stillQueued";
 
   const [found] = await db
     .select({
@@ -463,6 +491,130 @@ async function deliverRow(row: ClaimedRow): Promise<RowOutcome> {
   }
 
   return stand(db, row.id, "unknown_kind");
+}
+
+// ---------------------------------------------------------------------------
+// Account access
+// ---------------------------------------------------------------------------
+
+/**
+ * An invitation, or a password reset.
+ *
+ * The only message in this queue that is about an **account** rather than a
+ * job, and the only one that mints a credential as part of sending.
+ *
+ * Four things are re-checked here rather than trusted from the queue, because
+ * minutes or hours may have passed since the row was written:
+ *
+ * - **The account still exists and is still live.** A user suspended between
+ *   queueing and sending gets no link. So does one whose *organisation* was
+ *   suspended, by the same rule the sign-in applies — an invitation to an
+ *   account that cannot sign in is a link to a locked door.
+ * - **The address, resolved now.** An account credential may only ever go to
+ *   the account's own address, so nothing is frozen onto the row: a corrected
+ *   email is used, and a stale one cannot be.
+ * - **A reset is pointless for an account with no password yet.** It is stood
+ *   down rather than sent, because the invitation is the credential that
+ *   account needs and two different links would be a confusing way to say so.
+ * - **An invitation is pointless once a password exists.** Also stood down:
+ *   the account is set up, and what the person wants is a reset.
+ *
+ * A **fresh credential is minted for this attempt**, exactly as the tenant
+ * invitation mints a fresh token — the raw value of any earlier one was never
+ * kept, only its hash, so a link cannot be reproduced from the database.
+ *
+ * Earlier credentials are deliberately **not revoked**. A first attempt that
+ * reported a timeout may well have arrived, and invalidating its link would
+ * break a message somebody is already holding. Every one of them is
+ * single-use, purpose-bound and expiring, and redeeming any one revokes the
+ * rest in the same statement — so the bounded handful an exhausted retry can
+ * produce costs nothing and strands nobody.
+ */
+async function deliverAccountAccess(
+  db: NonNullable<ReturnType<typeof getDb>>,
+  row: ClaimedRow,
+): Promise<RowOutcome> {
+  if (!row.appUserId) return stand(db, row.id, "account_missing");
+
+  const [found] = await db
+    .select({
+      id: appUsers.id,
+      email: appUsers.email,
+      name: appUsers.name,
+      isActive: appUsers.isActive,
+      passwordSetAt: appUsers.passwordSetAt,
+      organisationId: appUsers.agentOrganisationId,
+      organisationIsActive: agentOrganisations.isActive,
+    })
+    .from(appUsers)
+    .leftJoin(
+      agentOrganisations,
+      eq(agentOrganisations.id, appUsers.agentOrganisationId),
+    )
+    .where(eq(appUsers.id, row.appUserId))
+    .limit(1);
+
+  if (!found) return stand(db, row.id, "account_missing");
+  if (!found.isActive) return stand(db, row.id, "account_suspended");
+  if (found.organisationId && !found.organisationIsActive) {
+    return stand(db, row.id, "organisation_suspended");
+  }
+
+  const isInvitation = row.kind === OUTBOX_KINDS.accountInvitation;
+
+  if (isInvitation && found.passwordSetAt) {
+    // Already set up. The invitation has been redeemed, or somebody else
+    // resent one that has. Sending another would be a spare key.
+    return stand(db, row.id, "account_already_set_up");
+  }
+  if (!isInvitation && !found.passwordSetAt) {
+    return stand(db, row.id, "account_not_set_up");
+  }
+
+  const to = found.email;
+  if (!to) return await missing(db, row, "account_email_missing");
+
+  const purpose = isInvitation ? "invitation" : "password_reset";
+  const issued = await issueCredential({
+    userId: found.id,
+    purpose,
+    createdByUserId: null,
+  });
+  /*
+    No credential, no message. The row stays pending with its attempt spent, so
+    a database blip is retried rather than becoming an email with a dead link
+    in it.
+  */
+  if (!issued) return finish(db, row, { status: "failed", reason: "credential_not_issued" });
+
+  const path = isInvitation ? "invitation" : "reset";
+  const facts = {
+    name: found.name,
+    link: `${business.url}/account/${path}/${issued.token}`,
+    lifetimeHours: CREDENTIAL_LIFETIME_HOURS[purpose],
+  };
+
+  const email = isInvitation
+    ? renderAccountInvitationEmail(facts)
+    : renderPasswordResetEmail(facts);
+
+  return finish(
+    db,
+    row,
+    await sendOutboxEmail({
+      kind: isInvitation ? "account-invitation" : "account-password-reset",
+      to,
+      email,
+      /*
+        The account id, not an address. It is the stable thing this message is
+        about, and it keeps the provider key free of anybody's email.
+      */
+      reference: found.id,
+      // Each attempt carries a different link, so the provider must not
+      // collapse it into the previous one.
+      idempotencySuffix: `${path}-${row.attempts}`,
+    }),
+  );
 }
 
 // ---------------------------------------------------------------------------

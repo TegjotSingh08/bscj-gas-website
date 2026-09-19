@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 import { getTableConfig } from "drizzle-orm/pg-core";
@@ -591,12 +591,23 @@ describe("migrations are reviewable and reversible", () => {
   });
 
   test("every table in the schema is created by the migration", () => {
-    // A table added to schema.ts without regenerating the migration exists in
-    // the types and nowhere else, and fails at the first query in production.
-    const migration = readFileSync(
-      path.resolve(process.cwd(), "drizzle/0000_v2_foundation.sql"),
-      "utf8",
-    );
+    /*
+      A table added to schema.ts without a migration exists in the types and
+      nowhere else, and fails at the first query in production.
+
+      Read across **every** migration rather than only the foundation. `0000`
+      was intended to carry all 22 tables and did; a later phase that genuinely
+      needs a new one — V2.9 needs two — would otherwise have to choose between
+      editing an applied migration and disabling this check, and both are
+      worse than reading the whole journal.
+    */
+    const migration = readdirSync(path.resolve(process.cwd(), "drizzle"))
+      .filter((name) => name.endsWith(".sql"))
+      .sort()
+      .map((name) =>
+        readFileSync(path.resolve(process.cwd(), "drizzle", name), "utf8"),
+      )
+      .join("\n");
 
     for (const value of Object.values(schema)) {
       if (typeof value !== "object" || value === null) continue;

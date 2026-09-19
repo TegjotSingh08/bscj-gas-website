@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { currentSession } from "@/lib/auth/session";
@@ -49,9 +50,19 @@ export default async function PortalLoginPage({
 
         <PortalLoginForm next={next} />
 
+        <p className="mt-4 text-sm">
+          <Link
+            href="/account/forgot"
+            className="font-bold text-flame-600 underline"
+          >
+            Forgotten your password?
+          </Link>
+        </p>
+
         <p className="mt-6 border-t-2 border-navy-100 pt-4 text-xs text-navy-600">
-          Accounts are opened by BSCJ. If you need access, call{" "}
-          {business.phoneDisplay}.
+          Accounts are opened by BSCJ, who send you a link to set your own
+          password — we never choose one for you and never email you one. If you
+          need access, call {business.phoneDisplay}.
         </p>
       </div>
     </main>

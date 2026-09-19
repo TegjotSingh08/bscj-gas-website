@@ -24,6 +24,20 @@ const PORTAL_ROOT = path.join(APP_ROOT, "(portal)");
  */
 const SCHEDULE_ROOT = path.join(APP_ROOT, "(schedule)");
 /**
+ * Account setup: invitations and password resets.
+ *
+ * Reached **without any session**, which is the whole point — the person has
+ * no password yet, or has forgotten it. It is not part of the public site
+ * either: noindex, no navigation, no prices, and nothing on it is reachable
+ * without a credential that was emailed. It is held to the *private* rules
+ * below rather than the public ones, exactly like tenant scheduling.
+ *
+ * It legitimately imports the auth stack — it hashes a password and spends a
+ * credential — and it legitimately has no `requireAdmin`/`requireAgent` call,
+ * because there is nobody to be yet. What guards it is the credential itself.
+ */
+const ACCOUNT_ROOT = path.join(APP_ROOT, "(account)");
+/**
  * The engineer's surface. Private, authenticated, and not part of the public
  * site: it carries an address, an access note and a tenant's phone number.
  */
@@ -38,6 +52,7 @@ const PRIVATE_ROOTS = [
   ADMIN_ROOT,
   PORTAL_ROOT,
   SCHEDULE_ROOT,
+  ACCOUNT_ROOT,
   ENGINEER_ROOT,
   path.join(APP_ROOT, "api", "schedule"),
   path.join(APP_ROOT, "api", "admin"),
