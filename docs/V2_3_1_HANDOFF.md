@@ -1358,3 +1358,133 @@ append-only by design.
 
 Deliberately **not** in this closeout, and still open: cancellation from a
 screen, and the remedial approval flow.
+
+---
+
+# 16. CP12 generator — integration baseline (no bridge yet)
+
+**Preparation only.** No bridge is implemented, no database change, no
+service call, and the original generator was treated as read-only throughout:
+nothing in `~/Gas Cert Generator/` was edited, moved or deleted, and it
+remains the tool BSCJ actually uses.
+
+## 16.1 What was copied
+
+`vendor/cp12-generator/` — three files, which is the whole application:
+
+| File | State |
+|---|---|
+| `index.html` | Copied from the 1,048-line original, then sanitised (§16.2) |
+| `lib/html2canvas.min.js` | Byte-identical, `e87e5507…`, 1.4.1 MIT |
+| `lib/jspdf.umd.min.js` | Byte-identical, `98ccf17a…` |
+
+`index.html` references nothing else — every `src` and `href` in it was read
+— so nothing else was copied. The directory was **not** bulk-copied.
+
+Deliberately left behind: `GAS CERTS/Certificates/` (six months of issued
+certificates for real properties), `GAS CERTS/TEMPLATES/` (five PDFs the
+generator never opens, four of them pre-branded for two named agencies),
+`.tools/` and `.claude/`. There are no saved drafts in any file — the draft
+lives in `localStorage` on whichever machine typed it.
+
+## 16.2 What was found, and what was done about it
+
+The inspection found five kinds of embedded data. All are removals; each is
+commented in place.
+
+| Found | Action |
+|---|---|
+| Engineer's **personal name**, seeded in `defaultEngineer()` | Emptied — comes from configuration |
+| **Gas Safe registration** and **ID card number**, both real, in source | Emptied — the registration belongs in `business.identity`. Neither value is restated here |
+| Company **trading name, address, postcode, telephone** | Emptied — `business_setting`, because the entity is expected to change |
+| **Two real letting agencies** with addresses and phone numbers, seeded in `defaultLandlords()` | Dropped entirely — third-party records |
+| Those agencies again in `landlordFolderName()` (4 shortcuts) and 3 form placeholders | Removed; the generic branches already do the same job |
+
+**Kept:** the Gas Safe Register mark, a 5 KB embedded JPEG. A third-party
+trade mark rather than private data, and one a record from a registered
+engineer legitimately carries.
+
+No credential, API key or token was found anywhere in the generator — it has
+no network access at all.
+
+## 16.3 Verification
+
+Served locally over `127.0.0.1:8931` (a plain static server, stopped
+afterwards) because a `file://` page cannot load its own `lib/`:
+
+| Check | Result |
+|---|---|
+| Page opens | Title "Gas Safety Record Generator", **no console errors** |
+| `jspdf` / `html2canvas` | Both loaded — `object` and `function` |
+| Sheet controls | **157** — 31 static plus 6 × 21 appliance cells |
+| Appliance table | 22 columns rendered (21 data + row number) |
+| Engineer seed | **empty** — sanitisation effective |
+| Landlord book | **0 entries** — the two agencies are gone |
+| Draft round-trip | `saveDraft()` produced a flat 157-key `{id: string\|boolean}` map |
+| Renewal arithmetic | signature 19/09/2026 → next **18/09/2027**, i.e. `+1 year − 1 day`, matching `compliance/renewal.ts` exactly |
+
+`vendor/**` was added to the ESLint ignores: the value of this copy is that
+it still matches its original, and linting it would invite reformatting.
+
+## 16.4 The mapping
+
+`docs/CP12_PREFILL_MAPPING.md`. In summary: the bridge fills **at most 13 of
+the 31 static fields** and never one of the 126 appliance cells.
+
+Sent — property (address, postcode, occupier name and phone), landlord or
+agency (name, company, phone, and postcode for agency work), and the
+engineer and business block from `business.identity`.
+
+**Not** sent, each for a stated reason: `sigDate` (the engineer confirms the
+inspection date on the day), `nextInspection` (derived from a date that is
+not yet real; sending it would activate a renewal calculation and duplicate
+an implementation), `certNo` (no numbering scheme exists and none may be
+invented), every appliance cell, the six pass/fail checks, `defects`,
+`labelsIssued`, `comments` and both signature names. `accessNotes` is also
+withheld — it is guidance for getting in, not something for a document a
+landlord keeps for two years.
+
+**One hazard named for BSCJ, not acted on.** "New Certificate" ticks all six
+safety checks *satisfactory* by default, and pre-ticks them in the markup.
+That is a pass assertion nobody has made. The bridge does not touch them, so
+it does not worsen it, but it does put the sheet in front of an engineer more
+often. Whether those defaults should start unticked is BSCJ's decision — it
+changes what a half-completed record claims — and it was left alone.
+
+## 16.5 Transport, proposed and not built
+
+A **download**, authorised server-side, with nothing in the URL:
+`GET /api/engineer/jobs/<id>/cp12-prefill`, guarded by
+`requireEngineerOrThrow()` and then `canAccessAssignedJob()` against the row,
+returning the flat id map as an attachment with `Cache-Control: no-store`.
+The job id is an opaque UUID in the path; no name, address or postcode
+appears in any URL, and a booking reference authorises nothing.
+
+The generator gains one *Import job details* file picker that applies the
+file through `loadDraft()`'s path **behind an allow-list of the mapped ids** —
+so an edited file naming `chkTightness`, `sigDate` or an appliance cell has
+those keys ignored. The allow-list is the enforcement; a correct server
+response is not enough, because a file on disk can be changed. One-way:
+uploading the finished PDF is the next slice.
+
+Rejected: a query string (address and phone in history, referrers and logs),
+clipboard paste (unauthorisable, and it lingers in the clipboard), and
+`postMessage` (right after the port, wrong while the generator is a local
+file).
+
+## 16.6 Missing inputs, carried forward
+
+- `business.identity` is **empty**, so six installer fields arrive blank
+  until BSCJ supplies them. The engineer types them once and saves them as
+  defaults, exactly as today.
+- The engineer's **Gas Safe ID card number** is stored nowhere;
+  `app_user` has no column for it. `instIdCard` cannot be prefilled.
+- **No customer address is stored** — `customers` holds name, company, email
+  and phone only — so `landlordAddress` cannot be prefilled, and
+  `landlordPostcode` only for agency work.
+- **No certificate numbering decision.** `certNo` stays manual.
+- **The original is still untracked**, on one machine. Until it is in version
+  control the tool BSCJ uses and this baseline can drift apart. This remains
+  the blocker recorded in `V2_CURRENT_STATE.md`.
+
+Nothing in §13.6 is closed by this phase.

@@ -12,6 +12,12 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Vendored third-party code, kept byte-identical on purpose: two
+    // minified library bundles and a single-file application copied from
+    // outside the repo. Linting it would report on somebody else's style
+    // and, worse, invite reformatting a file whose value is that it still
+    // matches its original.
+    "vendor/**",
   ]),
 ]);
 

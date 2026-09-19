@@ -1,0 +1,1057 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Gas Safety Record Generator</title>
+<style>
+  :root{
+    --navy:#1f3864;
+    --field-bg:#dce6f8;
+    --border:#8fa8cf;
+    --page-bg:#e9edf3;
+  }
+  *{box-sizing:border-box;}
+  body{
+    font-family:Arial, Helvetica, sans-serif;
+    background:var(--page-bg);
+    margin:0;
+    padding:20px;
+    color:#111;
+  }
+  /* ---------- Toolbar ---------- */
+  .toolbar{
+    max-width:1150px;
+    margin:0 auto 14px auto;
+    background:var(--navy);
+    color:#fff;
+    padding:12px 16px;
+    border-radius:8px;
+    display:flex;
+    flex-wrap:wrap;
+    gap:10px;
+    align-items:center;
+  }
+  .toolbar h2{margin:0;font-size:16px;font-weight:600;flex:1 1 260px;}
+  .toolbar select, .toolbar button, .toolbar input{
+    font-size:13px;
+    padding:6px 9px;
+    border-radius:5px;
+    border:1px solid #ccc;
+  }
+  .toolbar button{
+    background:#fff;
+    color:var(--navy);
+    font-weight:600;
+    cursor:pointer;
+  }
+  .toolbar button.primary{background:#ffc107;color:#1a1a1a;}
+  .toolbar button:hover{filter:brightness(0.95);}
+  .status{font-size:11px;color:#cdd8ee;flex-basis:100%;}
+
+  /* ---------- Sheet ---------- */
+  .sheet{
+    max-width:1300px;
+    margin:0 auto;
+    background:#fff;
+    box-shadow:0 2px 10px rgba(0,0,0,.25);
+    padding:18px 20px;
+    font-size:13.5px;
+  }
+  fieldset{border:1px solid #999;border-radius:4px;padding:8px 10px;margin:0;}
+  legend{font-weight:bold;font-size:13px;padding:0 4px;}
+  label{display:block;font-size:11px;color:#333;margin-top:4px;}
+  input[type=text], input[type=date], textarea, select{
+    width:100%;
+    background:var(--field-bg);
+    border:1px solid var(--border);
+    border-radius:3px;
+    padding:4px 6px;
+    font-size:13px;
+    font-family:inherit;
+  }
+  textarea{resize:vertical;}
+  .row-flex{display:flex;gap:4px;}
+  .row-flex > div{flex:1;}
+
+  /* custom compact arrow for all selects (prevents native OS arrow overlapping short text) */
+  select{
+    appearance:none;-webkit-appearance:none;-moz-appearance:none;
+    cursor:pointer;
+    padding-right:16px !important;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'><path d='M0 0l5 6 5-6z' fill='%23445'/></svg>");
+    background-repeat:no-repeat;
+    background-position:right 4px center;
+    background-size:8px 5px;
+  }
+
+  /* header */
+  .header-row{display:flex;align-items:center;gap:14px;border-bottom:2px solid var(--navy);padding-bottom:8px;margin-bottom:8px;}
+  .header-row img.logo{height:62px;}
+  .title-block{flex:1;text-align:center;}
+  .title-block h1{margin:0;font-size:26px;color:#111;}
+  .title-block p{margin:4px 0 0 0;font-size:10.5px;color:#333;}
+  .certno-block{text-align:right;}
+  .certno-block label{font-weight:bold;font-size:11px;}
+  .certno-block input{width:130px;}
+
+  /* info boxes */
+  .info-row{display:flex;gap:10px;margin-bottom:10px;}
+  .info-box{flex:1;background:#f4f7fc;}
+  .info-box .field-line{margin-bottom:4px;}
+  .info-box .save-btn{
+    margin-top:6px;font-size:11px;padding:4px 8px;border:1px solid var(--navy);
+    background:#fff;color:var(--navy);border-radius:3px;cursor:pointer;
+  }
+  .landlord-select-line{display:flex;gap:4px;margin-bottom:5px;}
+  .landlord-select-line select{flex:1;}
+  .landlord-select-line button{white-space:nowrap;font-size:11px;}
+
+  /* appliance table */
+  .section-title{
+    background:var(--navy);color:#fff;font-weight:bold;font-size:12.5px;
+    padding:4px 8px;margin-bottom:0;
+  }
+  #applianceTableWrap{overflow-x:auto;}
+  table.appliance{width:100%;min-width:1220px;border-collapse:collapse;margin-bottom:10px;table-layout:fixed;}
+  table.appliance th, table.appliance td{
+    border:1px solid #9fb0cc;padding:3px 3px;font-size:10.5px;text-align:center;vertical-align:middle;overflow:hidden;
+  }
+  table.appliance th{background:#eef2fa;font-weight:600;line-height:1.15;}
+  table.appliance td input, table.appliance td select{
+    width:100%;border:none;background:transparent;font-size:10.5px;padding:2px 1px;text-align:center;
+  }
+  table.appliance td select{padding-right:13px !important;background-position:right 1px center;background-size:7px 4px;}
+  table.appliance td input:focus, table.appliance td select:focus{background:#fffbdd;}
+  table.appliance td:first-child, table.appliance td:nth-child(2), table.appliance td:nth-child(3), table.appliance td:nth-child(4){
+    text-align:left;
+  }
+  table.appliance td:first-child input, table.appliance td:nth-child(2) input, table.appliance td:nth-child(3) input, table.appliance td:nth-child(4) input{
+    text-align:left;
+  }
+  table.appliance td.rownum{background:#eef2fa;font-weight:bold;width:16px;}
+
+  /* mid row: defects / co alarm */
+  .mid-row{display:flex;gap:10px;margin-bottom:10px;}
+  .defects-box{flex:2;background:#f4f7fc;padding:8px 10px;border:1px solid #999;border-radius:4px;}
+  .defects-box textarea{height:58px;}
+  .defects-box .sub-label{font-size:11px;font-weight:bold;margin-top:5px;}
+  .coalarm-box{flex:1;background:#f4f7fc;padding:8px 10px;border:1px solid #999;border-radius:4px;}
+  .check-line{display:flex;align-items:center;justify-content:space-between;margin:6px 0;font-size:12px;}
+  .check-line input[type=checkbox]{width:18px;height:18px;}
+
+  /* bottom row: checks / comments */
+  .bottom-row{display:flex;gap:10px;margin-bottom:10px;}
+  .checks-box{flex:1;background:#f4f7fc;padding:8px 10px;border:1px solid #999;border-radius:4px;}
+  .checks-box .check-line{justify-content:flex-start;gap:8px;}
+  .checks-box .check-line span{flex:1;}
+  .next-insp{margin-top:9px;}
+  .next-insp label{font-weight:bold;font-size:12px;display:inline;margin-right:6px;}
+  .next-insp input{width:130px;display:inline-block;}
+  .comments-box{flex:1;background:#f4f7fc;padding:8px 10px;border:1px solid #999;border-radius:4px;}
+  .comments-box textarea{height:86px;}
+
+  /* signatures */
+  .sig-row{display:flex;gap:16px;background:#f4f7fc;padding:10px;border:1px solid #999;border-radius:4px;}
+  .sig-col{flex:1;}
+  .sig-box{
+    height:44px;background:#fff;border:1px solid var(--border);border-radius:2px;margin:4px 0 7px 0;
+  }
+  .sig-col label{font-weight:bold;}
+
+  .footer-note{
+    max-width:1300px;margin:10px auto 0 auto;font-size:12px;color:#555;text-align:center;
+  }
+
+  /* ---------- Modal ---------- */
+  .modal-overlay{
+    display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);
+    align-items:center;justify-content:center;z-index:50;
+  }
+  .modal-overlay.open{display:flex;}
+  .modal{
+    background:#fff;border-radius:8px;padding:18px 20px;max-width:640px;width:92%;max-height:85vh;overflow:auto;
+  }
+  .modal h3{margin-top:0;}
+  .modal table{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:14px;}
+  .modal table th, .modal table td{border:1px solid #ddd;padding:5px;text-align:left;}
+  .modal table button{font-size:11px;padding:2px 6px;margin-right:4px;cursor:pointer;}
+  .modal .add-form{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px;}
+  .modal .add-form label{font-size:11px;font-weight:600;color:#333;}
+  .modal .add-form input{width:100%;padding:5px;font-size:12px;border:1px solid #ccc;border-radius:4px;}
+  .modal .add-form .full{grid-column:1 / -1;}
+  .modal-buttons{display:flex;justify-content:flex-end;gap:8px;margin-top:14px;}
+  .modal-buttons button{padding:7px 14px;border-radius:5px;border:1px solid #ccc;cursor:pointer;font-size:12px;}
+  .modal-buttons button.primary{background:var(--navy);color:#fff;border-color:var(--navy);}
+
+  /* ---------- PDF capture host (off-screen print copy) ----------
+     The Download PDF button captures a clone of the sheet placed in this
+     hidden host. Form controls are swapped for .pv text divs so html2canvas
+     never clips text, and generous line-height keeps descenders intact. */
+  #pdfCaptureHost{position:fixed;left:-20000px;top:0;}
+  #pdfCaptureHost .sheet{width:1650px;max-width:none;box-shadow:none;}
+  #pdfCaptureHost #applianceTableWrap, #pdfCaptureHost .sheet [id="applianceTableWrap"]{overflow:visible;}
+  #pdfCaptureHost table.appliance{min-width:0;}
+  #pdfCaptureHost .pv{
+    background:var(--field-bg);
+    border:1px solid var(--border);
+    border-radius:3px;
+    padding:4px 6px;
+    font-size:13px;
+    line-height:1.35;
+    white-space:pre-wrap;
+    overflow:visible;
+    display:flex;
+    align-items:center;
+  }
+  #pdfCaptureHost .pv-multi{align-items:flex-start;}
+  #pdfCaptureHost td .pv{
+    background:transparent;
+    border:none;
+    border-radius:0;
+    padding:2px 1px;
+    font-size:10.5px;
+    min-height:0;
+    display:block;
+    line-height:1.35;
+  }
+  #pdfCaptureHost table.appliance td{overflow:visible;}
+  #pdfCaptureHost table.appliance td .pv{text-align:center;}
+  #pdfCaptureHost table.appliance td:first-child .pv,
+  #pdfCaptureHost table.appliance td:nth-child(2) .pv,
+  #pdfCaptureHost table.appliance td:nth-child(3) .pv,
+  #pdfCaptureHost table.appliance td:nth-child(4) .pv{text-align:left;}
+  #pdfCaptureHost .pv-check{
+    width:20px;height:20px;min-height:0;
+    background:#fff;border:1.5px solid #333;border-radius:3px;
+    display:flex;align-items:center;justify-content:center;
+    font-size:14px;line-height:1;padding:0;
+  }
+  #pdfCaptureHost .sig-box{background:#fff;}
+
+  /* ---------- Print (fallback only — see Download PDF button) ---------- */
+  @media print{
+    body{background:#fff;padding:0;margin:0;}
+    .toolbar, .footer-note, .modal-overlay{display:none !important;}
+    .sheet{box-shadow:none;max-width:none;width:100%;padding:4mm 6mm;font-size:9.5px;}
+    input, select, textarea{background:transparent !important;border:none !important;}
+    table.appliance td, table.appliance th{border:1px solid #666;}
+    fieldset, .info-box, .defects-box, .coalarm-box, .checks-box, .comments-box, .sig-row{border-color:#666 !important;}
+    .landlord-select-line, .save-btn, .row-btns{display:none !important;}
+    select{background-image:none !important;}
+    @page{ size: A4 landscape; margin:8mm; }
+  }
+</style>
+</head>
+<body>
+
+<div class="toolbar no-print">
+  <h2>Gas Safety Record Generator</h2>
+
+  <label style="color:#fff;font-size:12px;">Landlord:
+    <select id="landlordSelect" style="margin-left:4px;min-width:220px;"></select>
+  </label>
+  <button id="btnManageLandlords">Manage Landlords</button>
+  <button id="btnNewCert">New Certificate</button>
+  <button id="btnDownloadPdf" class="primary">⬇ Download Certificate PDF</button>
+  <button id="btnPickFolder" title="Choose the GAS CERTS folder once — certificates are then saved into it automatically, sorted by month and landlord">📁 Save folder</button>
+  <button id="btnPrint" style="font-size:11px;">🖨️ Print instead</button>
+  <div class="status" id="statusLine">Draft auto-saves in this browser as you type. Certificates save sorted by month → landlord into your chosen folder (📁 Save folder).</div>
+</div>
+
+<div class="sheet" id="sheet">
+
+  <div class="header-row">
+    <img class="logo" src="data:image/jpeg;base64,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" alt="Gas Safe Register">
+    <div class="title-block">
+      <h1>Gas Safety Record</h1>
+      <p>Safety Inspection and reporting carried out in accordance with the Gas Safety (Installation and Use) Regulations and the Gas Industry Unsafe Situations Procedure.</p>
+    </div>
+    <div class="certno-block">
+      <label>Cert. No.</label>
+      <input type="text" id="certNo">
+    </div>
+  </div>
+
+  <div class="info-row">
+    <fieldset class="info-box">
+      <legend>Company / Installer</legend>
+      <div class="field-line"><label>Engineer</label><input type="text" id="instEngineer"></div>
+      <div class="field-line"><label>Company</label><input type="text" id="instCompany"></div>
+      <div class="field-line"><label>Address</label><textarea rows="2" id="instAddress"></textarea></div>
+      <div class="row-flex">
+        <div class="field-line"><label>Post Code</label><input type="text" id="instPostcode"></div>
+        <div class="field-line"><label>Tel No.</label><input type="text" id="instTel"></div>
+      </div>
+      <div class="row-flex">
+        <div class="field-line"><label>Gas Safe Reg</label><input type="text" id="instGasSafeReg"></div>
+        <div class="field-line"><label>ID Card No.</label><input type="text" id="instIdCard"></div>
+      </div>
+      <button type="button" class="save-btn" id="btnSaveEngineer">💾 Set as default engineer details</button>
+    </fieldset>
+
+    <fieldset class="info-box">
+      <legend>Job Address (property being inspected)</legend>
+      <div class="field-line"><label>Name</label><input type="text" id="jobName"></div>
+      <div class="field-line"><label>Address</label><textarea rows="3" id="jobAddress"></textarea></div>
+      <div class="row-flex">
+        <div class="field-line"><label>Post Code</label><input type="text" id="jobPostcode"></div>
+        <div class="field-line"><label>Tel. No</label><input type="text" id="jobTel"></div>
+      </div>
+    </fieldset>
+
+    <fieldset class="info-box">
+      <legend>Customer / Landlord</legend>
+      <div class="landlord-select-line">
+        <select id="landlordSelect2"></select>
+        <button type="button" id="btnSaveLandlord">💾 Save as landlord</button>
+      </div>
+      <div class="field-line"><label>Name</label><input type="text" id="landlordName"></div>
+      <div class="field-line"><label>Company</label><input type="text" id="landlordCompany"></div>
+      <div class="field-line"><label>Address</label><textarea rows="2" id="landlordAddress"></textarea></div>
+      <div class="row-flex">
+        <div class="field-line"><label>Post Code</label><input type="text" id="landlordPostcode"></div>
+        <div class="field-line"><label>Tel. No</label><input type="text" id="landlordTel"></div>
+      </div>
+    </fieldset>
+  </div>
+
+  <div class="section-title">Appliance Details &amp; Inspection Details</div>
+  <div id="applianceTableWrap"></div>
+
+  <div class="mid-row">
+    <div class="defects-box">
+      <div class="section-title" style="margin:-6px -8px 6px -8px;">Defects / Identified</div>
+      <textarea id="defects" placeholder="List any defects identified (number them 1, 2, 3...) — leave blank if none"></textarea>
+      <div class="sub-label">Labels and Warning Notice Issued</div>
+      <textarea id="labelsIssued" style="height:28px;" placeholder="Details of any warning label / notice issued — leave blank if none"></textarea>
+    </div>
+    <div class="coalarm-box">
+      <div class="section-title" style="margin:-6px -8px 6px -8px;">CO Alarm(s)</div>
+      <div class="check-line"><span>CO Alarm(s) fitted</span><input type="checkbox" id="coFitted" checked></div>
+      <div class="check-line"><span>CO Alarm(s) tested and satisfactory</span><input type="checkbox" id="coTested" checked></div>
+    </div>
+  </div>
+
+  <div class="bottom-row">
+    <div class="checks-box">
+      <div class="check-line"><span>Emergency Control Accessible</span><input type="checkbox" id="chkEmergency" checked></div>
+      <div class="check-line"><span>Gas Tightness Satisfactory</span><input type="checkbox" id="chkTightness" checked></div>
+      <div class="check-line"><span>Gas Installation Pipework Visual Inspection Satisfactory</span><input type="checkbox" id="chkPipework" checked></div>
+      <div class="check-line"><span>Equipotential Bonding</span><input type="checkbox" id="chkBonding" checked></div>
+      <div class="next-insp">
+        <label>NEXT INSPECTION DUE BEFORE</label>
+        <input type="text" id="nextInspection" placeholder="dd/mm/yyyy">
+      </div>
+    </div>
+    <div class="comments-box">
+      <div style="font-weight:bold;font-size:10px;margin-bottom:3px;">Comments</div>
+      <textarea id="comments"></textarea>
+    </div>
+  </div>
+
+  <div class="sig-row">
+    <div class="sig-col">
+      <label>Issued by: Signed</label>
+      <div class="sig-box"></div>
+      <label>Print Name</label>
+      <input type="text" id="issuedPrintName">
+    </div>
+    <div class="sig-col">
+      <label>Received by: Signed</label>
+      <div class="sig-box"></div>
+      <label>Print Name</label>
+      <input type="text" id="receivedPrintName">
+    </div>
+    <div class="sig-col">
+      <label>Date</label>
+      <input type="text" id="sigDate" placeholder="dd/mm/yyyy" style="margin-top:14px;">
+    </div>
+  </div>
+
+</div>
+
+<p class="footer-note no-print">
+  Data is stored only in this browser (landlord list, default engineer details, and the current draft). Use "Manage Landlords" to add, edit, export or back up landlord records.
+  To finish a certificate: click <strong>Print / Save as PDF</strong>, then choose "Save as PDF" as the destination in the print dialog and save it into the correct EP / Private folder.
+</p>
+
+<!-- ===================== Manage Landlords Modal ===================== -->
+<div class="modal-overlay" id="landlordModal">
+  <div class="modal">
+    <h3>Manage Landlords</h3>
+    <table id="landlordTable">
+      <thead><tr><th>Label</th><th>Company</th><th>Address</th><th>Tel</th><th>Received-by name</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+
+    <div style="font-weight:600;margin-bottom:6px;">Add new landlord</div>
+    <div class="add-form">
+      <div><label>Short label (shown in dropdown)</label><input type="text" id="newLabel" placeholder="e.g. Anytown Lettings (AL)"></div>
+      <div><label>Company name</label><input type="text" id="newCompany" placeholder="e.g. Anytown Lettings Ltd"></div>
+      <div class="full"><label>Address</label><input type="text" id="newAddress" placeholder="e.g. 1 High Street, Wolverhampton"></div>
+      <div><label>Post Code</label><input type="text" id="newPostcode"></div>
+      <div><label>Tel No.</label><input type="text" id="newTel"></div>
+      <div class="full"><label>Default "Received by" print name (optional, e.g. Agent)</label><input type="text" id="newReceivedBy" placeholder="e.g. Agent"></div>
+    </div>
+    <div class="modal-buttons">
+      <button id="btnExportLandlords">⬇ Export JSON</button>
+      <label style="border:1px solid #ccc;padding:7px 14px;border-radius:5px;cursor:pointer;font-size:12px;">
+        ⬆ Import JSON<input type="file" id="importLandlordsFile" accept="application/json" style="display:none;">
+      </label>
+      <button id="btnAddLandlord" class="primary">Add Landlord</button>
+      <button id="btnCloseLandlordModal">Close</button>
+    </div>
+  </div>
+</div>
+
+<script src="lib/jspdf.umd.min.js"></script>
+<script src="lib/html2canvas.min.js"></script>
+<script>
+/* ============================================================
+   Gas Safety Record Generator
+   All data is stored client-side (localStorage). No server.
+   ============================================================ */
+
+const LANDLORDS_KEY = 'gascert_landlords_v1';
+const ENGINEER_KEY  = 'gascert_engineer_v1';
+const DRAFT_KEY      = 'gascert_draft_v1';
+const PRIVATE_ID = '__private__';
+
+function defaultEngineer(){
+  /*
+    Empty in this baseline, deliberately.
+
+    The original seeds the engineer's name, the company, its address and
+    telephone number, the Gas Safe registration and the ID card number
+    directly into the source. All seven are real, and two of them —
+    the registration and the card number — identify a registered engineer.
+    They are not invented here and they are not copied here: the bridge will
+    supply them from `business_setting`, which is where V2 already puts the
+    business identity precisely because the legal entity is expected to
+    change.
+
+    An engineer using this baseline on its own fills the boxes once and
+    presses "Set as default engineer details", exactly as before; the values
+    then live in that browser's localStorage and never in the repository.
+  */
+  return {
+    engineer:'',
+    company:'',
+    address:'',
+    postcode:'',
+    tel:'',
+    gasSafeReg:'',
+    idCardNo:''
+  };
+}
+
+function defaultLandlords(){
+  /*
+    Empty in this baseline, deliberately.
+
+    The original ships two real letting agencies — names, trading addresses,
+    postcodes and telephone numbers — as seed data. Those are third-party
+    records and they are not copied into version control. The landlord book
+    still works exactly as it did: it is populated by the person using the
+    tool, or, once the bridge exists, by the job's own agency and landlord.
+  */
+  return [];
+}
+
+function getLandlords(){
+  try{
+    const raw = localStorage.getItem(LANDLORDS_KEY);
+    if(!raw) { setLandlords(defaultLandlords()); return defaultLandlords(); }
+    return JSON.parse(raw);
+  }catch(e){ return defaultLandlords(); }
+}
+function setLandlords(list){ localStorage.setItem(LANDLORDS_KEY, JSON.stringify(list)); }
+
+function getEngineer(){
+  try{
+    const raw = localStorage.getItem(ENGINEER_KEY);
+    if(!raw) return defaultEngineer();
+    return JSON.parse(raw);
+  }catch(e){ return defaultEngineer(); }
+}
+function setEngineer(obj){ localStorage.setItem(ENGINEER_KEY, JSON.stringify(obj)); }
+
+/* ---------------- Appliance table config ---------------- */
+const APPLIANCE_COLS = [
+  {key:'location', label:'Location', w:'6%', type:'text'},
+  {key:'type', label:'Appliance Type', w:'8%', type:'text'},
+  {key:'make', label:'Make', w:'8%', type:'text'},
+  {key:'model', label:'Model', w:'9%', type:'text'},
+  {key:'flueType', label:'Flue Type', w:'4%', type:'text'},
+  {key:'landlordsAppliance', label:"Landlord's Appliance", w:'5.5%', type:'select', options:['','Landlord','Tenant']},
+  {key:'inspected', label:'Appliance Inspected', w:'3.3%', type:'select', options:['','Yes','No']},
+  {key:'operatingPressure', label:'Operating Pressure (mbar)', w:'5%', type:'text'},
+  {key:'heatInput', label:'Heat Input (kW/h)', w:'4.5%', type:'text'},
+  {key:'highRatio', label:'Ratio', w:'3.3%', type:'text', group:'High Combustion Reading'},
+  {key:'highCO', label:'CO ppm', w:'3.3%', type:'text', group:'High Combustion Reading'},
+  {key:'highCO2', label:'CO2 %', w:'3.3%', type:'text', group:'High Combustion Reading'},
+  {key:'lowRatio', label:'Ratio', w:'3.3%', type:'text', group:'Low Combustion Reading'},
+  {key:'lowCO', label:'CO ppm', w:'3.3%', type:'text', group:'Low Combustion Reading'},
+  {key:'lowCO2', label:'CO2 %', w:'3.3%', type:'text', group:'Low Combustion Reading'},
+  {key:'safetyDevice', label:'Safety device(s) correct operation', w:'4.2%', type:'select', options:['','Yes','No','N/A']},
+  {key:'ventilation', label:'Ventilation Provision satisfactory', w:'4.2%', type:'select', options:['','Yes','No','N/A']},
+  {key:'visualFlue', label:'Visual condition of flue and termination satisfactory', w:'4.5%', type:'select', options:['','Yes','No','N/A']},
+  {key:'fluePerformance', label:'Flue Performance test', w:'4.2%', type:'select', options:['','Yes','No','N/A']},
+  {key:'serviced', label:'Appliance Serviced', w:'4.2%', type:'select', options:['','Yes','No','N/A']},
+  {key:'safeToUse', label:'Appliance safe to use', w:'4.5%', type:'select', options:['','Yes','No','N/A']},
+];
+const APPLIANCE_ROWS = 6;
+
+/* Per-row defaults, applied ONLY once a row has both Location and Appliance
+   Type filled in — empty rows stay completely blank so the certificate looks
+   clean. Row 1 gets full Yes across the board (flue included) except
+   Serviced=No. Rows 2-6 get Yes everywhere except flue-related fields (N/A)
+   and Serviced (No) — matching the real-world pattern where only the primary
+   appliance has a flue tested. Clearing Location or Type empties the row's
+   dropdowns again. Everything stays freely editable. */
+const ROW_SELECT_KEYS = ['landlordsAppliance','inspected','safetyDevice','ventilation','visualFlue','fluePerformance','serviced','safeToUse'];
+function rowDefaults(r){
+  return {
+    landlordsAppliance:'Landlord',
+    inspected:'Yes',
+    safetyDevice:'Yes',
+    ventilation:'Yes',
+    visualFlue: r===1 ? 'Yes' : 'N/A',
+    fluePerformance: r===1 ? 'Yes' : 'N/A',
+    serviced:'No',
+    safeToUse:'Yes'
+  };
+}
+function updateRowDefaults(r){
+  const loc = (qs(`app_${r}_location`).value || '').trim();
+  const typ = (qs(`app_${r}_type`).value || '').trim();
+  if(loc && typ){
+    const defs = rowDefaults(r);
+    ROW_SELECT_KEYS.forEach(k=>{
+      const el = qs(`app_${r}_${k}`);
+      if(el && !el.value) el.value = defs[k];   // fill blanks only — never overwrite a manual choice
+    });
+  } else {
+    ROW_SELECT_KEYS.forEach(k=>{
+      const el = qs(`app_${r}_${k}`);
+      if(el) el.selectedIndex = 0;
+    });
+  }
+}
+document.addEventListener('input', (e)=>{
+  const m = /^app_(\d+)_(location|type)$/.exec(e.target.id || '');
+  if(m) updateRowDefaults(parseInt(m[1]));
+});
+
+function buildApplianceTable(){
+  const wrap = document.getElementById('applianceTableWrap');
+  let groupHeader = '<tr>';
+  let subHeader = '<tr><th class="rownum"></th>';
+  let lastGroup = null;
+  let colSpanBuffer = [];
+
+  // build grouped header (colspan for High/Low combustion reading)
+  const groups = [];
+  let i=0;
+  while(i < APPLIANCE_COLS.length){
+    const col = APPLIANCE_COLS[i];
+    if(col.group){
+      let span=0, g=col.group;
+      while(i<APPLIANCE_COLS.length && APPLIANCE_COLS[i].group===g){span++;i++;}
+      groups.push({label:g, span});
+    } else {
+      groups.push({label:'', span:1});
+      i++;
+    }
+  }
+  groupHeader += '<th></th>'; // rownum spacer
+  groups.forEach(g=>{
+    groupHeader += `<th colspan="${g.span}">${g.label}</th>`;
+  });
+  groupHeader += '</tr>';
+
+  APPLIANCE_COLS.forEach(col=>{
+    subHeader += `<th style="width:${col.w}">${col.label}</th>`;
+  });
+  subHeader += '</tr>';
+
+  let bodyRows = '';
+  for(let r=1;r<=APPLIANCE_ROWS;r++){
+    bodyRows += `<tr><td class="rownum">${r}</td>`;
+    APPLIANCE_COLS.forEach(col=>{
+      const id = `app_${r}_${col.key}`;
+      if(col.type==='select'){
+        const opts = col.options.map(o=>`<option value="${o}">${o}</option>`).join('');
+        bodyRows += `<td><select id="${id}">${opts}</select></td>`;
+      } else {
+        bodyRows += `<td><input type="text" id="${id}"></td>`;
+      }
+    });
+    bodyRows += '</tr>';
+  }
+
+  wrap.innerHTML = `<table class="appliance"><thead>${groupHeader}${subHeader}</thead><tbody>${bodyRows}</tbody></table>`;
+}
+
+/* ---------------- Landlord dropdowns ---------------- */
+function populateLandlordSelects(){
+  const landlords = getLandlords();
+  const opts = ['<option value="">-- Select landlord / manual entry --</option>']
+    .concat(landlords.map(l=>`<option value="${l.id}">${escapeHtml(l.label)}</option>`))
+    .concat([`<option value="${PRIVATE_ID}">Private / Individual (manual entry)</option>`])
+    .join('');
+  document.getElementById('landlordSelect').innerHTML = opts;
+  document.getElementById('landlordSelect2').innerHTML = opts;
+}
+
+function escapeHtml(s){
+  return String(s||'').replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
+
+function applyLandlordSelection(id){
+  const landlords = getLandlords();
+  document.getElementById('landlordSelect').value = id;
+  document.getElementById('landlordSelect2').value = id;
+  if(!id) return;
+  if(id === PRIVATE_ID){
+    qs('landlordName').value = '';
+    qs('landlordCompany').value = '';
+    qs('landlordAddress').value = '';
+    qs('landlordPostcode').value = '';
+    qs('landlordTel').value = '';
+    qs('receivedPrintName').value = '';
+    return;
+  }
+  const l = landlords.find(x=>x.id===id);
+  if(!l) return;
+  qs('landlordName').value = '';
+  qs('landlordCompany').value = l.company || '';
+  qs('landlordAddress').value = l.address || '';
+  qs('landlordPostcode').value = l.postcode || '';
+  qs('landlordTel').value = l.tel || '';
+  qs('receivedPrintName').value = l.receivedBy || '';
+}
+
+function qs(id){ return document.getElementById(id); }
+
+/* ---------------- Manage Landlords modal ---------------- */
+function renderLandlordManageTable(){
+  const landlords = getLandlords();
+  const tbody = document.querySelector('#landlordTable tbody');
+  tbody.innerHTML = landlords.map(l=>`
+    <tr data-id="${l.id}">
+      <td>${escapeHtml(l.label)}</td>
+      <td>${escapeHtml(l.company)}</td>
+      <td>${escapeHtml(l.address)}<br>${escapeHtml(l.postcode||'')}</td>
+      <td>${escapeHtml(l.tel||'')}</td>
+      <td>${escapeHtml(l.receivedBy||'')}</td>
+      <td><button data-action="delete" data-id="${l.id}">Delete</button></td>
+    </tr>
+  `).join('') || '<tr><td colspan="6">No landlords saved yet.</td></tr>';
+}
+
+document.querySelector('#landlordTable tbody').addEventListener('click', (e)=>{
+  const btn = e.target.closest('button[data-action="delete"]');
+  if(!btn) return;
+  const id = btn.dataset.id;
+  if(!confirm('Delete this landlord record?')) return;
+  const landlords = getLandlords().filter(l=>l.id!==id);
+  setLandlords(landlords);
+  renderLandlordManageTable();
+  populateLandlordSelects();
+});
+
+qs('btnManageLandlords').addEventListener('click', ()=>{
+  renderLandlordManageTable();
+  qs('landlordModal').classList.add('open');
+});
+qs('btnCloseLandlordModal').addEventListener('click', ()=> qs('landlordModal').classList.remove('open'));
+
+qs('btnAddLandlord').addEventListener('click', ()=>{
+  const label = qs('newLabel').value.trim();
+  const company = qs('newCompany').value.trim();
+  if(!label || !company){ alert('Please enter at least a label and company name.'); return; }
+  const landlords = getLandlords();
+  const id = 'l_' + Date.now();
+  landlords.push({
+    id, label, company,
+    address: qs('newAddress').value.trim(),
+    postcode: qs('newPostcode').value.trim(),
+    tel: qs('newTel').value.trim(),
+    receivedBy: qs('newReceivedBy').value.trim()
+  });
+  setLandlords(landlords);
+  ['newLabel','newCompany','newAddress','newPostcode','newTel','newReceivedBy'].forEach(id2=>qs(id2).value='');
+  renderLandlordManageTable();
+  populateLandlordSelects();
+});
+
+qs('btnExportLandlords').addEventListener('click', ()=>{
+  const blob = new Blob([JSON.stringify(getLandlords(), null, 2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'landlords-backup.json';
+  a.click();
+});
+qs('importLandlordsFile').addEventListener('change', (e)=>{
+  const file = e.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = ()=>{
+    try{
+      const imported = JSON.parse(reader.result);
+      if(!Array.isArray(imported)) throw new Error('not an array');
+      const existing = getLandlords();
+      const existingIds = new Set(existing.map(l=>l.id));
+      imported.forEach(l=>{
+        if(!l.id || existingIds.has(l.id)) l.id = 'l_' + Date.now() + Math.random().toString(36).slice(2,6);
+        existing.push(l);
+      });
+      setLandlords(existing);
+      renderLandlordManageTable();
+      populateLandlordSelects();
+      alert('Landlords imported.');
+    }catch(err){ alert('Could not read that file as a landlord JSON export.'); }
+  };
+  reader.readAsText(file);
+});
+
+/* "Save as landlord" button next to Customer/Landlord box on the sheet */
+qs('btnSaveLandlord').addEventListener('click', ()=>{
+  const company = qs('landlordCompany').value.trim();
+  if(!company){ alert('Enter a Company name in the Customer/Landlord box first.'); return; }
+  const label = prompt('Short label for this landlord (shown in the dropdown):', company);
+  if(!label) return;
+  const landlords = getLandlords();
+  const id = 'l_' + Date.now();
+  landlords.push({
+    id, label,
+    company,
+    address: qs('landlordAddress').value.trim(),
+    postcode: qs('landlordPostcode').value.trim(),
+    tel: qs('landlordTel').value.trim(),
+    receivedBy: qs('receivedPrintName').value.trim()
+  });
+  setLandlords(landlords);
+  populateLandlordSelects();
+  applyLandlordSelection(id);
+  alert('Saved. This landlord will now appear in the dropdown for future certificates.');
+});
+
+/* "Set as default engineer details" button */
+qs('btnSaveEngineer').addEventListener('click', ()=>{
+  setEngineer({
+    engineer: qs('instEngineer').value.trim(),
+    company: qs('instCompany').value.trim(),
+    address: qs('instAddress').value.trim(),
+    postcode: qs('instPostcode').value.trim(),
+    tel: qs('instTel').value.trim(),
+    gasSafeReg: qs('instGasSafeReg').value.trim(),
+    idCardNo: qs('instIdCard').value.trim()
+  });
+  alert('Saved. These details will now auto-fill on every new certificate.');
+});
+
+/* landlord dropdown change handlers (kept in sync, either dropdown works) */
+qs('landlordSelect').addEventListener('change', (e)=> applyLandlordSelection(e.target.value));
+qs('landlordSelect2').addEventListener('change', (e)=> applyLandlordSelection(e.target.value));
+
+/* ---------------- Next inspection date ---------------- */
+function parseUkDate(str){
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec((str||'').trim());
+  if(!m) return null;
+  const d = new Date(parseInt(m[3]), parseInt(m[2])-1, parseInt(m[1]));
+  return isNaN(d.getTime()) ? null : d;
+}
+function formatUkDate(d){
+  const dd = String(d.getDate()).padStart(2,'0');
+  const mm = String(d.getMonth()+1).padStart(2,'0');
+  const yyyy = d.getFullYear();
+  return `${dd}/${mm}/${yyyy}`;
+}
+qs('sigDate').addEventListener('change', updateNextInspection);
+qs('sigDate').addEventListener('blur', updateNextInspection);
+function updateNextInspection(){
+  const d = parseUkDate(qs('sigDate').value);
+  if(!d) return;
+  const next = new Date(d);
+  next.setFullYear(next.getFullYear()+1);
+  next.setDate(next.getDate()-1);
+  qs('nextInspection').value = formatUkDate(next);
+}
+
+/* ---------------- New certificate / reset ---------------- */
+function applyEngineerDefaults(){
+  const e = getEngineer();
+  qs('instEngineer').value = e.engineer||'';
+  qs('instCompany').value = e.company||'';
+  qs('instAddress').value = e.address||'';
+  qs('instPostcode').value = e.postcode||'';
+  qs('instTel').value = e.tel||'';
+  qs('instGasSafeReg').value = e.gasSafeReg||'';
+  qs('instIdCard').value = e.idCardNo||'';
+  qs('issuedPrintName').value = e.engineer||'';
+}
+
+function todayUk(){
+  return formatUkDate(new Date());
+}
+
+function newCertificate(skipConfirm){
+  if(!skipConfirm && !confirm('Start a new blank certificate? Any unsaved changes to the current one will be lost.')) return;
+  document.querySelectorAll('#sheet input[type=text], #sheet textarea').forEach(el=>el.value='');
+  document.querySelectorAll('#sheet select').forEach(el=>el.selectedIndex=0);
+  applyEngineerDefaults();
+  qs('coFitted').checked = true;
+  qs('coTested').checked = true;
+  qs('chkEmergency').checked = true;
+  qs('chkTightness').checked = true;
+  qs('chkPipework').checked = true;
+  qs('chkBonding').checked = true;
+  qs('sigDate').value = todayUk();
+  updateNextInspection();
+  applyLandlordSelection('');
+  localStorage.removeItem(DRAFT_KEY);
+  saveDraft();
+}
+qs('btnNewCert').addEventListener('click', ()=>newCertificate(false));
+
+/* ---------------- Print (fallback) ---------------- */
+qs('btnPrint').addEventListener('click', ()=>{ saveDraft(); window.print(); });
+
+/* ---------------- Download landscape PDF (primary path) ----------------
+   Renders the certificate sheet to a high-res image and places it on a true
+   landscape A4 PDF page. This sidesteps browser print-dialog orientation
+   settings entirely (Chrome/Safari often default back to Portrait even
+   when @page says landscape), so the output is reliably landscape every time. */
+function buildFilename(){
+  let addr = (qs('jobAddress').value.split('\n')[0] || qs('jobName').value || 'Gas Certificate').trim();
+  addr = addr.replace(/[\\/:*?"<>|]/g, '').trim();
+  if(!addr) addr = 'Gas Certificate';
+  const d = parseUkDate(qs('sigDate').value);
+  const datePart = d ? ` - ${String(d.getDate()).padStart(2,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${d.getFullYear()}` : '';
+  return `${addr} - Gas Certificate${datePart}.pdf`;
+}
+
+/* Build an off-screen "print copy" of the sheet where every form control is
+   replaced by plain text. html2canvas clips the bottom of text inside
+   <input>/<select> boxes when their height is tight, so we never let it see
+   a form control at all — plain text always renders complete and crisp.
+   Buttons and the landlord picker are stripped from the copy too. */
+function makePrintClone(){
+  const src = qs('sheet');
+  const clone = src.cloneNode(true);
+  const srcFields = src.querySelectorAll('input, select, textarea');
+  const cloneFields = clone.querySelectorAll('input, select, textarea');
+  cloneFields.forEach((el, i)=>{
+    const orig = srcFields[i];
+    const rep = document.createElement('div');
+    if(orig.type === 'checkbox'){
+      rep.className = 'pv pv-check';
+      rep.textContent = orig.checked ? '✔' : ' ';
+    } else {
+      rep.className = 'pv' + (orig.tagName === 'TEXTAREA' ? ' pv-multi' : '');
+      rep.textContent = orig.value;
+      // keep the box the same size as the original field so layout doesn't shift
+      const h = orig.getBoundingClientRect().height;
+      if(h > 0) rep.style.minHeight = h + 'px';
+      if(orig.closest('td')) rep.style.minHeight = '';
+    }
+    el.replaceWith(rep);
+  });
+  clone.querySelectorAll('button, .landlord-select-line').forEach(el=>el.remove());
+  clone.removeAttribute('id');
+  return clone;
+}
+
+/* ---------------- Sorted save location (File System Access API) ----------------
+   PDFs are saved straight into the GAS CERTS workspace, sorted as:
+       <chosen folder>/<yyyy-mm (Month)>/<Landlord>/<address> - Gas Certificate.pdf
+   The user picks the destination folder ONCE (📁 Save folder button, or on the
+   first download); the choice is remembered in this browser via IndexedDB.
+   Browsers that lack the API (e.g. Safari) fall back to a normal download. */
+const DIR_DB='gascert_dirs', DIR_STORE='handles';
+function idbOpen(){
+  return new Promise((res,rej)=>{
+    const q=indexedDB.open(DIR_DB,1);
+    q.onupgradeneeded=()=>q.result.createObjectStore(DIR_STORE);
+    q.onsuccess=()=>res(q.result);
+    q.onerror=()=>rej(q.error);
+  });
+}
+async function idbGet(key){
+  const db=await idbOpen();
+  return new Promise((res,rej)=>{
+    const r=db.transaction(DIR_STORE,'readonly').objectStore(DIR_STORE).get(key);
+    r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error);
+  });
+}
+async function idbSet(key,val){
+  const db=await idbOpen();
+  return new Promise((res,rej)=>{
+    const t=db.transaction(DIR_STORE,'readwrite');
+    t.objectStore(DIR_STORE).put(val,key);
+    t.oncomplete=()=>res(); t.onerror=()=>rej(t.error);
+  });
+}
+
+async function pickCertsRoot(){
+  if(!window.showDirectoryPicker){
+    alert('This browser cannot save directly into folders (Safari does not support it).\nUse Google Chrome or Microsoft Edge for sorted saving — for now PDFs will go to Downloads.');
+    return null;
+  }
+  try{
+    const handle = await window.showDirectoryPicker({id:'gascerts', mode:'readwrite'});
+    await idbSet('certsRoot', handle);
+    setSaveFolderStatus(handle.name);
+    return handle;
+  }catch(e){ return null; } /* user cancelled the picker */
+}
+
+async function getCertsRoot(promptIfMissing){
+  if(!window.showDirectoryPicker) return null;
+  let handle = await idbGet('certsRoot').catch(()=>null);
+  if(handle){
+    try{
+      let perm = await handle.queryPermission({mode:'readwrite'});
+      if(perm !== 'granted') perm = await handle.requestPermission({mode:'readwrite'});
+      if(perm === 'granted') return handle;
+    }catch(e){ /* stale handle — re-pick below */ }
+  }
+  return promptIfMissing ? await pickCertsRoot() : null;
+}
+
+const MONTH_NAMES=['January','February','March','April','May','June','July','August','September','October','November','December'];
+function monthFolderName(){
+  const d = parseUkDate(qs('sigDate').value) || new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')} (${MONTH_NAMES[d.getMonth()]})`;
+}
+function sanitizeFolder(s){
+  return String(s||'').replace(/[\\/:*?"<>|.]/g,'').trim();
+}
+function landlordFolderName(){
+  /*
+    The original carried four shortcuts naming two real letting agencies —
+    two by book id, two by exact company name — so their folders came out as
+    short codes. They were third-party identifiers in source and are not
+    copied here. Nothing is lost: the generic branches below already derive
+    the folder from the book entry's own label, which is what those agencies
+    would produce anyway once they are entries in the book.
+  */
+  const id = qs('landlordSelect2').value || qs('landlordSelect').value;
+  if(id && id !== PRIVATE_ID){
+    const l = getLandlords().find(x=>x.id===id);
+    if(l) return sanitizeFolder(l.label || l.company) || 'Other';
+  }
+  return sanitizeFolder(qs('landlordCompany').value) || 'Private';
+}
+
+async function saveSorted(pdf){
+  const root = await getCertsRoot(true);
+  if(!root){
+    pdf.save(buildFilename());
+    qs('statusLine').textContent = 'Saved to Downloads (no save folder set — click "📁 Save folder" to enable sorted saving).';
+    return;
+  }
+  const monthDir = await root.getDirectoryHandle(monthFolderName(), {create:true});
+  const llDir = await monthDir.getDirectoryHandle(landlordFolderName(), {create:true});
+  const fileHandle = await llDir.getFileHandle(buildFilename(), {create:true});
+  const writable = await fileHandle.createWritable();
+  await writable.write(pdf.output('blob'));
+  await writable.close();
+  qs('statusLine').textContent = `✅ Saved to ${root.name} / ${monthFolderName()} / ${landlordFolderName()} / ${buildFilename()}`;
+}
+
+function setSaveFolderStatus(name){
+  qs('statusLine').textContent = `Save folder set to "${name}" — certificates will be sorted by month, then landlord.`;
+}
+qs('btnPickFolder').addEventListener('click', pickCertsRoot);
+getCertsRoot(false).then(h=>{ if(h) setSaveFolderStatus(h.name); });
+
+async function downloadPdf(){
+  saveDraft();
+  const btn = qs('btnDownloadPdf');
+  const origBtnText = btn.textContent;
+
+  if(typeof html2canvas === 'undefined' || !window.jspdf){
+    alert('The PDF engine did not load. Use "Print instead" and choose Landscape in the print dialog.');
+    return;
+  }
+
+  btn.textContent = '⏳ Generating PDF…';
+  btn.disabled = true;
+
+  const host = document.createElement('div');
+  host.id = 'pdfCaptureHost';
+  host.appendChild(makePrintClone());
+  document.body.appendChild(host);
+  await new Promise(r=>setTimeout(r, 60));
+
+  try{
+    const canvas = await html2canvas(host.firstChild, {scale:3, backgroundColor:'#ffffff'});
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({orientation:'landscape', unit:'mm', format:'a4'});
+    const pageW = 297, pageH = 210, margin = 5;
+    const maxW = pageW - margin*2, maxH = pageH - margin*2;
+    const ratio = canvas.width / canvas.height;
+    let w = maxW, h = w / ratio;
+    if(h > maxH){ h = maxH; w = h * ratio; }
+    const x = (pageW - w) / 2, y = (pageH - h) / 2;
+    pdf.addImage(canvas.toDataURL('image/jpeg', 0.95), 'JPEG', x, y, w, h);
+    await saveSorted(pdf);
+  }catch(err){
+    console.error(err);
+    alert('Could not generate the PDF automatically. You can use "Print instead" as a fallback.\n\n' + err.message);
+  }finally{
+    host.remove();
+    btn.textContent = origBtnText;
+    btn.disabled = false;
+  }
+}
+qs('btnDownloadPdf').addEventListener('click', downloadPdf);
+
+/* ---------------- Autosave draft ---------------- */
+let saveTimer = null;
+function saveDraft(){
+  const data = {};
+  document.querySelectorAll('#sheet input, #sheet select, #sheet textarea').forEach(el=>{
+    if(!el.id) return;
+    data[el.id] = el.type==='checkbox' ? el.checked : el.value;
+  });
+  localStorage.setItem(DRAFT_KEY, JSON.stringify(data));
+  const status = qs('statusLine');
+  status.textContent = 'Draft saved ' + new Date().toLocaleTimeString();
+}
+function loadDraft(){
+  try{
+    const raw = localStorage.getItem(DRAFT_KEY);
+    if(!raw) return false;
+    const data = JSON.parse(raw);
+    Object.keys(data).forEach(id=>{
+      const el = qs(id);
+      if(!el) return;
+      if(el.type==='checkbox') el.checked = !!data[id];
+      else el.value = data[id];
+    });
+    return true;
+  }catch(e){ return false; }
+}
+document.addEventListener('input', (e)=>{
+  if(!e.target.closest('#sheet')) return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveDraft, 500);
+});
+document.addEventListener('change', (e)=>{
+  if(!e.target.closest('#sheet')) return;
+  saveDraft();
+});
+
+/* ---------------- Init ---------------- */
+buildApplianceTable();
+populateLandlordSelects();
+if(!loadDraft()){
+  newCertificate(true);
+}
+</script>
+</body>
+</html>
