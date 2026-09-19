@@ -11,6 +11,8 @@ import {
   fetchRecordedException,
 } from "@/lib/notifications/outbox";
 import { LateBookingNotice } from "@/components/jobs/LateBookingNotice";
+import { JobMessages } from "@/components/jobs/JobMessages";
+import { ResendInvitation } from "../ResendInvitation";
 
 export const metadata: Metadata = {
   title: "Job",
@@ -73,7 +75,7 @@ export default async function AdminJobPage({
   const exception = job.deadlineExceptionAt
     ? await fetchRecordedException(job.id, job.appointmentStart)
     : null;
-  const notifications = exception ? await fetchNotificationStates(job.id) : [];
+  const notifications = await fetchNotificationStates(job.id);
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-10">
@@ -92,7 +94,9 @@ export default async function AdminJobPage({
       {exception && (
         <LateBookingNotice
           exception={exception}
-          notifications={notifications}
+          notifications={notifications.filter(
+            (n) => n.kind === "late-booking-exception",
+          )}
           audience="admin"
         />
       )}
@@ -113,6 +117,10 @@ export default async function AdminJobPage({
           <Row label="Requested completion date" value={job.completeByDate} />
         </dl>
       </section>
+
+      <JobMessages notifications={notifications}>
+        <ResendInvitation jobId={job.id} />
+      </JobMessages>
 
       <section className="mt-4 rounded-2xl border-2 border-navy-200 bg-white p-5">
         <h2 className="text-sm font-extrabold text-navy-900">Customer</h2>

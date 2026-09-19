@@ -68,9 +68,10 @@ function readState() {
       events: new Map(Object.entries(raw.events ?? {})),
       store: new Map(Object.entries(raw.store ?? {})),
       log: raw.log ?? [],
+      mail: raw.mail ?? [],
     };
   } catch {
-    return { events: new Map(), store: new Map(), log: [] };
+    return { events: new Map(), store: new Map(), log: [], mail: [] };
   }
 }
 
@@ -81,6 +82,7 @@ function writeState(state) {
       events: Object.fromEntries(state.events),
       store: Object.fromEntries(state.store),
       log: state.log,
+      mail: state.mail ?? [],
     }),
   );
 }
@@ -345,7 +347,36 @@ globalThis.fetch = async function fetchWithFixtures(input, init) {
   }
 
   if (url.host === "api.resend.com") {
-    return json({ id: "fixture-email" });
+    /*
+      A deliberate pause, so a test can hold one worker *inside* its send and
+      start another while the first is still in flight. Without it the window
+      the claim protects is too short to aim at.
+    */
+    const delay = Number(process.env.BSCJ_FIXTURE_MAIL_DELAY_MS ?? 0);
+    if (delay > 0) await new Promise((r) => setTimeout(r, delay));
+
+    /*
+      Accepted and kept, not sent. The body is recorded so a test can read what
+      the application actually composed — an invitation's link exists only
+      here, because the token behind it is never stored or logged.
+    */
+    const state = readState();
+    let body = {};
+    try {
+      body = JSON.parse(init.body);
+    } catch {
+      // A malformed payload is worth seeing as-is.
+    }
+    state.mail = state.mail ?? [];
+    state.mail.push({
+      to: body.to,
+      subject: body.subject,
+      text: body.text,
+      idempotencyKey: init.headers?.["Idempotency-Key"] ?? null,
+      at: new Date().toISOString(),
+    });
+    writeState(state);
+    return json({ id: `fixture-email-${state.mail.length}` });
   }
 
   return realFetch(input, init);

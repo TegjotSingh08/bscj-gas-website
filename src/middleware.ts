@@ -51,6 +51,16 @@ const SIGN_IN_PAGES: readonly [string, string][] = [
   ["/api/engineer", "/admin/login"],
 ];
 
+/**
+ * `/api/cron/*` is deliberately **absent from the matcher below**.
+ *
+ * A scheduler carries a bearer token, not a session cookie, so this file's
+ * cheap cookie-presence test would refuse every legitimate run. The route
+ * checks its own credential in constant time and falls back to a verified
+ * administrator session — see `lib/ops/cron-auth.ts`. Nothing is unguarded;
+ * the guard simply is not this one.
+ */
+
 function signInPageFor(pathname: string): string {
   const match = SIGN_IN_PAGES.find(([prefix]) => pathname.startsWith(prefix));
   return match ? match[1] : "/admin/login";

@@ -41,10 +41,12 @@ import {
  *    recorded on its `appointment.rescheduled` entries.
  * 3. **Bookings the database never recorded** — a note in the reservation
  *    store from a website booking whose Postgres write failed.
- * 4. **Notifications nobody has been sent** — late-booking alerts queued in
- *    `outbound_email`. Drained **last**, on purpose: a notification must never
- *    describe an appointment the calendar does not yet hold, so it goes out
- *    only after the sync pass above has had its chance.
+ * 4. **Messages nobody has been sent** — tenant invitations, appointment
+ *    confirmations and late-booking alerts queued in `outbound_email`. Drained
+ *    **last**, on purpose: anything describing an appointment must not go out
+ *    before the calendar holds it, so it runs after the sync pass above has
+ *    had its chance. Invitations are exempt — they are about a job, not a
+ *    time, and are eligible before any appointment exists.
  *
  * **Bounded on purpose.** Each pass takes a limited number of each kind. A
  * sweep that tried to drain everything would hold a request open for as long
@@ -188,6 +190,7 @@ export async function runReconciliation(
   } catch {
     notifications = {
       considered: 0,
+      claimed: 0,
       accepted: 0,
       cancelled: 0,
       stillQueued: 0,

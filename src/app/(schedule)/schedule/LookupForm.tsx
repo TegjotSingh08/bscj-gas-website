@@ -11,9 +11,23 @@ const fieldClass =
  * Finding an appointment by hand.
  *
  * Every failure says the same thing, because the server answers every failure
- * the same way. See `actions.ts`.
+ * the same way — an unknown reference, a wrong postcode and a rate-limited
+ * caller are indistinguishable here. See `actions.ts`.
  */
-export function LookupForm({ hadProblem }: { hadProblem: boolean }) {
+export function LookupForm({
+  hadProblem,
+  reference,
+}: {
+  hadProblem: boolean;
+  /**
+   * Filled in by an invitation link, or null.
+   *
+   * Editable on purpose. A tenant who was sent the wrong job's link, or who is
+   * dealing with two properties, must be able to correct it — and nothing is
+   * gained by locking a field whose value is not what grants access.
+   */
+  reference: string | null;
+}) {
   const [state, action, pending] = useActionState<LookupState, FormData>(
     lookupJobAction,
     { failed: hadProblem },
@@ -41,6 +55,7 @@ export function LookupForm({ hadProblem }: { hadProblem: boolean }) {
           required
           autoComplete="off"
           placeholder="BSCJ-XXXXXX"
+          defaultValue={reference ?? ""}
           className={fieldClass}
         />
       </div>
@@ -54,6 +69,9 @@ export function LookupForm({ hadProblem }: { hadProblem: boolean }) {
           name="postcode"
           required
           autoComplete="postal-code"
+          // Focused when the reference arrived with the link, so the one thing
+          // still being asked for is the one thing the cursor is in.
+          autoFocus={reference !== null}
           className={fieldClass}
         />
       </div>

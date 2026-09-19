@@ -37,6 +37,13 @@ const PRIVATE_ROOTS = [
   path.join(APP_ROOT, "api", "admin"),
   path.join(APP_ROOT, "api", "portal"),
   path.join(APP_ROOT, "api", "engineer"),
+  /*
+    The scheduled worker. Not a page a customer renders and not something the
+    public bundle can reach — it is an internal endpoint that authenticates
+    either a scheduler's bearer token or a verified administrator, and it is
+    held to the *private* rules below rather than the public ones.
+  */
+  path.join(APP_ROOT, "api", "cron"),
 ];
 
 const isPrivate = (file: string) =>

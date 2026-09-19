@@ -8,10 +8,12 @@ import {
   activities,
   customers,
   jobs,
+  outboundEmails,
   properties,
   schedulingTokens,
   tenancies,
 } from "@/lib/db/schema";
+import { invitationRow } from "@/lib/notifications/kinds";
 import { generateJobReference } from "./reference";
 import { initialStatus } from "./lifecycle";
 import { createSchedulingToken } from "@/lib/scheduling/token";
@@ -179,6 +181,8 @@ export async function createAgentJob(
     const jobId = randomUUID();
     const reference = generateJobReference();
     const token = createSchedulingToken();
+    /** One instant, so the invitation's key and its timeline entry agree. */
+    const invitedAt = new Date();
 
     /*
       A tenant chooses the time when there is one to ask. With no tenant on
@@ -245,6 +249,21 @@ export async function createAgentJob(
         tokenHash: token.tokenHash,
         expiresAt: token.expiresAt,
       }),
+      /*
+        The invitation, recorded as an intent in the same transaction.
+
+        A job that is waiting on its tenant and has nothing queued to tell them
+        so is a job nobody will chase — the tenant simply never hears. Writing
+        it here means the decision to invite survives whatever happens to the
+        sending, exactly like every other outbound message.
+
+        The worker mints the link's token when it sends, not now: only the hash
+        of the one above is stored, so its plain value cannot be recovered, and
+        that is the property that makes a leaked row useless.
+      */
+      db.insert(outboundEmails).values(
+        invitationRow({ jobId, issuedAt: invitedAt }),
+      ),
       db.insert(activities).values({
         jobId,
         propertyId: row.property.id,
@@ -263,7 +282,8 @@ export async function createAgentJob(
     ] as const;
 
     // One transaction. A job without its token, or a token without its job,
-    // is a state nothing downstream could make sense of.
+    // is a state nothing downstream could make sense of — and so is a job
+    // waiting on a tenant nobody is going to write to.
     await db.batch(writes as unknown as Parameters<typeof db.batch>[0]);
 
     if (input.notes) {

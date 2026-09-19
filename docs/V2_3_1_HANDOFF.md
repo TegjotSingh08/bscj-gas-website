@@ -1,9 +1,21 @@
-# V2.3.1 — corrective phase, and V2.3.2 — deadlines
+# V2.3 — booking and communication
 
-> **V2.3.2 is implemented and unreviewed.** Deadline-aware scheduling, recorded
-> late-booking exceptions and their notifications are in the working tree on
-> top of checkpoint `2e854bd`. See **§11**. Tenant invitation *delivery* is
-> still absent, so V2.3 remains incomplete.
+> **The booking and communication phase is complete and committed.** An agency
+> creates a job; the tenant is invited, verifies themselves, chooses a time
+> within the deadline or knowingly after it; and everybody who needs to know is
+> told.
+>
+> | Checkpoint | What |
+> |---|---|
+> | `2e854bd` | V2.3.1 corrective work (§1–§10) |
+> | `e4103e9` | Deadlines and late-booking exceptions (§11) |
+> | see §13 | Invitations, the email worker, and the tenant-surface closeout |
+>
+> **Email processing is not automatic yet.** The schedule is configured but
+> takes effect only on a deploy that has not happened. Until then every send is
+> a person pressing a button. See §12.6.
+>
+> **Next phase: the practical admin/engineer operations workflow** — see §14.
 
 > **Closed out.** A review pass after the first implementation found seven
 > further defects in this phase's own work; all are fixed and covered by tests.
@@ -730,3 +742,274 @@ told. Fixed to `notInArray`, with a regression test.
 - `job.complete_by_date` is a `date` column that the driver returns as a
   timestamp; the admin row prints it raw. Cosmetic, not a data problem.
 - **Seven-day customer-data retention (§10.2) is still unapproved.**
+
+---
+
+# 12. V2.3.2 — tenant invitations and the email worker
+
+Built on checkpoint `e4103e9`. **No migration was needed**: `outbound_email`,
+`scheduling_token` and `tenancy.email` already existed. No database was
+altered.
+
+## 12.1 The agency → tenant workflow
+
+| Step | Where |
+|---|---|
+| Creating an agency job records a scheduling invitation | `create-agent-job.ts` — the outbox row is written **in the same batch** as the job and its token |
+| The tenant gets a usable secure link | `lib/email/tenant-scheduling.ts` + the worker |
+| The message identifies the agency and property | agency name, service, address, postcode, reference |
+| **No pricing, no billing** | asserted live: no `£`, "price", "invoice" or "pence" in anything sent to a tenant |
+| Hashed token verification preserved | only `token_hash` is ever stored; `accessByToken` is unchanged |
+| Controlled resend with visible status | admin-only Server Action + the Messages panel on `/admin/jobs/[id]` |
+| Existing confirmations and late-booking alerts delivered | the same worker now handles all three kinds |
+
+**The link is minted at send time, not at queue time.** The token created with
+the job is stored only as a hash, so its plain value cannot be recovered — a
+property worth keeping, not working around. Each delivery attempt therefore
+mints a fresh token and **leaves earlier ones valid**: a first attempt that
+timed out may well have arrived, and invalidating its link would break a
+message the tenant is already holding. Verified live — both links resolved.
+
+**No raw token is ever logged.** Checked against the server log: zero 64-hex
+strings. It exists in the worker's local scope and in the message body.
+
+## 12.2 The worker
+
+`drainOutbox` handles `tenant-scheduling-invitation`,
+`tenant-appointment-confirmation` and `late-booking-exception`.
+
+**Eligibility differs by kind, deliberately:**
+
+- An **invitation** is about a job, not a time. It is eligible **before any
+  appointment exists** and the calendar requirement does **not** apply to it.
+- A **confirmation** and a **late-booking alert** describe one appointment.
+  Both require that the job still holds it *and* that
+  `calendar_sync_state = synced`. A row waiting on the diary stays queued and
+  the attempt it spent on claiming is **given back** — waiting is not trying.
+
+**Concurrency.** Claiming is a conditional update on the attempt count the
+worker read: `SET attempts = n + 1 WHERE id = ? AND state = 'pending' AND
+attempts = n`. Exactly one worker wins; the other moves on. No lease column, no
+lock table, no migration. **Proven live**: two simultaneous workers, one claim,
+one email.
+
+**Ambiguous provider outcomes.** The attempt is counted *before* the send, so a
+process dying between acceptance and the row update costs one retry rather than
+looping. Resend's own idempotency key stops that retry becoming a second email.
+
+**Stale retries.** Every appointment-scoped row is re-checked against the job's
+current appointment at send time, and `cancelSupersededNotifications` stands
+down unsent rows when an appointment moves. Rows already accepted are never
+rewritten — something the provider took cannot be recalled.
+
+## 12.3 States, and what they are allowed to claim
+
+`pending` = queued · `sent` = **the provider accepted it** · `failed` = gave up
+after 5 attempts · `cancelled` = superseded.
+
+Nothing says "delivered". The admin Messages panel reads "Accepted by the email
+provider"; `/admin/reconcile` says the same. Failure reasons are shown in plain
+English — "no email address on file for the tenant",
+"BOOKING_NOTIFICATION_EMAIL is not configured" — because a missing address is
+fixed in configuration, not by retrying.
+
+## 12.4 Verification
+
+Gates: `npm test` **0** (1468 tests) · `typecheck` **0** · `lint` **0** ·
+`build` **0**.
+
+New tests: `lib/ops/cron-auth.test.ts` (10), `lib/scheduling/deadline-lookup.test.ts`
+(10 — including that a **CP12 certificate expiry does not constrain a boiler
+service**), and 13 added to `lib/notifications/outbox.test.ts` covering
+invitations, confirmations, claiming and duplicate execution.
+
+**End-to-end, isolated fixtures** (local dev database; Google, Upstash and
+Resend stubbed in-process; no real email, no real calendar event):
+
+1. A **real agency user** signed into the portal and booked CP12 work on a
+   property — job `BSCJ-CYJZFG`, `tenant_outreach`, with an invitation queued
+   by the application itself.
+2. The worker sent it. The captured message named the agency and property,
+   carried a working link, and contained no pricing.
+3. The tenant opened the link. With only a **certificate** due date (22 Sep) and
+   no requested date, the page offered exactly the three compliant days.
+4. The tenant booked 21 Sep → confirmed → the worker sent the appointment
+   confirmation, again with no pricing.
+5. The tenant then moved to 25 Sep: refused **409** without acknowledgement,
+   **200** with it. The worker sent a fresh confirmation plus alerts to the
+   agency and BSCJ, both naming the deadline and stating it had not changed.
+6. **Resend**, driven in the browser: "Queued. It will be sent on the next run
+   of the outbox, with a fresh link." Two concurrent workers → one claim, one
+   email, a **distinct** link, and both links still resolving.
+7. **Retry**: with the transport unconfigured, five passes took the row to
+   `failed` with `transport_not_configured`, visible on `/admin/reconcile`.
+8. Endpoint protection: no credential → 401, wrong bearer → 401, correct bearer
+   → 200.
+
+Development database returned to **1 app_user, 0 business rows, 0 audit rows**.
+
+## 12.5 Limitations
+
+- **No real email has ever been sent.** Resend is stubbed in every run;
+  provider acceptance is modelled, not observed. Still the largest gap.
+- **Delivery is unknown by design.** No webhook, no bounce handling. A wrong
+  address that the provider accepts looks identical to one that arrives.
+- **The invitation link uses `business.url`** — the production domain. A
+  staging deployment would send links pointing at production until that is made
+  configurable.
+- **Resend is not rate-limited per job.** An administrator can queue as many as
+  they like; the audit log records each.
+- **`cancelSupersededNotifications` does not cancel invitations**, deliberately:
+  an invitation is not about a time.
+- **Seven-day retention (§10.2) is unchanged and still unapproved.**
+
+## 12.6 Activation — what is required before processing is automatic
+
+**It is not automatic yet.** `vercel.json` declares the schedule, but a
+`vercel.json` only takes effect on a deploy, and none has happened. Until all
+of the following are done, every message waits for a person to press
+**Run reconciliation now** or to call the endpoint.
+
+| # | Required | Notes |
+|---|---|---|
+| 1 | Set **`CRON_SECRET`** (≥ 24 characters) | Until it is set the scheduler door **does not exist** — `checkCronSecret` fails closed. |
+| 2 | Set **`RESEND_API_KEY`** and **`BOOKING_EMAIL_FROM`** | Without them every send records `transport_not_configured` and retries to `failed`. |
+| 3 | Set **`BOOKING_NOTIFICATION_EMAIL`** | Without it BSCJ's own late-booking alert records `bscj_email_missing`. |
+| 4 | Apply **migration 0003** | Additive; see §9.7. |
+| 5 | Fix `business.url` for the target environment | Otherwise invitation links point at production. |
+| 6 | Deploy, then confirm the cron appears in the Vercel dashboard | Every 10 minutes at `/api/cron/outbox`. |
+| 7 | Send one real invitation to an address you control | The only way to close the "no real email" gap in §12.5. |
+
+Tenants must have `tenancy.email` populated; without it an invitation records
+`tenant_email_missing` and is visible on the job and on `/admin/reconcile`.
+
+---
+
+# 13. Closeout — the tenant surface, and one real worker defect
+
+## 13.1 A link is no longer a key
+
+**This was the significant change.** Opening an invitation link used to issue a
+scheduling session and drop the tenant straight onto their appointment, so the
+URL alone showed an address, a reference and a booked time. Links get
+forwarded, screenshotted, left in shared inboxes and pasted into chats.
+
+Now the token proves only that the holder was sent something, and what it buys
+them is **a form with the reference already filled in**. The postcode is still
+required and `accessByReference` still decides — generically, rate limited per
+caller *and* per reference.
+
+- The reference travels in a **signed, path-scoped, 30-minute prefill cookie**,
+  not a query string: a URL ends up in history, a referrer and somebody's logs.
+- A prefill is **not** a session and a session is **not** a prefill — separate
+  signing labels, and both directions are tested.
+- The prefill is cleared once a session replaces it.
+- A bad token lands exactly where a good one does, bar the prefill.
+
+## 13.2 The scheduling surface
+
+Minimal BSCJ branding, no site navigation, no marketing pages, no prices, no
+promotion. The logo is the only navigation a tenant gets and it goes to
+`/schedule` — the entry screen — and nowhere else. Enforced by a test that
+walks every file in the route group and rejects any `href` outside `/schedule`
+(bar `tel:` and WhatsApp), and any mention of money.
+
+After verification the existing date/time flow and the explicit late-booking
+acknowledgement are untouched.
+
+## 13.3 The worker defect this phase found
+
+The targeted check — **pause worker A inside its send, start worker B after A
+has claimed** — exposed a real defect, and the attempt-count comparison was
+exactly what hid it.
+
+**Before:** A read `attempts = 0` and claimed → 1. B, starting a second later,
+read `attempts = 1` and claimed from there → 2. Both conditional updates
+succeeded, because the row was still `pending` while A was in flight. **Two
+invitations went out, with two different links, for one intent.** Both workers
+incremented perfectly, so the counts looked healthy.
+
+**Fix:** a claim now also takes a **lease**. `updated_at` moves, and a row that
+recently moved is not considered at all. A freshly queued row (`attempts = 0`)
+is exempt so a first send does not wait. The lease doubles as retry backoff and
+as crash recovery — a process that dies holding a row loses its lease and the
+row returns to the queue on its own.
+
+**After, same scenario, evidence beyond attempt counts:**
+
+| | Before fix | After fix |
+|---|---|---|
+| B's `considered` | 1 | **0** — it never saw the row |
+| B's `claimed` | 1 | 0 |
+| Messages at the provider | **2** (`invite-1`, `invite-2`) | **1** (`invite-1`) |
+| Final `attempts` | 2 | 1 |
+
+## 13.4 A second, smaller defect
+
+`cookies().delete(name)` targets path `/`, which never matches a cookie scoped
+to `/schedule` — so the prefill survived the session that replaced it and the
+entry form came back filled in with a job the tenant had finished with. Fixed
+by deleting on the path it was set with. Found in the browser.
+
+## 13.5 Verification
+
+Gates: `npm test` **0** (1490 tests) · `typecheck` **0** · `lint` **0** ·
+`build` **0**.
+
+**Browser, isolated fixtures** (local dev database; Google, Upstash and Resend
+stubbed in-process; no real email, no real calendar event):
+
+| Check | Result |
+|---|---|
+| Invitation link | 307 → `/schedule`, **not** the appointment; sets only `bscj-schedule-ref` |
+| Link alone → `/schedule/appointment` | 307 back to `/schedule` — it opens nothing |
+| Entry screen after a link | "We have your reference. Please confirm the postcode…", reference filled, **no job detail on the page** |
+| Valid reference + **wrong** postcode | same generic refusal, still on the form |
+| Valid reference + correct postcode | `/schedule/appointment` |
+| Path B, no invitation at all, cookies cleared | reference + postcode typed → `/schedule/appointment` |
+| Logo | returns to `/schedule` from the appointment page |
+| Links on the tenant surface | exactly one: `/schedule` |
+| Prefill after use | cleared |
+
+Development database returned to **1 app_user, 0 business rows**.
+
+## 13.6 Outstanding launch gaps
+
+Nothing below is closed by this phase.
+
+- **No real email has ever been sent.** Resend is stubbed in every run.
+  Provider acceptance is modelled, not observed. Still the largest gap.
+- **Delivery is unknown by design** — no webhooks, no bounce handling.
+- **No real Google Calendar call has ever been made** (§10.3).
+- **Automatic processing is not active** (§12.6).
+- **Seven-day retention of customer data in Redis is unapproved** (§10.2).
+- **Recovery is unreliable if Postgres and Redis fail together** (§9.4).
+- **`business.url` is hard-coded**, so a staging deploy would send links
+  pointing at production.
+- Tenancy replacement has no access policy (§3); the commercial decisions in
+  §6 are unanswered.
+- `/admin` is `noindex` by metadata but `robots.txt` still allows `/`.
+
+---
+
+# 14. Next phase — the practical admin/engineer operations workflow
+
+Everything so far gets work *booked*. Nothing yet helps BSCJ **do** it. The
+next phase is the day the engineer actually drives somewhere:
+
+1. **An engineer's day view** — today's appointments in order, with the address,
+   the access notes and the tenant's number, on a phone.
+2. **Assignment**, and the `engineer_assigned` transition the lifecycle already
+   allows.
+3. **On site**: `in_progress`, then `completed` — with the outcome recorded
+   against the job rather than remembered.
+4. **Remedials**, recorded against the stored remedial authority that already
+   exists on the organisation and the job.
+5. **The needs-attention queue**, now fed by real signals: failed calendar
+   syncs, late-booking exceptions, failed messages, unrecorded bookings.
+6. **Admin job search, filters and pagination**, which `/admin/jobs` does not
+   have and which stops being optional the moment there are more than a screen
+   of jobs.
+
+Explicitly still out of scope: certificates and documents, invoicing, renewals
+and outreach prioritisation, pricing tiers, and bulk import.

@@ -1,0 +1,110 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+
+import { requireAdmin } from "@/lib/auth/session";
+import { recordAudit } from "@/lib/audit/record";
+import { getDb } from "@/lib/db/client";
+import { activities, jobs, outboundEmails } from "@/lib/db/schema";
+import { invitationRow } from "@/lib/notifications/kinds";
+import { eq } from "drizzle-orm";
+
+/**
+ * Sending a tenant their link again.
+ *
+ * A deliberate act by a person, not a retry: the worker already retries a
+ * delivery that failed. This is for the cases retrying cannot fix — the
+ * address was wrong and has been corrected, the tenant deleted it, the link
+ * expired before they got to it.
+ *
+ * It queues a **new** intent rather than reviving the old row, because the two
+ * are different facts: "we tried five times and could not reach them" is worth
+ * keeping next to "and then we tried again on Tuesday". The worker mints the
+ * link's token when it sends.
+ *
+ * A server action is a public HTTP endpoint with a generated name, so this
+ * starts with `requireAdmin()` against a verified session before it looks at
+ * anything. It is audited, because it causes an email to a tenant.
+ */
+
+export type ResendState = { message?: string; error?: string };
+
+/** The statuses where a tenant still has something to act on. */
+const INVITABLE = ["tenant_outreach", "awaiting_tenant", "scheduled"];
+
+export async function resendInvitationAction(
+  _previous: ResendState,
+  form: FormData,
+): Promise<ResendState> {
+  const session = await requireAdmin();
+
+  const jobId = String(form.get("jobId") ?? "");
+  if (!jobId) return { error: "No job was named." };
+
+  const db = getDb();
+  if (!db) return { error: "The database is not available." };
+
+  const [job] = await db
+    .select({
+      id: jobs.id,
+      reference: jobs.reference,
+      lifecycleStatus: jobs.lifecycleStatus,
+      propertyId: jobs.propertyId,
+      agentOrganisationId: jobs.agentOrganisationId,
+      tenancyId: jobs.tenancyId,
+    })
+    .from(jobs)
+    .where(eq(jobs.id, jobId))
+    .limit(1);
+
+  if (!job) return { error: "That job could not be found." };
+
+  if (!INVITABLE.includes(job.lifecycleStatus)) {
+    return {
+      error:
+        "This job is finished, so there is nothing for a tenant to book. No invitation was queued.",
+    };
+  }
+
+  if (!job.tenancyId) {
+    return {
+      error:
+        "This job has no tenant on file, so there is nobody to send a link to.",
+    };
+  }
+
+  const issuedAt = new Date();
+
+  try {
+    await db.batch([
+      db.insert(outboundEmails).values(invitationRow({ jobId, issuedAt })),
+      db.insert(activities).values({
+        jobId,
+        propertyId: job.propertyId,
+        agentOrganisationId: job.agentOrganisationId,
+        kind: "invitation.resent",
+        actor: `user:${session.user.id}`,
+        // No token, no address. The act, not its contents.
+        detail: { issuedAt: issuedAt.toISOString() },
+      }),
+    ]);
+  } catch {
+    return { error: "The invitation could not be queued. Please try again." };
+  }
+
+  await recordAudit({
+    actorUserId: session.user.id,
+    actorDescription: session.user.email,
+    kind: "invitation.resent",
+    subjectType: "job",
+    subjectId: jobId,
+    // Never the token and never the tenant's address.
+    detail: { reference: job.reference },
+  });
+
+  revalidatePath(`/admin/jobs/${jobId}`);
+  return {
+    message:
+      "Queued. It will be sent on the next run of the outbox, with a fresh link.",
+  };
+}

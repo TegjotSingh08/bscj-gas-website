@@ -77,6 +77,8 @@ function reportFailure(
 type EmailKind =
   | "booking-confirmation"
   | "booking-notification"
+  | "tenant-invitation"
+  | "tenant-appointment"
   | "late-booking-agent"
   | "late-booking-internal";
 
@@ -257,7 +259,11 @@ export async function sendOutboxEmail({
   idempotencySuffix,
   replyToAddress,
 }: {
-  kind: "late-booking-agent" | "late-booking-internal";
+  kind:
+    | "tenant-invitation"
+    | "tenant-appointment"
+    | "late-booking-agent"
+    | "late-booking-internal";
   to: string;
   email: RenderedEmail;
   reference: string;

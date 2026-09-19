@@ -1,13 +1,18 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 import {
+  issueSchedulingPrefill,
   issueSchedulingSession,
+  readSchedulingPrefill,
   readSchedulingSession,
   schedulingCookieOptions,
+  schedulingPrefillCookieOptions,
+  SCHEDULING_COOKIE,
   SCHEDULING_COOKIE_PATH,
+  SCHEDULING_PREFILL_COOKIE,
   SESSION_MAX_AGE_SECONDS,
 } from "./session";
 import { calendarEventIdForJob } from "./confirm";
@@ -408,3 +413,185 @@ describe("the scheduling surface is isolated from the rest of the site", () => {
     }
   });
 });
+
+describe("an invitation prefills a reference and opens nothing", () => {
+  const REFERENCE = "BSCJ-FX0001";
+
+  test("it round-trips to the reference it was issued for", () => {
+    withSecret(() => {
+      const issued = issueSchedulingPrefill(REFERENCE);
+      assert.equal(readSchedulingPrefill(issued.value), REFERENCE);
+    });
+  });
+
+  test("editing the reference breaks the signature", () => {
+    withSecret(() => {
+      const [, expiry, signature] = issueSchedulingPrefill(REFERENCE).value.split(".");
+      assert.equal(
+        readSchedulingPrefill(`BSCJ-AAAAAA.${expiry}.${signature}`),
+        null,
+      );
+    });
+  });
+
+  test("a prefill is NOT a session", () => {
+    /*
+      The property the whole change rests on. A link now yields a filled-in
+      form, not an open job — so the value it carries must be useless to the
+      thing that decides what a tenant may see.
+    */
+    withSecret(() => {
+      const prefill = issueSchedulingPrefill(REFERENCE);
+      assert.equal(
+        readSchedulingSession(prefill.value),
+        null,
+        "a prefill was accepted as a scheduling session",
+      );
+    });
+  });
+
+  test("a session is not a prefill either", () => {
+    withSecret(() => {
+      const session = issueSchedulingSession("11111111-1111-4111-8111-111111111111");
+      assert.equal(readSchedulingPrefill(session.value), null);
+    });
+  });
+
+  test("an expired prefill is refused", () => {
+    withSecret(() => {
+      const issued = issueSchedulingPrefill(
+        REFERENCE,
+        new Date(Date.now() - 24 * 60 * 60 * 1000),
+      );
+      assert.equal(readSchedulingPrefill(issued.value), null);
+    });
+  });
+
+  test("a value signed with another secret is refused", () => {
+    const issued = withSecret(() => issueSchedulingPrefill(REFERENCE), "one-secret");
+    assert.equal(
+      withSecret(() => readSchedulingPrefill(issued.value), "another-secret"),
+      null,
+    );
+  });
+
+  test("only a well-formed reference survives the trip", () => {
+    // A signed value is still only as good as what was signed.
+    withSecret(() => {
+      const issued = issueSchedulingPrefill("not-a-reference");
+      assert.equal(readSchedulingPrefill(issued.value), null);
+    });
+  });
+
+  test("malformed values are refused rather than parsed", () => {
+    withSecret(() => {
+      for (const bad of ["", "a", "a.b", "a.b.c.d"]) {
+        assert.equal(readSchedulingPrefill(bad), null, bad);
+      }
+      assert.equal(readSchedulingPrefill(undefined), null);
+    });
+  });
+
+  test("it is scoped and expires like the session cookie", () => {
+    const expires = new Date("2026-10-01T00:00:00.000Z");
+    const options = schedulingPrefillCookieOptions(expires);
+    assert.equal(options.path, SCHEDULING_COOKIE_PATH);
+    assert.equal(options.httpOnly, true);
+    assert.equal(options.sameSite, "lax");
+    assert.deepEqual(options.expires, expires);
+  });
+
+  test("it is a different cookie from the session", () => {
+    assert.notEqual(SCHEDULING_COOKIE, SCHEDULING_PREFILL_COOKIE);
+  });
+});
+
+describe("the invitation link no longer opens a job", () => {
+  const route = readFileSync(
+    path.resolve(process.cwd(), "src/app/(schedule)/schedule/[token]/route.ts"),
+    "utf8",
+  );
+
+  test("it issues no scheduling session", () => {
+    /*
+      Links are forwarded, screenshotted and left in shared inboxes. While one
+      was a session, the URL alone showed an address, a reference and a booked
+      time.
+    */
+    assert.equal(
+      route.includes("issueSchedulingSession"),
+      false,
+      "the token route still issues a session",
+    );
+    assert.match(route, /issueSchedulingPrefill/);
+  });
+
+  test("it sends the holder to the entry form, not the appointment", () => {
+    assert.match(route, /new URL\("\/schedule", request\.url\)/);
+    assert.equal(route.includes("/schedule/appointment"), false);
+  });
+
+  test("a bad token ends up exactly where a good one does, bar the prefill", () => {
+    assert.match(route, /\/schedule\?problem=1/);
+  });
+
+  test("the token is never reflected into a redirect", () => {
+    assert.equal(/URL\(`[^`]*\$\{token\}/.test(route), false);
+  });
+});
+
+describe("the tenant surface carries no other navigation", () => {
+  const scheduleRoot = path.resolve(process.cwd(), "src/app/(schedule)");
+  const layout = readFileSync(
+    path.join(scheduleRoot, "schedule/layout.tsx"),
+    "utf8",
+  );
+
+  test("the logo goes to the entry screen", () => {
+    assert.match(layout, /href="\/schedule"/);
+  });
+
+  test("no link anywhere in the group leaves /schedule", () => {
+    /*
+      No marketing pages, no prices, no promotion. A tenant is not a prospect,
+      and the one piece of navigation they get is back to the start.
+    */
+    const files = collect(scheduleRoot).filter((f) => !f.includes(".test."));
+    for (const file of files) {
+      const source = readFileSync(file, "utf8");
+      for (const href of source.match(/href="[^"]*"/g) ?? []) {
+        const target = href.slice(6, -1);
+        assert.ok(
+          target.startsWith("/schedule") || target.startsWith("tel:") ||
+            target.startsWith("https://wa.me/"),
+          `${path.relative(process.cwd(), file)} links to ${target}`,
+        );
+      }
+    }
+  });
+
+  test("it shows no price anywhere", () => {
+    const files = collect(scheduleRoot).filter((f) => !f.includes(".test."));
+    for (const file of files) {
+      const source = readFileSync(file, "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, " ")
+        .replace(/\/\/.*$/gm, " ");
+      assert.equal(
+        /£|priceTotal|priceDisplay|calculatePrice/.test(source),
+        false,
+        `${path.relative(process.cwd(), file)} mentions money`,
+      );
+    }
+  });
+});
+
+/** Every source file under a directory. */
+function collect(directory: string): string[] {
+  const found: string[] = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const full = path.join(directory, entry.name);
+    if (entry.isDirectory()) found.push(...collect(full));
+    else if (/\.tsx?$/.test(entry.name)) found.push(full);
+  }
+  return found;
+}

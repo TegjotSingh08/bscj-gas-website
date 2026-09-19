@@ -109,7 +109,7 @@ export default async function ReconcilePage() {
 }
 
 /**
- * Late-booking alerts, by state.
+ * The email outbox, by state.
  *
  * "Queued" and "given up" are separated because they need different actions,
  * and a missing address is called out by name: it is a deployment gap that
@@ -125,10 +125,12 @@ function NotificationQueue({
   return (
     <section className="rounded-2xl border-2 border-navy-200 bg-white p-5">
       <h2 className="text-sm font-extrabold text-navy-900">
-        Late-booking alerts ({notifications.pending + notifications.failed})
+        Messages not yet sent ({notifications.pending + notifications.failed})
       </h2>
       <p className="mt-1 text-xs text-navy-600">
-        The agency and BSCJ are told when a tenant books after the deadline.
+        Tenant invitations, appointment confirmations and late-booking alerts.
+        A message is only ever described as <em>accepted by the provider</em> —
+        nothing here knows whether it arrived.
       </p>
       <ul className="mt-3 grid gap-1 text-sm text-navy-800">
         <li>{notifications.pending} queued, waiting to be sent</li>

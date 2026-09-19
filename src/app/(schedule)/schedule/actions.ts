@@ -6,6 +6,8 @@ import { redirect } from "next/navigation";
 import { accessByReference } from "@/lib/scheduling/access";
 import {
   SCHEDULING_COOKIE,
+  SCHEDULING_COOKIE_PATH,
+  SCHEDULING_PREFILL_COOKIE,
   issueSchedulingSession,
   schedulingCookieOptions,
 } from "@/lib/scheduling/session";
@@ -22,6 +24,10 @@ import {
  * The rate limits live in `accessByReference`, per caller *and* per reference,
  * so neither one machine sweeping many references nor many machines sweeping
  * one gets far.
+ *
+ * **An invitation link reaches this same door.** It fills the reference in and
+ * nothing else: the postcode is still required and is still what authorises,
+ * so a forwarded link is worth a half-filled form.
  */
 
 export type LookupState = { failed?: boolean };
@@ -60,6 +66,21 @@ export async function lookupJobAction(
     session.value,
     schedulingCookieOptions(session.expiresAt),
   );
+
+  /*
+    The invitation's prefill has done its job. Clearing it keeps a reference
+    from sitting in the browser after the session that replaced it — and means
+    a tenant who signs out of one job does not find the next form already
+    filled in with it.
+  */
+  store.delete({
+    name: SCHEDULING_PREFILL_COOKIE,
+    // The path has to match the one it was set with. `delete(name)` alone
+    // targets "/", which never matches a cookie scoped to /schedule — so the
+    // prefill survived the session that replaced it and the entry form came
+    // back filled in with a job the tenant had already finished with.
+    path: SCHEDULING_COOKIE_PATH,
+  });
 
   redirect("/schedule/appointment");
 }

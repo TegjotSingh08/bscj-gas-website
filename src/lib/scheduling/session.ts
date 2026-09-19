@@ -3,6 +3,7 @@ import "server-only";
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 import { SCHEDULING_COOKIE_PATH } from "./paths";
+import { normaliseJobReference } from "@/lib/jobs/reference";
 
 /**
  * The tenant's scheduling session.
@@ -35,6 +36,7 @@ export {
   SCHEDULING_COOKIE,
   SCHEDULING_COOKIE_PATH,
   SCHEDULING_CONFIRM_PATH,
+  SCHEDULING_PREFILL_COOKIE,
   isWithinSchedulingCookiePath,
 } from "./paths";
 
@@ -117,6 +119,91 @@ export function schedulingCookieOptions(expiresAt: Date) {
     httpOnly: true,
     sameSite: "lax" as const,
     // Secure in production; a local http dev server would drop it otherwise.
+    secure: process.env.NODE_ENV === "production",
+    path: SCHEDULING_COOKIE_PATH,
+    expires: expiresAt,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The invitation prefill
+// ---------------------------------------------------------------------------
+
+/**
+ * Long enough to finish typing a postcode, short enough to be worthless later.
+ *
+ * A prefill is a convenience, not a credential, so it does not need the hour a
+ * real session gets.
+ */
+export const PREFILL_MAX_AGE_SECONDS = 30 * 60;
+
+/** Its own label, so a prefill can never be read as a session. */
+const PREFILL_LABEL = "bscj:scheduling-prefill:v1";
+
+function prefillKey(): string {
+  const secret = process.env.AUTH_SECRET;
+  if (!secret) throw new SchedulingSecretMissingError();
+  return `${PREFILL_LABEL}:${secret}`;
+}
+
+/**
+ * `<reference>.<expiry>.<signature>`.
+ *
+ * What an invitation link hands to the entry form. It opens nothing: the form
+ * still asks for the postcode, and `accessByReference` still decides.
+ */
+export function issueSchedulingPrefill(
+  reference: string,
+  now = new Date(),
+): { value: string; expiresAt: Date } {
+  const expiresAt = new Date(now.getTime() + PREFILL_MAX_AGE_SECONDS * 1000);
+  const payload = `${reference}.${expiresAt.getTime()}`;
+  const signature = createHmac("sha256", prefillKey())
+    .update(payload)
+    .digest("base64url");
+  return { value: `${payload}.${signature}`, expiresAt };
+}
+
+/** The reference, or null. Null for every kind of failure, as ever. */
+export function readSchedulingPrefill(
+  value: string | undefined,
+  now = new Date(),
+): string | null {
+  if (!value) return null;
+
+  const parts = value.split(".");
+  if (parts.length !== 3) return null;
+
+  const [reference, expiry, signature] = parts;
+  const payload = `${reference}.${expiry}`;
+
+  let expected: string;
+  try {
+    expected = createHmac("sha256", prefillKey())
+      .update(payload)
+      .digest("base64url");
+  } catch {
+    return null;
+  }
+
+  const left = Buffer.from(signature, "utf8");
+  const right = Buffer.from(expected, "utf8");
+  if (left.length !== right.length) return null;
+  if (!timingSafeEqual(left, right)) return null;
+
+  const expiresAt = Number(expiry);
+  if (!Number.isFinite(expiresAt) || expiresAt <= now.getTime()) return null;
+
+  // Shape-checked on the way out too: a signed value is still only as good as
+  // what was signed, and nothing but a well-formed reference belongs in a form.
+  return normaliseJobReference(reference);
+}
+
+/** The attributes the prefill cookie is set with. */
+export function schedulingPrefillCookieOptions(expiresAt: Date) {
+  return {
+    httpOnly: true,
+    sameSite: "lax" as const,
     secure: process.env.NODE_ENV === "production",
     path: SCHEDULING_COOKIE_PATH,
     expires: expiresAt,

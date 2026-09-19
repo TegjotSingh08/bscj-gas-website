@@ -10,6 +10,20 @@
 
 export const SCHEDULING_COOKIE = "bscj-schedule";
 
+/**
+ * The reference an invitation link brought with it.
+ *
+ * Deliberately **not** a session. It carries one thing — a job reference — and
+ * a reference identifies without authorising: it is six readable characters
+ * designed to be quoted down the phone. Holding one lets the entry form fill
+ * itself in; it does not open a job, and the postcode is still required.
+ *
+ * Signed anyway, so a tenant cannot type somebody else's reference into their
+ * own cookie and have the form treat it as arriving from a real invitation —
+ * not that it would help them, since the postcode check is what decides.
+ */
+export const SCHEDULING_PREFILL_COOKIE = "bscj-schedule-ref";
+
 /** The path the cookie is scoped to. Nothing outside it ever sees the value. */
 export const SCHEDULING_COOKIE_PATH = "/schedule";
 
