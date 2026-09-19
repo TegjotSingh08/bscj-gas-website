@@ -467,3 +467,184 @@ export async function createEvent(input: CalendarEventInput): Promise<{
   const data = (await response.json()) as { id: string; htmlLink?: string };
   return { id: data.id, htmlLink: data.htmlLink };
 }
+
+// ---------------------------------------------------------------------------
+// Reading back, replacing and removing — what reconciliation needs
+// ---------------------------------------------------------------------------
+
+/**
+ * An event as Google currently holds it, reduced to what a decision needs.
+ *
+ * `status` is carried deliberately. Google keeps a cancelled event under its
+ * id, so "the id exists" and "the appointment exists" are different facts, and
+ * code that conflates them marks a job synced against an event nobody will
+ * ever attend.
+ */
+export type CalendarEventSnapshot = {
+  id: string;
+  /** "confirmed", "tentative" or "cancelled". */
+  status: string;
+  start: Date | null;
+  end: Date | null;
+  /** Whether it carries our booking marker, or our id prefix. */
+  isBooking: boolean;
+};
+
+function parseEventTime(value?: { dateTime?: string; date?: string }): Date | null {
+  const raw = value?.dateTime;
+  if (!raw) return null;
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/**
+ * One event by id, or null when Google has never heard of it.
+ *
+ * A 404 is a real answer — "there is nothing here" — so it comes back as null
+ * rather than as an error. Every other failure raises, because "we could not
+ * ask" must never be read as "it is not there".
+ */
+export async function fetchEvent(
+  eventId: string,
+): Promise<CalendarEventSnapshot | null> {
+  const credentials = readCredentials();
+  const token = await getAccessToken(credentials);
+
+  const response = await fetch(
+    `${CALENDAR_API}/calendars/${encodeURIComponent(credentials.calendarId)}/events/${encodeURIComponent(eventId)}`,
+    { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" },
+  );
+
+  if (response.status === 404 || response.status === 410) return null;
+  if (!response.ok) {
+    throw new CalendarApiError(
+      "Could not read the appointment from Google Calendar.",
+      response.status,
+    );
+  }
+
+  const item = (await response.json()) as CalendarEventItem & {
+    end?: { dateTime?: string; date?: string };
+  };
+
+  return {
+    id: item.id ?? eventId,
+    status: item.status ?? "confirmed",
+    start: parseEventTime(item.start),
+    end: parseEventTime(item.end),
+    // `isBookingEvent` refuses a cancelled entry, which is right for counting
+    // and wrong here: this asks whose event it is, not whether it is live.
+    isBooking: isBookingEvent({ ...item, status: "confirmed" }),
+  };
+}
+
+/**
+ * Whether an existing event is the appointment we meant to create.
+ *
+ * Identity, window and liveness, all three. An id collision on a *different*
+ * appointment is the case this is really for: the id is derived from the job
+ * and the slot, so a job that moves away from a time and later moves back
+ * produces the same id twice, and the event sitting there may be the cancelled
+ * remains of the first visit rather than the second.
+ */
+export function eventMatchesAppointment(
+  snapshot: CalendarEventSnapshot,
+  expected: { start: Date; end: Date },
+): boolean {
+  if (snapshot.status === "cancelled") return false;
+  if (!snapshot.isBooking) return false;
+  if (!snapshot.start || !snapshot.end) return false;
+  return (
+    snapshot.start.getTime() === expected.start.getTime() &&
+    snapshot.end.getTime() === expected.end.getTime()
+  );
+}
+
+/**
+ * Writes an event at a known id, whatever is there now.
+ *
+ * The recovery half of `createEvent`. A 409 from an insert means the id is
+ * taken — by an identical event, by a cancelled one, or by the remains of an
+ * appointment that has since moved — and the only way to end up with one
+ * correct live event under that id is to overwrite it. `status: "confirmed"`
+ * is explicit because reviving a cancelled entry is precisely what this is
+ * for.
+ *
+ * Returns "absent" when Google has forgotten the id entirely, so the caller
+ * can insert instead rather than treating a 404 as a failure.
+ */
+export async function replaceEvent(
+  input: CalendarEventInput,
+): Promise<"replaced" | "absent"> {
+  const credentials = readCredentials();
+  const token = await getAccessToken(credentials);
+
+  const response = await fetch(
+    `${CALENDAR_API}/calendars/${encodeURIComponent(credentials.calendarId)}/events/${encodeURIComponent(input.eventId)}`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        id: input.eventId,
+        status: "confirmed",
+        summary: input.summary,
+        description: input.description,
+        location: input.location,
+        start: { dateTime: input.start.toISOString(), timeZone: "Europe/London" },
+        end: { dateTime: input.end.toISOString(), timeZone: "Europe/London" },
+        extendedProperties: {
+          private: { [BOOKING_MARKER_KEY]: BOOKING_MARKER_VALUE },
+        },
+        reminders: {
+          useDefault: false,
+          overrides: [{ method: "popup", minutes: 60 }],
+        },
+      }),
+    },
+  );
+
+  if (response.status === 404 || response.status === 410) return "absent";
+  if (!response.ok) {
+    throw new CalendarApiError(
+      "Could not update the appointment in Google Calendar.",
+      response.status,
+    );
+  }
+  return "replaced";
+}
+
+/**
+ * Removes an event.
+ *
+ * "Already gone" is success, not failure — the caller's goal is that the event
+ * is not there, and a cleanup that has to be retried must be able to finish
+ * even when a previous attempt half-succeeded before dying. Anything else
+ * raises, so the outstanding work stays on the queue.
+ */
+export async function deleteEvent(
+  eventId: string,
+): Promise<"deleted" | "absent"> {
+  const credentials = readCredentials();
+  const token = await getAccessToken(credentials);
+
+  const response = await fetch(
+    `${CALENDAR_API}/calendars/${encodeURIComponent(credentials.calendarId)}/events/${encodeURIComponent(eventId)}`,
+    {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    },
+  );
+
+  if (response.status === 404 || response.status === 410) return "absent";
+  // Google answers 204 on success and 410 when it was already cancelled.
+  if (!response.ok) {
+    throw new CalendarApiError(
+      "Could not remove the appointment from Google Calendar.",
+      response.status,
+    );
+  }
+  return "deleted";
+}

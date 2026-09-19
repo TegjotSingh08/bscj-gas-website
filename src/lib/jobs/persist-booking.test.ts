@@ -32,7 +32,42 @@ function tableName(table: unknown): string {
   return symbol ? String((table as Record<symbol, unknown>)[symbol]) : "unknown";
 }
 
+/** A statement the fake can run, either on its own or inside a batch. */
+type FakeStatement = {
+  table: string;
+  row: Record<string, unknown>;
+  run: (sink: Record<string, Record<string, unknown>[]>) => unknown[];
+  onConflictDoNothing: () => FakeStatement;
+  returning: () => Promise<unknown[]>;
+  then: (resolve: (value: unknown) => void) => Promise<void>;
+};
+
 function makeDb() {
+  function statement(name: string, row: Record<string, unknown>): FakeStatement {
+    const run = (sink: Record<string, Record<string, unknown>[]>) => {
+      writes.push(name);
+      if (failOn === `insert:${name}`) throw new Error("write refused");
+      if (failOn === `duplicate:${name}`) {
+        // What Postgres raises on a unique-index violation, which is what
+        // aborts the whole batch and leaves nothing behind.
+        throw Object.assign(new Error("duplicate key value"), { code: "23505" });
+      }
+      (sink[name] ??= []).push(row);
+      return [{ id: (row.id as string) ?? `${name}-id` }];
+    };
+
+    const self: FakeStatement = {
+      table: name,
+      row,
+      run,
+      onConflictDoNothing: () => self,
+      returning: async () => run(inserted),
+      then: (resolve) =>
+        Promise.resolve(run(inserted)).then(() => resolve(undefined)),
+    };
+    return self;
+  }
+
   return {
     select() {
       return {
@@ -53,28 +88,27 @@ function makeDb() {
     },
     insert(table: unknown) {
       const name = tableName(table);
-      return {
-        values(row: Record<string, unknown>) {
-          const result = {
-            onConflictDoNothing: () => result,
-            returning: async () => {
-              writes.push(name);
-              if (failOn === `insert:${name}`) throw new Error("write refused");
-              if (failOn === `conflict:${name}`) return [];
-              (inserted[name] ??= []).push(row);
-              return [{ id: `${name}-id` }];
-            },
-            // The activity insert has no .returning().
-            then: (resolve: (value: unknown) => void) => {
-              writes.push(name);
-              if (failOn === `insert:${name}`) throw new Error("write refused");
-              (inserted[name] ??= []).push(row);
-              return Promise.resolve(undefined).then(resolve);
-            },
-          };
-          return result;
-        },
-      };
+      return { values: (row: Record<string, unknown>) => statement(name, row) };
+    },
+    /*
+      One transaction. The fake runs the statements in order and lets the first
+      failure abort the rest — which is the property the module now depends on:
+      a duplicate job must leave no customer and no property behind.
+    */
+    async batch(statements: FakeStatement[]) {
+      /*
+        Staged, then committed. A real transaction that aborts leaves nothing
+        behind, and a fake that kept the rows written before the failure would
+        prove the opposite of what these tests are for.
+      */
+      const staged: Record<string, Record<string, unknown>[]> = {};
+      const results: unknown[] = [];
+      for (const item of statements) results.push(item.run(staged));
+
+      for (const [name, rows] of Object.entries(staged)) {
+        (inserted[name] ??= []).push(...rows);
+      }
+      return results;
     },
   };
 }
@@ -279,7 +313,11 @@ describe("a tenancy is only recorded when there is a tenant", () => {
     });
     assert.ok(writes.includes("tenancy"));
     assert.equal(inserted.tenancy?.[0]?.name, "A Tenant");
-    assert.equal(inserted.job?.[0]?.tenancyId, "tenancy-id");
+    assert.equal(
+      inserted.job?.[0]?.tenancyId,
+      inserted.tenancy?.[0]?.id,
+      "the job points at the tenancy that was written with it",
+    );
   });
 });
 
@@ -313,19 +351,53 @@ describe("idempotency", () => {
   });
 
   test("a race that gets past the check is caught by the unique index", async () => {
-    // Both requests saw no job; the index decides, and the loser reads the
-    // winner's row rather than reporting a failure.
-    failOn = "conflict:job";
+    /*
+      Both requests saw no job; the index decides. The loser's whole
+      transaction is rolled back — which is the point of using a batch rather
+      than five sequential writes — so it leaves no customer and no property,
+      and it reads the winner rather than reporting a failure.
+    */
+    failOn = "duplicate:job";
     existingRows.job = [];
 
     const result = await persistWebsiteBooking(INPUT);
-    // The post-conflict re-read finds what the winner wrote.
-    assert.equal(result.status, "failed");
+
     assert.equal(
-      (result as { reason: string }).reason,
+      (result as { reason?: string }).reason,
       "conflict_without_row",
       "a conflict with no readable winner should be reported, not invented",
     );
+    assert.equal(
+      inserted.customer,
+      undefined,
+      "the losing transaction left an orphan customer behind",
+    );
+    assert.equal(
+      inserted.property,
+      undefined,
+      "the losing transaction left an orphan property behind",
+    );
+  });
+
+  test("the loser of a race reads the winner instead of failing", async () => {
+    failOn = "duplicate:job";
+    // The fake answers the pre-check and the post-conflict re-read from the
+    // same place, so the winner is only visible once the conflict has happened.
+    let reads = 0;
+    const originalJobRows = existingRows.job;
+    Object.defineProperty(existingRows, "job", {
+      configurable: true,
+      get() {
+        reads += 1;
+        return reads === 1 ? [] : [{ id: "the-winner" }];
+      },
+    });
+
+    const result = await persistWebsiteBooking(INPUT);
+    assert.deepEqual(result, { status: "exists", jobId: "the-winner" });
+
+    delete (existingRows as Record<string, unknown>).job;
+    existingRows.job = originalJobRows;
   });
 
   test("the job carries the idempotency key it was keyed on", async () => {
@@ -412,11 +484,21 @@ describe("failure can never reach the booking", () => {
     }
   });
 
-  test("a failed timeline entry does not fail the job", async () => {
-    // The job is the record. The timeline is commentary.
+  test("a failed timeline entry rolls the whole record back, and is reported as a value", async () => {
+    /*
+      A deliberate change of behaviour. The timeline entry used to be written
+      separately and swallowed on failure, which meant a job could exist with
+      no record of how it got there. It is now part of the same transaction, so
+      a failure leaves nothing half-written — and the booking is still not
+      affected, because the caller ignores this result and the failure leaves a
+      recoverable note instead (see `booking-recovery.ts`).
+    */
     failOn = "insert:activity";
     const result = await persistWebsiteBooking(INPUT);
-    assert.equal(result.status, "created");
+
+    assert.equal(result.status, "failed");
+    assert.equal(inserted.job, undefined, "a job survived a rolled-back batch");
+    assert.equal(inserted.customer, undefined);
   });
 });
 

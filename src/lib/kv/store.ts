@@ -23,6 +23,22 @@ export interface KvClient {
   set(key: string, value: string, ttlSeconds: number): Promise<void>;
   /** INCR, applying the TTL on first increment. Returns the new count. */
   incrementWithTtl(key: string, ttlSeconds: number): Promise<number>;
+  /**
+   * Keys matching a glob, walked with SCAN rather than KEYS.
+   *
+   * Added for the reconciliation queue, which has to find work nobody handed
+   * it a key for. SCAN because KEYS blocks the server for the length of the
+   * keyspace, and a booking store that stalls under a sweep is worse than a
+   * sweep that takes two round trips. Bounded by `limit`: a reconciliation
+   * pass is meant to be a bite, not an unbounded drain.
+   *
+   * Optional, because enumeration is an extra capability rather than part of
+   * what booking depends on: holds, the daily lock and rate limiting all work
+   * on keys the caller already knows. A store without it loses the sweep and
+   * nothing else, and the caller reports that rather than reporting an empty
+   * queue as "nothing outstanding".
+   */
+  scanKeys?(pattern: string, limit: number): Promise<string[]>;
 }
 
 /** Raised when the store cannot be reached. Never means "the slot is free". */
@@ -137,6 +153,36 @@ class UpstashClient implements KvClient {
       ttlSeconds,
     ]);
     return Number(result);
+  }
+
+  async scanKeys(pattern: string, limit: number) {
+    const found: string[] = [];
+    let cursor = "0";
+    // Bounded: SCAN gives no guarantee about how much each pass returns, so
+    // this walks a fixed number of times rather than until the cursor wraps.
+    for (let pass = 0; pass < 10 && found.length < limit; pass += 1) {
+      const result = await this.command([
+        "SCAN",
+        cursor,
+        "MATCH",
+        pattern,
+        "COUNT",
+        Math.max(limit, 50),
+      ]);
+      if (!Array.isArray(result) || result.length < 2) {
+        throw new KvUnavailableError();
+      }
+      cursor = String(result[0]);
+      const batch = result[1];
+      if (Array.isArray(batch)) {
+        for (const key of batch) {
+          if (typeof key === "string" && !found.includes(key)) found.push(key);
+          if (found.length >= limit) break;
+        }
+      }
+      if (cursor === "0") break;
+    }
+    return found;
   }
 }
 

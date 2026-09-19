@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { DatePicker } from "@/components/booking/DatePicker";
 import { TimePicker } from "@/components/booking/TimePicker";
@@ -9,6 +10,7 @@ import type { DayAvailability, Slot } from "@/components/booking/BookingFlow";
 import type { Reservation } from "@/lib/booking/attempt";
 import { HOLD_WARNING_SECONDS } from "@/lib/booking/holds";
 import type { Product, ProductId } from "@/lib/booking/products";
+import { SCHEDULING_CONFIRM_PATH } from "@/lib/scheduling/paths";
 
 /**
  * The tenant's picker.
@@ -60,14 +62,25 @@ async function loadAvailability(
 export function TenantScheduler({
   product,
   existingStart,
+  initialDays,
 }: {
   product: Product;
   /** Set when the tenant has already chosen, and is changing their mind. */
   existingStart: string | null;
+  /**
+   * The times as the server saw them when it rendered the page.
+   *
+   * Null means it could not read them, which is the same condition the client
+   * reports when a refresh fails. Passing them in rather than fetching on
+   * mount removes a round trip before the tenant can do anything, and removes
+   * the mount effect that set state the moment it resolved.
+   */
+  initialDays: DayAvailability[] | null;
 }) {
-  const [days, setDays] = useState<DayAvailability[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [unavailable, setUnavailable] = useState(false);
+  const router = useRouter();
+  const [days, setDays] = useState<DayAvailability[]>(initialDays ?? []);
+  const [loading, setLoading] = useState(false);
+  const [unavailable, setUnavailable] = useState(initialDays === null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [reservation, setReservation] = useState<Reservation | null>(null);
   const [changingTime, setChangingTime] = useState(false);
@@ -76,23 +89,23 @@ export function TenantScheduler({
   const [outcome, setOutcome] = useState<ConfirmOutcome>({ kind: "idle" });
 
   /*
-    State is set only after the fetch resolves. Setting it synchronously would
-    make the mount effect cascade a second render before it had anything new
-    to show.
+    Only ever called from an event handler — reserving, releasing, an expiry,
+    a failed confirmation. There is no mount effect: the first set of times
+    arrives with the page.
   */
   const refresh = useCallback(
     async (own: Reservation | null) => {
-      const result = await loadAvailability(product.id, own);
-      setDays(result ?? []);
-      setUnavailable(result === null);
-      setLoading(false);
+      setLoading(true);
+      try {
+        const result = await loadAvailability(product.id, own);
+        setDays(result ?? []);
+        setUnavailable(result === null);
+      } finally {
+        setLoading(false);
+      }
     },
     [product.id],
   );
-
-  useEffect(() => {
-    void refresh(null);
-  }, [refresh]);
 
   const availableDates = days
     .filter((day) => day.slots.length > 0)
@@ -166,7 +179,7 @@ export function TenantScheduler({
     setOutcome({ kind: "working" });
 
     try {
-      const response = await fetch("/api/schedule/confirm", {
+      const response = await fetch(SCHEDULING_CONFIRM_PATH, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         // The job is not sent. It comes from the signed session.
@@ -176,10 +189,14 @@ export function TenantScheduler({
         }),
       });
 
-      const data = (await response.json()) as { ok?: boolean; message?: string };
+      const data = (await response.json()) as {
+        ok?: boolean;
+        error?: string;
+        message?: string;
+      };
 
       if (response.ok && data.ok) {
-        window.location.assign("/schedule/confirmed");
+        router.push("/schedule/confirmed");
         return;
       }
 
@@ -189,6 +206,17 @@ export function TenantScheduler({
           data.message ??
           "We could not confirm that appointment. Please choose another time.",
       });
+
+      /*
+        The job moved underneath this request — another tab, or somebody in the
+        office. Reloading is the only thing that can help, and offering another
+        time would send the tenant round a loop that cannot succeed.
+      */
+      if (data.error === "conflict") {
+        router.refresh();
+        return;
+      }
+
       await refresh(null);
       setReservation(null);
     } catch {

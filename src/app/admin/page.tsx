@@ -64,6 +64,13 @@ export default async function AdminDashboardPage() {
           >
             Manage agencies
           </Link>
+          {" · "}
+          <Link
+            href="/admin/reconcile"
+            className="text-sm font-bold text-flame-600 underline"
+          >
+            Reconciliation
+          </Link>
         </p>
         <dl className="mt-5 grid gap-3 sm:grid-cols-2">
           <div className="rounded-xl bg-navy-50 px-4 py-3">

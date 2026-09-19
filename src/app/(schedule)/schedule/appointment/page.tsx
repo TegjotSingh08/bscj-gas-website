@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { loadTenantJob } from "@/lib/scheduling/access";
 import { readSchedulingSession, SCHEDULING_COOKIE } from "@/lib/scheduling/session";
 import { productFor } from "@/lib/booking/products";
+import { loadAvailability } from "@/lib/booking/availability";
 import { TenantScheduler } from "./TenantScheduler";
 
 export const dynamic = "force-dynamic";
@@ -15,6 +16,12 @@ export const dynamic = "force-dynamic";
  * job id in this route at all, which is the simplest way to guarantee one
  * cannot be substituted. A session that is missing, expired or tampered with
  * sends the tenant back to the entry page.
+ *
+ * The first set of times is read here rather than fetched by the browser after
+ * it paints. It is the same `loadAvailability` the public API route calls, so
+ * there is no second version of the rules, and the tenant sees their options
+ * in the first response instead of a spinner and a round trip. The picker
+ * still refreshes itself from `/api/availability` whenever something changes.
  */
 export default async function AppointmentPage() {
   const store = await cookies();
@@ -25,6 +32,15 @@ export default async function AppointmentPage() {
   if (!job) redirect("/schedule?problem=1");
 
   const product = productFor(job.productId);
+
+  /*
+    The job's own appointment is excluded, so a tenant who is changing their
+    mind is not blocked by the reservation they already hold.
+  */
+  const availability = await loadAvailability({
+    productId: job.productId,
+    ownJobId: job.jobId,
+  });
 
   return (
     <main className="mx-auto max-w-2xl px-4 py-8">
@@ -72,6 +88,7 @@ export default async function AppointmentPage() {
       <TenantScheduler
         product={product}
         existingStart={job.appointmentStart?.toISOString() ?? null}
+        initialDays={availability.status === "ok" ? availability.days : null}
       />
     </main>
   );

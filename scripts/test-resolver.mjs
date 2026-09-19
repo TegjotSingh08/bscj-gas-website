@@ -30,6 +30,7 @@ function firstExisting(basePath) {
 /** Specifiers that only exist inside the Next runtime. */
 const STUBS = {
   "next/server": path.resolve(process.cwd(), "scripts/next-server-stub.mjs"),
+  "next/headers": path.resolve(process.cwd(), "scripts/next-headers-stub.mjs"),
 };
 
 registerHooks({

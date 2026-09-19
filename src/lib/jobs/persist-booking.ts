@@ -1,5 +1,6 @@
 import "server-only";
 
+import { randomUUID } from "node:crypto";
 import { and, eq, isNull } from "drizzle-orm";
 
 import { getDb } from "@/lib/db/client";
@@ -39,6 +40,23 @@ type CustomerType = (typeof customerTypes)[number];
  * job, not the customer, not the property. The unique index on
  * `job.idempotency_key` is the backstop for the case where two requests race
  * past that check.
+ *
+ * **All of it, or none of it.** The customer, the property, the tenancy, the
+ * job and its first timeline entry go in one `db.batch`, which the Neon HTTP
+ * driver runs as a single transaction. They used to be five sequential
+ * `await`s, so a failure after the second left a customer and a property with
+ * no job attached to them — rows nothing would ever look at again and nothing
+ * would clean up. The unique key covered duplicate *jobs* and never covered
+ * that.
+ *
+ * The ids are generated here rather than by the database for the same reason:
+ * a batch cannot feed one statement's `RETURNING` into the next, so the job
+ * has to know its property's id before either row exists.
+ *
+ * The job insert deliberately does **not** say `onConflictDoNothing`. A
+ * duplicate must abort the whole transaction, so the losing request of a race
+ * leaves nothing behind at all; the violation is caught below and the loser
+ * reads the winner.
  */
 
 export type PersistBookingInput = {
@@ -147,70 +165,36 @@ export async function persistWebsiteBooking(
       )
       .limit(1);
 
-    const customerId =
-      foundCustomer?.id ??
-      (
-        await db
-          .insert(customers)
-          .values({
-            type: customerTypeColumn(input.customerType),
-            name: input.fullName,
-            company: input.company || null,
-            email,
-            phone: input.phone,
-          })
-          .returning({ id: customers.id })
-      )[0].id;
+    const customerId = foundCustomer?.id ?? randomUUID();
 
     // Find or create the property. Same customer, same postcode, same address
-    // line is the same property; anything else is a new one.
+    // line is the same property; anything else is a new one. A customer who
+    // did not exist a moment ago cannot own one, so the lookup is skipped.
     const postcode = input.postcode.trim().toUpperCase();
-    const [foundProperty] = await db
-      .select({ id: properties.id })
-      .from(properties)
-      .where(
-        and(
-          eq(properties.customerId, customerId),
-          eq(properties.postcode, postcode),
-          eq(properties.houseOrName, input.houseOrName),
-          eq(properties.street, input.street),
-        ),
-      )
-      .limit(1);
+    const [foundProperty] = foundCustomer
+      ? await db
+          .select({ id: properties.id })
+          .from(properties)
+          .where(
+            and(
+              eq(properties.customerId, customerId),
+              eq(properties.postcode, postcode),
+              eq(properties.houseOrName, input.houseOrName),
+              eq(properties.street, input.street),
+            ),
+          )
+          .limit(1)
+      : [];
 
-    const propertyId =
-      foundProperty?.id ??
-      (
-        await db
-          .insert(properties)
-          .values({
-            customerId,
-            houseOrName: input.houseOrName,
-            street: input.street,
-            town: input.town || null,
-            postcode,
-            accessNotes: input.accessNotes || null,
-          })
-          .returning({ id: properties.id })
-      )[0].id;
+    const propertyId = foundProperty?.id ?? randomUUID();
 
     /*
       A tenancy only when the customer actually gave tenant details. An empty
       tenancy row would assert that somebody lives there and we know who, which
       is a different claim from "not applicable".
     */
-    let tenancyId: string | null = null;
-    if (input.tenantName || input.tenantPhone) {
-      const [tenancy] = await db
-        .insert(tenancies)
-        .values({
-          propertyId,
-          name: input.tenantName || null,
-          phone: input.tenantPhone || null,
-        })
-        .returning({ id: tenancies.id });
-      tenancyId = tenancy.id;
-    }
+    const tenancyId =
+      input.tenantName || input.tenantPhone ? randomUUID() : null;
 
     /*
       The price snapshot.
@@ -229,10 +213,48 @@ export async function persistWebsiteBooking(
     });
 
     const priceTotalPence = Math.round(input.priceTotal * 100);
+    const jobId = randomUUID();
 
-    const [job] = await db
-      .insert(jobs)
-      .values({
+    // Order matters: a foreign key is checked as each statement runs, so the
+    // customer must be written before the property that references it.
+    const writes = [
+      ...(foundCustomer
+        ? []
+        : [
+            db.insert(customers).values({
+              id: customerId,
+              type: customerTypeColumn(input.customerType),
+              name: input.fullName,
+              company: input.company || null,
+              email,
+              phone: input.phone,
+            }),
+          ]),
+      ...(foundProperty
+        ? []
+        : [
+            db.insert(properties).values({
+              id: propertyId,
+              customerId,
+              houseOrName: input.houseOrName,
+              street: input.street,
+              town: input.town || null,
+              postcode,
+              accessNotes: input.accessNotes || null,
+            }),
+          ]),
+      ...(tenancyId
+        ? [
+            db.insert(tenancies).values({
+              id: tenancyId,
+              propertyId,
+              name: input.tenantName || null,
+              phone: input.tenantPhone || null,
+            }),
+          ]
+        : []),
+      db.insert(jobs).values({
+        id: jobId,
         reference: input.reference,
         customerId,
         // The person who booked is the person who pays, for a website booking.
@@ -268,39 +290,45 @@ export async function persistWebsiteBooking(
         calendarSyncState: "synced",
         source: "website_self",
         idempotencyKey: input.idempotencyKey,
-      })
-      // The race the early check above cannot cover: two requests that both
-      // saw no existing job. The index decides, and the loser reads the winner.
-      .onConflictDoNothing({ target: jobs.idempotencyKey })
-      .returning({ id: jobs.id });
-
-    if (!job) {
-      const [winner] = await db
-        .select({ id: jobs.id })
-        .from(jobs)
-        .where(eq(jobs.idempotencyKey, input.idempotencyKey))
-        .limit(1);
-      return winner
-        ? { status: "exists", jobId: winner.id }
-        : { status: "failed", reason: "conflict_without_row" };
-    }
-
-    // Best effort, and deliberately not fatal: a job that exists without its
-    // first timeline entry is still a recorded job.
-    try {
-      await db.insert(activities).values({
-        jobId: job.id,
+      }),
+      db.insert(activities).values({
+        jobId,
         propertyId,
         kind: "job.created",
         actor: "system",
         detail: { source: "website_self", reference: input.reference },
-      });
-    } catch {
-      // The job is the record. The timeline is commentary.
+      }),
+    ] as const;
+
+    await db.batch(writes as unknown as Parameters<typeof db.batch>[0]);
+
+    return { status: "created", jobId };
+  } catch (error) {
+    /*
+      Two submissions racing past the check above. The unique index decides,
+      the whole transaction is rolled back — so the loser leaves no customer
+      and no property behind — and the loser reads the winner rather than
+      reporting a failure.
+    */
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      (error as { code?: string }).code === "23505"
+    ) {
+      try {
+        const [winner] = await db
+          .select({ id: jobs.id })
+          .from(jobs)
+          .where(eq(jobs.idempotencyKey, input.idempotencyKey))
+          .limit(1);
+        if (winner) return { status: "exists", jobId: winner.id };
+      } catch {
+        // Fall through to the ordinary failure report.
+      }
+      report(input.reference, "duplicate_without_row");
+      return { status: "failed", reason: "conflict_without_row" };
     }
 
-    return { status: "created", jobId: job.id };
-  } catch (error) {
     report(
       input.reference,
       error instanceof Error ? error.name : "unknown_error",

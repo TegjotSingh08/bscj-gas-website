@@ -22,6 +22,13 @@
       "when": 1789656000000,
       "tag": "0002_property_uniqueness",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1789742400000,
+      "tag": "0003_calendar_reconciliation",
+      "breakpoints": true
     }
   ]
 }

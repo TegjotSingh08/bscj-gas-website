@@ -34,6 +34,27 @@ mock.module("@/lib/booking/holds", {
   },
 });
 
+/**
+ * Appointments Postgres holds that Google has not been told about.
+ *
+ * A tenant confirmation commits the job and writes the calendar event
+ * afterwards, so between the two — and for as long as a failed write goes
+ * unrepaired — the slot is in neither Redis nor Google, and availability used
+ * to offer it to the next customer who asked.
+ */
+let reservations: { start: Date; end: Date }[] = [];
+let supersededEventIds: string[] = [];
+let reservationsAvailable = true;
+
+mock.module("@/lib/booking/reservations", {
+  namedExports: {
+    fetchUnsyncedReservations: async () =>
+      reservationsAvailable
+        ? { status: "ok", reservations, supersededEventIds }
+        : { status: "unavailable" },
+  },
+});
+
 mock.module("@/lib/booking/rate-limit", {
   namedExports: {
     rateLimit: async () => ({ ok: true, retryAfterSeconds: 0 }),
@@ -73,6 +94,9 @@ async function slots(query = ""): Promise<
 beforeEach(() => {
   busy = [];
   bookings = [];
+  reservations = [];
+  supersededEventIds = [];
+  reservationsAvailable = true;
 });
 
 describe("availability is asked for one product at a time", () => {
@@ -346,5 +370,131 @@ describe("blocking events, weekends and the daily cap", () => {
 
     assert.deepEqual(await labelsOn(weekday), []);
     assert.ok((await labelsOn(sunday)).length > 0, "a full day closed another day");
+  });
+});
+
+
+describe("a committed appointment is not offered twice", () => {
+  test("a slot awaiting its calendar write is withdrawn", async () => {
+    const offered = await slots();
+    assert.ok(offered.length > 0, "nothing was offered to begin with");
+
+    const taken = offered[0];
+    reservations = [
+      { start: new Date(taken.startIso), end: new Date(taken.endIso) },
+    ];
+
+    const after = await slots();
+    assert.equal(
+      after.some((slot) => slot.startIso === taken.startIso),
+      false,
+      "a slot a tenant has already taken was offered to somebody else",
+    );
+  });
+
+  test("it is withdrawn however long the calendar write stays outstanding", async () => {
+    /*
+      The reason a longer Redis hold could not have fixed this. A hold expires
+      on a TTL; a failed sync waits for a person. The row is what reserves it.
+    */
+    const offered = await slots();
+    const taken = offered[0];
+    reservations = [
+      { start: new Date(taken.startIso), end: new Date(taken.endIso) },
+    ];
+
+    for (let pass = 0; pass < 3; pass += 1) {
+      const after = await slots();
+      assert.equal(
+        after.some((slot) => slot.startIso === taken.startIso),
+        false,
+      );
+    }
+  });
+
+  test("a reservation counts once, not twice, toward the day", async () => {
+    // Its own block is removed from the offered slots and it consumes one of
+    // the day's places. Counting it from Google as well would spend two.
+    const offered = await slots();
+    const taken = offered[0];
+    const date = taken.startIso.slice(0, 10);
+
+    reservations = [
+      { start: new Date(taken.startIso), end: new Date(taken.endIso) },
+    ];
+
+    const { body } = await availability();
+    const day = body.days!.find((d) => d.date === date)!;
+    assert.ok(
+      day.slots.length > 0,
+      "one reservation emptied the whole day, which means it was counted twice",
+    );
+  });
+
+  test("a database outage falls back to Google alone rather than showing nothing", async () => {
+    reservationsAvailable = false;
+    const offered = await slots();
+    assert.ok(
+      offered.length > 0,
+      "a database outage emptied the public availability page",
+    );
+  });
+});
+
+
+describe("a reschedule in flight does not close a day early", () => {
+  test("the event a job moved away from stops counting toward the cap", async () => {
+    /*
+      Until cleanup runs, one job is a Google booking at its old time and a
+      Postgres reservation at its new one. Counting both spends two of the
+      day's ten places on one visit — which, at nine bookings, closes the day
+      a booking early.
+    */
+    const day = (await slots())[0].startIso.slice(0, 10);
+    const at = (hour: number) =>
+      new Date(`${day}T${String(hour).padStart(2, "0")}:00:00.000Z`);
+
+    /*
+      Eight real bookings, plus the event a ninth job has moved away from,
+      plus that job's new time as a Postgres reservation. Ten by a naive
+      count, nine in truth.
+    */
+    bookings = Array.from({ length: 8 }, (_, i) => ({
+      id: `real-${i}`,
+      start: at(9),
+    }));
+    bookings.push({ id: "the-event-it-left", start: at(9) });
+
+    reservations = [{ start: at(18), end: at(19) }];
+    supersededEventIds = ["the-event-it-left"];
+
+    const { body } = await availability();
+    const target = body.days!.find((d) => d.date === day)!;
+
+    assert.ok(
+      target.slots.length > 0,
+      "a job counted twice closed the day one booking early",
+    );
+  });
+
+  test("without the discount the same day would be full", async () => {
+    // The control: the fix is doing the work, not the arithmetic being lenient.
+    const day = (await slots())[0].startIso.slice(0, 10);
+    const at = (hour: number) =>
+      new Date(`${day}T${String(hour).padStart(2, "0")}:00:00.000Z`);
+
+    bookings = Array.from({ length: 8 }, (_, i) => ({
+      id: `real-${i}`,
+      start: at(9),
+    }));
+    bookings.push({ id: "the-event-it-left", start: at(9) });
+
+    reservations = [{ start: at(18), end: at(19) }];
+    supersededEventIds = [];
+
+    const { body } = await availability();
+    const target = body.days!.find((d) => d.date === day)!;
+
+    assert.equal(target.slots.length, 0, "the control case was not full");
   });
 });

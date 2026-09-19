@@ -2,6 +2,8 @@ import "server-only";
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 
+import { SCHEDULING_COOKIE_PATH } from "./paths";
+
 /**
  * The tenant's scheduling session.
  *
@@ -15,7 +17,11 @@ import { createHmac, timingSafeEqual } from "node:crypto";
  *   to page through. Changing the job id in the cookie breaks the signature.
  * - **It is path-scoped to `/schedule`.** The browser never presents it to the
  *   portal, the admin area or the consumer API, so it cannot be mistaken for
- *   an agency session by anything downstream.
+ *   an agency session by anything downstream. Every endpoint that reads it
+ *   must therefore *live under that path* — see `SCHEDULING_CONFIRM_PATH` and
+ *   `isWithinSchedulingCookiePath`, which exist because a confirmation
+ *   endpoint at `/api/schedule/confirm` was never sent the cookie at all and
+ *   so refused every real tenant.
  * - **It carries no token material.** The scheduling token is spent at the
  *   door; the cookie that replaces it would be useless to an attacker who
  *   obtained a later request's headers without also having the signing key.
@@ -25,10 +31,12 @@ import { createHmac, timingSafeEqual } from "node:crypto";
  * though both ultimately trust the same secret.
  */
 
-export const SCHEDULING_COOKIE = "bscj-schedule";
-
-/** The path the cookie is scoped to. Nothing outside it ever sees the value. */
-export const SCHEDULING_COOKIE_PATH = "/schedule";
+export {
+  SCHEDULING_COOKIE,
+  SCHEDULING_COOKIE_PATH,
+  SCHEDULING_CONFIRM_PATH,
+  isWithinSchedulingCookiePath,
+} from "./paths";
 
 /** Long enough to choose a time without rushing; short enough to matter. */
 export const SESSION_MAX_AGE_SECONDS = 60 * 60;

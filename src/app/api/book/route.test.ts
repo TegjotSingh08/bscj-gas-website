@@ -339,6 +339,50 @@ mock.module("@/lib/jobs/persist-booking", {
   },
 });
 
+/**
+ * Appointments Postgres knows about and Google does not.
+ *
+ * A tenant confirmation commits the job and writes the calendar event
+ * afterwards, so for that window — and for as long as a failed write goes
+ * unrepaired — the slot is in neither Redis nor Google. The public flow used
+ * to be offered it.
+ */
+let unsyncedReservations: { start: Date; end: Date }[] = [];
+let reservationsAvailable = true;
+
+mock.module("@/lib/booking/reservations", {
+  namedExports: {
+    fetchUnsyncedReservations: async () => {
+      calls.push("db:reservations");
+      return reservationsAvailable
+        ? { status: "ok", reservations: unsyncedReservations }
+        : { status: "unavailable" };
+    },
+  },
+});
+
+let recoveryNotes: string[] = [];
+let recoveryAttempts: string[] = [];
+/** The recovery layer misbehaving: it is documented never to throw. */
+let recoveryThrows = false;
+
+mock.module("@/lib/jobs/booking-recovery", {
+  namedExports: {
+    recordUnpersistedBooking: async (input: { idempotencyKey: string }) => {
+      calls.push("recovery:record");
+      if (recoveryThrows) throw new Error("the reservation store exploded");
+      recoveryNotes.push(input.idempotencyKey);
+      return "recorded";
+    },
+    recoverUnpersistedBooking: async (key: string) => {
+      calls.push("recovery:retry");
+      if (recoveryThrows) throw new Error("the reservation store exploded");
+      recoveryAttempts.push(key);
+      return { status: "nothing_to_do" };
+    },
+  },
+});
+
 mock.module("@/lib/booking/rate-limit", {
   namedExports: {
     rateLimit: async () => ({ ok: true, retryAfterSeconds: 0 }),
@@ -397,6 +441,11 @@ beforeEach(() => {
   persistBehaviour = "records";
   persistCalls = [];
   persistedKeys = new Map();
+  unsyncedReservations = [];
+  reservationsAvailable = true;
+  recoveryNotes = [];
+  recoveryAttempts = [];
+  recoveryThrows = false;
   setKvClientForTesting(null);
 });
 
@@ -1860,5 +1909,177 @@ describe("persisting the booking to the V2 database", () => {
 
     assert.equal(second.status, 409);
     assert.equal(persistedKeys.size, 1, "a second job was recorded");
+  });
+});
+
+
+describe("a tenant's committed appointment is not offered to the public", () => {
+  test("a slot reserved by an unsynced job is refused", async () => {
+    /*
+      The double-booking window. A tenant confirmed this slot, the job is
+      committed, the 30-minute hold has been released and the calendar write
+      has not landed yet — so neither Redis nor Google knows, and the public
+      flow was offered the same time.
+    */
+    unsyncedReservations = [
+      {
+        start: new Date(SLOT_START),
+        end: new Date(new Date(SLOT_START).getTime() + 45 * 60000),
+      },
+    ];
+
+    const response = await POST(bookingRequest());
+
+    assert.equal(response.status, 409);
+    assert.equal((await response.json()).error, "slot_taken");
+    assert.equal(
+      calls.includes("google:create-event"),
+      false,
+      "a second customer was booked into a reserved slot",
+    );
+  });
+
+  test("it is checked before anything is written", async () => {
+    unsyncedReservations = [
+      {
+        start: new Date(SLOT_START),
+        end: new Date(new Date(SLOT_START).getTime() + 45 * 60000),
+      },
+    ];
+    await POST(bookingRequest());
+
+    assert.ok(calls.indexOf("db:reservations") < calls.length);
+    assert.equal(calls.includes("db:persist-job"), false);
+  });
+
+  test("a reservation elsewhere in the day does not block this slot", async () => {
+    const elsewhere = new Date(new Date(SLOT_START).getTime() + 5 * 60 * 60000);
+    unsyncedReservations = [
+      { start: elsewhere, end: new Date(elsewhere.getTime() + 45 * 60000) },
+    ];
+
+    const response = await POST(bookingRequest());
+    assert.equal(response.status, 200);
+  });
+
+  test("a database outage falls back to Google alone rather than refusing", async () => {
+    /*
+      A deliberate choice, stated rather than hidden: the public booking flow
+      has never depended on Postgres, and a database outage able to refuse a
+      paying customer would be the worse failure. The protection degrades to
+      exactly what existed before reservations were counted.
+    */
+    reservationsAvailable = false;
+
+    const response = await POST(bookingRequest());
+    assert.equal(response.status, 200, "a database outage refused a booking");
+  });
+});
+
+describe("a booking the database did not record stays recoverable", () => {
+  test("a failed persistence leaves a note, and the customer is never told", async () => {
+    persistBehaviour = "unavailable";
+
+    const response = await POST(bookingRequest());
+
+    assert.equal(response.status, 200, "the customer was told their booking failed");
+    assert.deepEqual(recoveryNotes, ["attempt-0001"]);
+  });
+
+  test("the note is written after the appointment exists, never before", async () => {
+    persistBehaviour = "unavailable";
+    await POST(bookingRequest());
+
+    assert.ok(
+      calls.indexOf("recovery:record") > calls.indexOf("google:create-event"),
+      "a recovery note was written for an appointment that did not exist yet",
+    );
+  });
+
+  test("a successful persistence leaves no note", async () => {
+    await POST(bookingRequest());
+    assert.deepEqual(recoveryNotes, []);
+  });
+
+  test("a duplicate submission retries the missing record before it is refused", async () => {
+    /*
+      Recognition and recovery, separated. The retry is still refused — a
+      second calendar event and a second confirmation email would both be
+      wrong — but the missing database row is re-attempted on the way past,
+      which is what the duplicate guard used to prevent entirely.
+    */
+    completedMarker = "event-abc123";
+
+    const response = await POST(bookingRequest());
+
+    assert.equal(response.status, 409);
+    assert.deepEqual(recoveryAttempts, ["attempt-0001"]);
+    assert.equal(
+      calls.includes("google:create-event"),
+      false,
+      "the duplicate created a second appointment",
+    );
+    assert.equal(
+      calls.includes("resend:send"),
+      false,
+      "the duplicate re-sent a confirmation",
+    );
+    assert.equal(
+      calls.includes("resend:notify"),
+      false,
+      "the duplicate re-alerted BSCJ",
+    );
+  });
+});
+
+
+describe("nothing added for recovery may fail a booking", () => {
+  test("Postgres unavailable still books, and still confirms the customer", async () => {
+    /*
+      The public flow has never depended on Postgres. Both the reservation
+      check and the operational record are allowed to fail, and neither may
+      change the answer the customer gets.
+    */
+    reservationsAvailable = false;
+    persistBehaviour = "unavailable";
+
+    const response = await POST(bookingRequest());
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.ok, true);
+    assert.ok(body.booking.reference);
+    assert.ok(calls.includes("google:create-event"));
+    assert.ok(calls.includes("resend:send"));
+  });
+
+  test("a recovery layer that throws cannot turn a booking into a 500", async () => {
+    // It is documented never to throw. This is what happens when it does.
+    persistBehaviour = "unavailable";
+    recoveryThrows = true;
+
+    const response = await POST(bookingRequest());
+
+    assert.equal(
+      response.status,
+      200,
+      "bookkeeping after the calendar write changed the customer's answer",
+    );
+    assert.equal((await response.json()).ok, true);
+  });
+
+  test("a duplicate submission cannot 500 either", async () => {
+    /*
+      `recoverUnpersistedBooking` is called before the handler's try/catch, so
+      a throw there would surface as an unhandled 500 on a repeat click of a
+      booking that already succeeded.
+    */
+    completedMarker = "event-abc123";
+    recoveryThrows = true;
+
+    const response = await POST(bookingRequest());
+
+    assert.equal(response.status, 409, "a repeat click became a server error");
+    assert.equal((await response.json()).error, "duplicate");
   });
 });

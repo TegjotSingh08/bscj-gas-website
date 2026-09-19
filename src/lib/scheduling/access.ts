@@ -27,6 +27,19 @@ import type { ProductId } from "@/lib/booking/products";
  *
  * Neither door reveals anything until it has fully succeeded, and what it then
  * reveals is one job — see `TenantJobView`, which is deliberately narrow.
+ *
+ * **Open question, deliberately not answered here: tenancy replacement.** A
+ * job holds `tenancy_id` and a frozen `property_snapshot.tenant` from the
+ * moment it was created. If the agency later replaces the tenancy — the
+ * household moved out — the job keeps pointing at the old one, and an
+ * invitation link issued to the previous tenant keeps working until it
+ * expires. Whether a replaced tenancy should revoke outstanding links, and
+ * whether the new household should inherit the appointment or be invited
+ * afresh, is a policy decision with a real cost either way: revoking strands a
+ * tenant mid-booking, and not revoking leaves a former occupant able to see an
+ * address they have left. It is recorded rather than decided — inventing an
+ * answer in an access-control function is how a policy nobody agreed to ends
+ * up being enforced.
  */
 
 /** What a tenant may see. Everything absent from this is absent on purpose. */
@@ -73,10 +86,46 @@ const SELECT = {
   job: jobs,
   property: properties,
   organisationName: agentOrganisations.name,
+  /**
+   * Whether the agency that commissioned the work is still an account.
+   *
+   * Read on **every** request rather than once at the door, for the same
+   * reason `lib/auth/session.ts` re-reads a user's role from the database: a
+   * session issued while an account was live must stop working when it is
+   * suspended, not eight hours later when a cookie happens to expire.
+   */
+  organisationIsActive: agentOrganisations.isActive,
 };
 
 /** The statuses a tenant may act on. Anything else is not theirs to change. */
 const SCHEDULABLE = ["tenant_outreach", "awaiting_tenant", "scheduled"];
+
+/**
+ * Whether this job is one a tenant may still act on.
+ *
+ * Two checks, and the second is the one that was missing. A suspended agency
+ * must not be able to keep booking BSCJ's engineer through its tenants — the
+ * account is the commercial relationship, and scheduling is the thing it buys.
+ *
+ * **Suspension refuses new scheduling. It does not cancel anything.** An
+ * appointment a tenant has already been given stays in the diary and stays in
+ * the calendar: a tenant is not a party to the agency's account, has no way to
+ * know it was suspended, and would otherwise find an engineer simply not
+ * arriving. Withdrawing existing work is a commercial decision for BSCJ to
+ * take deliberately, job by job, not a side effect of a flag.
+ *
+ * Consumer work has no organisation and is unaffected.
+ */
+function tenantMayAct(row: {
+  job: typeof jobs.$inferSelect;
+  organisationIsActive: boolean | null;
+}): boolean {
+  if (!SCHEDULABLE.includes(row.job.lifecycleStatus)) return false;
+  if (row.job.agentOrganisationId && row.organisationIsActive === false) {
+    return false;
+  }
+  return true;
+}
 
 /**
  * Loads a job for a tenant who has already been let in.
@@ -102,7 +151,7 @@ export async function loadTenantJob(
     .limit(1);
 
   if (!row) return null;
-  if (!SCHEDULABLE.includes(row.job.lifecycleStatus)) return null;
+  if (!tenantMayAct(row)) return null;
 
   return toView(row);
 }
@@ -245,7 +294,7 @@ export async function accessByReference(
     .limit(1);
 
   if (!row) return { status: "denied" };
-  if (!SCHEDULABLE.includes(row.job.lifecycleStatus)) return { status: "denied" };
+  if (!tenantMayAct(row)) return { status: "denied" };
 
   return { status: "ok", job: toView(row) };
 }

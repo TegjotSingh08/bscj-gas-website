@@ -53,6 +53,11 @@ import {
   sendBookingNotification,
 } from "@/lib/email/send";
 import { persistWebsiteBooking } from "@/lib/jobs/persist-booking";
+import { fetchUnsyncedReservations } from "@/lib/booking/reservations";
+import {
+  recordUnpersistedBooking,
+  recoverUnpersistedBooking,
+} from "@/lib/jobs/booking-recovery";
 import {
   buildEventId,
   CalendarApiError,
@@ -141,6 +146,34 @@ export async function POST(request: Request) {
   // a double click would be reported as an expired reservation.
   const alreadyBooked = await findCompletedBooking(data.idempotencyKey);
   if (alreadyBooked) {
+    /*
+      Two different facts, and conflating them was the defect.
+
+      "This attempt already created an appointment" is what the marker means,
+      and refusing the duplicate is right — a second Google event and a second
+      confirmation email would both be wrong. But the marker is written before
+      the operational record is, so a submission whose calendar write succeeded
+      and whose database write failed was refused here *and never retried*,
+      leaving a booking that exists only in the calendar and could not be
+      recovered without the customer booking again.
+
+      So recognition and recovery are separated. The retry is still refused;
+      before it is, the missing database record is re-attempted from the
+      durable note left when persistence failed. It creates no event and sends
+      no email — it only writes the row that is missing — and it is idempotent,
+      so a customer clicking five times causes one recovery and four no-ops.
+
+      Wrapped, belt and braces. `recoverUnpersistedBooking` returns every
+      failure as a value, and this sits outside the handler's try/catch: a
+      throw here would turn a repeat click into a 500 on a booking that
+      already succeeded.
+    */
+    try {
+      await recoverUnpersistedBooking(data.idempotencyKey);
+    } catch {
+      // Recovery is bookkeeping. It cannot be allowed to change the answer.
+    }
+
     return NextResponse.json(
       { error: "duplicate", message: "That booking has already been made." },
       { status: 409 },
@@ -278,7 +311,31 @@ export async function POST(request: Request) {
     const windowEnd = new Date(start.getTime() + 24 * 60 * 60000);
     const busy = await fetchBusyPeriods(windowStart, windowEnd);
 
-    if (!isSlotStillAvailable(data.slotStart, busy, now, config)) {
+    /*
+      Appointments that are committed but that Google has not been told about
+      yet — a tenant confirmation whose calendar write is `pending` or
+      `failed`. Without this the public flow would be offered, and would take,
+      a slot another customer already holds; the hold that used to cover that
+      window is released at commit and expires on a TTL either way.
+
+      A database outage returns nothing and the booking proceeds on Google
+      alone, which is precisely the protection that existed before this check.
+      That is a deliberate choice, not an oversight: the public booking flow
+      has never depended on Postgres, and making a database outage able to
+      refuse a paying customer would be the worse failure. See
+      `lib/booking/reservations.ts`.
+    */
+    const reserved = await fetchUnsyncedReservations(windowStart, windowEnd);
+    const reservations = reserved.status === "ok" ? reserved.reservations : [];
+    const busyWithReservations = [...busy, ...reservations];
+    // A job mid-reschedule sits in Google at its old time and in Postgres at
+    // its new one. Counting both would spend two of the day's places on one
+    // visit; the superseded event is dropped from the count below.
+    const superseded = new Set(
+      reserved.status === "ok" ? reserved.supersededEventIds : [],
+    );
+
+    if (!isSlotStillAvailable(data.slotStart, busyWithReservations, now, config)) {
       return NextResponse.json(
         {
           error: "slot_taken",
@@ -300,7 +357,15 @@ export async function POST(request: Request) {
     );
     const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60000);
     const bookingCounts = countBookingsByDate(
-      await fetchBookingEvents(dayStart, dayEnd),
+      [
+        ...(await fetchBookingEvents(dayStart, dayEnd)).filter(
+          (booking) => !superseded.has(booking.id),
+        ),
+        // Counted once, and only from the set Google cannot report. A `synced`
+        // job is already in the events read above, so including it here would
+        // spend two of the day's ten places on one appointment.
+        ...reservations.map((slot) => ({ start: slot.start })),
+      ],
       config,
     );
 
@@ -483,7 +548,7 @@ export async function POST(request: Request) {
     // Nothing about the response depends on the result. The customer is never
     // told whether our own bookkeeping succeeded.
     // ---------------------------------------------------------------
-    await persistWebsiteBooking({
+    const persistInput = {
       reference,
       idempotencyKey: data.idempotencyKey,
       calendarEventId: event.id,
@@ -510,7 +575,25 @@ export async function POST(request: Request) {
       appointmentStart: start,
       appointmentEnd: end,
       durationMinutes: product.durationMinutes,
-    });
+    };
+
+    const persisted = await persistWebsiteBooking(persistInput);
+
+    /*
+      The booking exists in Google and the customer has been told. If the
+      operational record did not land, the note that says so must survive the
+      outage that caused it — so it goes to the reservation store, not to the
+      database that just refused the write. See `lib/jobs/booking-recovery.ts`
+      for what happens when both are down.
+    */
+    if (persisted.status === "failed" || persisted.status === "not_configured") {
+      try {
+        await recordUnpersistedBooking(persistInput);
+      } catch {
+        // Same rule as above, one step later: the appointment exists and the
+        // customer has been told. Nothing below the calendar write may undo it.
+      }
+    }
 
     return NextResponse.json({
       ok: true,

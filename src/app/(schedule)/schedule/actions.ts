@@ -26,8 +26,15 @@ import {
 
 export type LookupState = { failed?: boolean };
 
-const GENERIC =
-  "We could not find an appointment with those details. Please check the reference and postcode on your letter.";
+/*
+  The message itself lives in `LookupForm`, next to the markup that renders it.
+
+  It used to be exported from here as well, and a `"use server"` module may
+  export nothing but async functions — Next refuses the module at evaluation
+  time, which meant **every** reference-and-postcode submission answered HTTP
+  500 before the action ran at all. Nothing imported the constant; it simply
+  broke the door it was meant to describe.
+*/
 
 export async function lookupJobAction(
   _previous: LookupState,
@@ -56,5 +63,3 @@ export async function lookupJobAction(
 
   redirect("/schedule/appointment");
 }
-
-export const GENERIC_LOOKUP_FAILURE = GENERIC;

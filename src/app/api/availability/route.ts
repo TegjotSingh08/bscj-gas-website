@@ -1,26 +1,14 @@
 import { NextResponse } from "next/server";
 
-import { bookingConfig, bookingConfigFor } from "@/lib/booking/config";
-import { isProductId, productFor, DEFAULT_PRODUCT_ID } from "@/lib/booking/products";
-import { findHeldSlots, isWellFormedToken } from "@/lib/booking/holds";
+import { isProductId, DEFAULT_PRODUCT_ID } from "@/lib/booking/products";
+import { isWellFormedToken } from "@/lib/booking/holds";
+import { loadAvailability } from "@/lib/booking/availability";
 import {
   clientKey,
   pruneRateLimits,
   rateLimit,
   rateLimits,
 } from "@/lib/booking/rate-limit";
-import {
-  bookableDates,
-  buildAvailability,
-  countBookingsByDate,
-} from "@/lib/booking/slots";
-import { parseIsoDate, zonedTimeToUtc } from "@/lib/booking/time";
-import {
-  CalendarApiError,
-  CalendarNotConfiguredError,
-  fetchBookingEvents,
-  fetchBusyPeriods,
-} from "@/lib/google/calendar";
 
 export const dynamic = "force-dynamic";
 
@@ -38,6 +26,12 @@ export const dynamic = "force-dynamic";
  * Availability is product-aware, because the two products are different
  * lengths and so rule out different times. `?product=` names one; omitting it
  * asks for the CP12, which is what every caller written before products did.
+ *
+ * The three sources it is computed from — Google free/busy, Google events and
+ * committed-but-unsynced jobs in Postgres — live in `lib/booking/availability`
+ * so this route, the tenant's page and the pre-write re-check cannot drift
+ * apart. `reservationsChecked` is deliberately not in the response: it is an
+ * internal degradation signal, and a customer has no use for it.
  */
 export async function GET(request: Request) {
   pruneRateLimits();
@@ -62,8 +56,6 @@ export async function GET(request: Request) {
   if (requestedProduct !== null && !isProductId(requestedProduct)) {
     return NextResponse.json({ error: "bad_product" }, { status: 400 });
   }
-  const product = productFor(requestedProduct ?? DEFAULT_PRODUCT_ID);
-  const config = bookingConfigFor(product.id);
 
   const ownSlot = request.headers.get("x-hold-slot");
   const ownToken = request.headers.get("x-hold-token");
@@ -72,62 +64,28 @@ export async function GET(request: Request) {
       ? { slotStart: ownSlot, token: ownToken }
       : undefined;
 
-  const now = new Date();
-  const dates = bookableDates(now, config);
-
-  const first = parseIsoDate(dates[0]);
-  const last = parseIsoDate(dates[dates.length - 1]);
-  if (!first || !last) {
-    return NextResponse.json({ error: "bad_range" }, { status: 500 });
-  }
-
-  const timeMin = zonedTimeToUtc({ ...first, hour: 0, minute: 0 }, bookingConfig.timeZone);
-  const timeMax = zonedTimeToUtc({ ...last, hour: 23, minute: 59 }, bookingConfig.timeZone);
-
   try {
-    /*
-      Two questions, two calls, because free/busy cannot answer the second.
+    const result = await loadAvailability({
+      productId: requestedProduct ?? DEFAULT_PRODUCT_ID,
+      own,
+    });
 
-      Free/busy says which times are occupied — by anything, including the
-      engineer's own diary. The events read says how many of those are
-      customers, which is what the daily cap counts. A day at its limit offers
-      nothing; a day with a school run on it simply loses those hours.
-    */
-    const [busy, bookings] = await Promise.all([
-      fetchBusyPeriods(timeMin, timeMax),
-      fetchBookingEvents(timeMin, timeMax),
-    ]);
-    const bookingCounts = countBookingsByDate(bookings, config);
-    const days = buildAvailability(dates, busy, now, config, bookingCounts);
-
-    // Remove slots reserved by other customers. If the store is unreachable
-    // this returns nothing held, and availability falls back to Google alone —
-    // the behaviour that existed before holds, where first confirmed wins.
-    const candidateSlots = days.flatMap((day) =>
-      day.slots.map((slot) => slot.startIso),
-    );
-    const held = await findHeldSlots(candidateSlots, own);
-
-    const withoutHeld = days.map((day) => ({
-      date: day.date,
-      slots: day.slots.filter((slot) => !held.has(slot.startIso)),
-    }));
+    if (result.status === "not_configured") {
+      return NextResponse.json({ error: "not_configured" }, { status: 503 });
+    }
+    if (result.status === "calendar_unavailable") {
+      return NextResponse.json({ error: "calendar_unavailable" }, { status: 502 });
+    }
 
     return NextResponse.json(
       {
-        days: withoutHeld,
-        productId: product.id,
-        timeZone: bookingConfig.timeZone,
+        days: result.days,
+        productId: result.productId,
+        timeZone: result.timeZone,
       },
       { headers: { "Cache-Control": "no-store" } },
     );
-  } catch (error) {
-    if (error instanceof CalendarNotConfiguredError) {
-      return NextResponse.json({ error: "not_configured" }, { status: 503 });
-    }
-    if (error instanceof CalendarApiError) {
-      return NextResponse.json({ error: "calendar_unavailable" }, { status: 502 });
-    }
+  } catch {
     return NextResponse.json({ error: "unknown" }, { status: 500 });
   }
 }

@@ -680,6 +680,18 @@ export const jobs = pgTable(
     calendarSyncState: calendarSyncStateEnum("calendar_sync_state")
       .notNull()
       .default("not_required"),
+    /**
+     * A calendar event this job has moved away from and not yet cleaned up.
+     *
+     * Rescheduling cannot be atomic across Postgres and Google: the
+     * replacement event is created before the superseded one can safely be
+     * removed, and the process may die between the two. Writing the old id
+     * here **in the same statement that moves the appointment** means the
+     * obsolete event is always recoverable — a crash leaves a row that names
+     * exactly what still has to be deleted, rather than a phantom appointment
+     * nobody knows about. Cleared once the deletion succeeds.
+     */
+    calendarPreviousEventId: text("calendar_previous_event_id"),
     /** Set when an appointment was accepted after the requested deadline. */
     deadlineExceptionAt: timestamp("deadline_exception_at", {
       withTimezone: true,
@@ -723,6 +735,10 @@ export const jobs = pgTable(
     index("job_deadline_idx").on(table.completeByDate),
     index("job_renewal_idx").on(table.nextRenewalDate),
     index("job_calendar_event_idx").on(table.calendarEventId),
+    // The reconciliation queue: every superseded event still to be removed.
+    index("job_calendar_cleanup_idx").on(table.calendarPreviousEventId),
+    // The other half of that queue: appointments Google does not reflect yet.
+    index("job_calendar_sync_state_idx").on(table.calendarSyncState),
   ],
 );
 

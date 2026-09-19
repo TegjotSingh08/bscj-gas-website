@@ -252,7 +252,10 @@ describe("enumeration is designed against", () => {
 
 describe("what the tenant surface will not accept or reveal", () => {
   const confirmRoute = readFileSync(
-    path.resolve(process.cwd(), "src/app/api/schedule/confirm/route.ts"),
+    path.resolve(
+      process.cwd(),
+      "src/app/(schedule)/schedule/api/confirm/route.ts",
+    ),
     "utf8",
   );
   const confirm = readFileSync(
@@ -315,11 +318,17 @@ describe("what the tenant surface will not accept or reveal", () => {
     assert.match(confirm, /acquireDailyBookingLock\(/);
   });
 
-  test("the status change is guarded by the status it expects to find", () => {
-    // Two confirmations racing past the checks both reach the update; the
-    // second matches no row rather than overwriting the first.
-    assert.match(confirm, /assertTransition\(/);
-    assert.match(confirm, /eq\(\s*jobs\.lifecycleStatus/);
+  test("the status change is guarded by the row it was decided against", () => {
+    /*
+      Two changes to one job racing past the checks both reach the update; the
+      second matches no row rather than overwriting the first. The status alone
+      was not enough — two reschedules both read `scheduled` — so the version
+      is guarded too.
+    */
+    assert.match(confirm, /canTransition\(/);
+    assert.match(confirm, /eq\(jobs\.lifecycleStatus, status\)/);
+    assert.match(confirm, /eq\(jobs\.appointmentStart, job\.appointmentStart\)/);
+    assert.match(confirm, /isNull\(jobs\.appointmentStart\)/);
   });
 
   test("scheduling never touches an invoice", () => {
@@ -335,11 +344,20 @@ describe("what the tenant surface will not accept or reveal", () => {
     assert.match(confirm, /calendarSyncState: "pending"/);
     assert.match(confirm, /calendarSyncState: "failed"/);
     assert.match(confirm, /calendarSyncState: "synced"/);
-    assert.match(confirmRoute, /syncJobToCalendar/);
+    assert.match(confirmRoute, /reconcileJobCalendar/);
   });
 
-  test("a duplicate calendar write is treated as success", () => {
+  test("a duplicate calendar write is verified rather than believed", () => {
+    // Google keeps cancelled events under their ids, so "the id is taken" and
+    // "the appointment is there" are different facts.
     assert.match(confirm, /DuplicateBookingError/);
+    assert.match(confirm, /eventMatchesAppointment\(/);
+    assert.match(confirm, /fetchEvent\(/);
+  });
+
+  test("nothing the domain raises can become a 500", () => {
+    assert.match(confirmRoute, /catch \{/);
+    assert.match(confirmRoute, /confirmTenantAppointment\(/);
   });
 });
 
