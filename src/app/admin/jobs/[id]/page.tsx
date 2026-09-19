@@ -26,6 +26,13 @@ import { assignRefusal, canAssign, canUnassign } from "@/lib/jobs/work";
 import type { JobLifecycleStatus } from "@/lib/jobs/lifecycle";
 import { ResendInvitation } from "../ResendInvitation";
 import { AssignEngineer } from "../AssignEngineer";
+import { ReleaseCertificate, SendCertificate } from "../CertificateReview";
+import {
+  certificateRecipientAddresses,
+  listJobCertificates,
+  listPendingDocuments,
+} from "@/lib/documents/certificates";
+import { storageStatus } from "@/lib/storage/documents";
 import { AdminNav } from "../../AdminNav";
 
 export const metadata: Metadata = {
@@ -97,11 +104,41 @@ export default async function AdminJobPage({
     hasAppointment: job.appointmentStart !== null,
   };
 
-  const [engineers, timeline, notifications] = await Promise.all([
-    listEngineers(scope),
-    jobTimeline(scope, job.id),
-    fetchNotificationStates(job.id),
-  ]);
+  const [engineers, timeline, notifications, pendingDocuments, allCertificates, recipients] =
+    await Promise.all([
+      listEngineers(scope),
+      jobTimeline(scope, job.id),
+      fetchNotificationStates(job.id),
+      listPendingDocuments(job.id),
+      listJobCertificates(job.id),
+      certificateRecipientAddresses(job.id),
+    ]);
+
+  const currentCertificate =
+    allCertificates.find((c) => c.status === "issued") ?? null;
+  const storage = storageStatus();
+
+  /*
+    What the outbox says about each recipient, **per certificate version**.
+    The key carries the certificate id, so a correction starts with a clean
+    slate — which is right: somebody told about the old version should hear
+    about the new one.
+  */
+  const sendStates = (certificateId: string) =>
+    notifications
+      .filter(
+        (n) =>
+          n.kind === "certificate-release" &&
+          n.idempotencyKey.includes(certificateId),
+      )
+      .map((n) => ({
+        recipient: n.recipient,
+        approvedAddress: n.recipientAddress,
+        state: n.state,
+        attempts: n.attempts,
+        lastError: n.lastError,
+        sentAt: n.sentAt,
+      }));
 
   const when = (value: Date | null) =>
     value
@@ -228,6 +265,138 @@ export default async function AdminJobPage({
               }
             />
           </dl>
+        </section>
+
+        <section className="mt-4 rounded-2xl border-2 border-navy-200 bg-white p-5">
+          <h2 className="text-sm font-extrabold text-navy-900">
+            Gas safety record
+          </h2>
+
+          {!storage.ready && (
+            <p
+              role="alert"
+              className="mt-2 rounded-xl border-2 border-flame-500 bg-flame-400/10 px-4 py-3 text-sm font-semibold text-navy-900"
+            >
+              Document storage is not available. {storage.requirement}
+            </p>
+          )}
+
+          {pendingDocuments.length === 0 && allCertificates.length === 0 ? (
+            <p className="mt-2 text-sm text-navy-700">
+              Nothing uploaded yet. The engineer uploads the PDF from their own
+              screen once they are on site.
+            </p>
+          ) : null}
+
+          {pendingDocuments.length > 0 && (
+            <div className="mt-3">
+              <p className="text-xs font-bold uppercase tracking-wide text-flame-600">
+                {pendingDocuments.length} waiting for review
+              </p>
+              <p className="mt-1 text-sm text-navy-700">
+                Uploaded and not released. The agency cannot see these, and
+                nobody has been emailed.
+              </p>
+              <div className="mt-3 grid gap-3">
+                {pendingDocuments.map((doc) => (
+                  <ReleaseCertificate
+                    key={doc.id}
+                    jobId={job.id}
+                    document={doc}
+                    isCorrection={currentCertificate !== null}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {allCertificates.length > 0 && (
+            <div className="mt-4">
+              <p className="text-xs font-bold uppercase tracking-wide text-navy-600">
+                Issued
+              </p>
+              <ul className="mt-2 grid gap-3">
+                {allCertificates.map((cert) => (
+                  <li
+                    key={cert.id}
+                    className={`rounded-xl border-2 px-4 py-3 ${
+                      cert.status === "issued"
+                        ? "border-trust-600 bg-trust-50"
+                        : "border-navy-200 bg-white"
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-baseline justify-between gap-2">
+                      <p className="text-sm font-extrabold text-navy-900">
+                        {cert.certificateNumber}
+                        {cert.version > 1 && ` · version ${cert.version}`}
+                      </p>
+                      <p className="text-xs font-bold uppercase tracking-wide text-navy-600">
+                        {cert.status === "issued" ? "Current" : "Superseded"}
+                      </p>
+                    </div>
+                    <dl className="mt-2">
+                      <Row label="Inspection date" value={cert.inspectionDate} />
+                      <Row label="Next due" value={cert.nextDueDate} />
+                      <Row
+                        label="Released"
+                        value={`${when(cert.issuedAt)}${
+                          cert.issuedByName ? ` by ${cert.issuedByName}` : ""
+                        }`}
+                      />
+                      {cert.correctionReason && (
+                        <Row label="Correction" value={cert.correctionReason} />
+                      )}
+                      {Array.isArray(cert.sentTo) && cert.sentTo.length > 0 && (
+                        <Row
+                          label="Sent to"
+                          value={
+                            <ul className="grid gap-0.5">
+                              {(cert.sentTo as { address?: string; at?: string }[]).map(
+                                (entry, index) => (
+                                  <li key={index} className="break-all text-xs">
+                                    {entry.address}
+                                    {entry.at
+                                      ? ` · ${new Date(entry.at).toLocaleString("en-GB", { timeZone: bookingConfig.timeZone, dateStyle: "medium", timeStyle: "short" })}`
+                                      : ""}
+                                  </li>
+                                ),
+                              )}
+                            </ul>
+                          }
+                        />
+                      )}
+                      <Row
+                        label="Document"
+                        value={
+                          cert.documentId ? (
+                            <a
+                              href={`/api/documents/${cert.documentId}`}
+                              target="_blank"
+                              rel="noopener"
+                              className="font-bold text-flame-600 underline"
+                            >
+                              {cert.filename ?? "Open the PDF"}
+                            </a>
+                          ) : (
+                            "No document"
+                          )
+                        }
+                      />
+                    </dl>
+
+                    {cert.status === "issued" && (
+                      <SendCertificate
+                        jobId={job.id}
+                        certificate={cert}
+                        recipients={recipients}
+                        states={sendStates(cert.id)}
+                      />
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </section>
 
         <JobMessages notifications={notifications}>

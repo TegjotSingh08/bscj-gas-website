@@ -29,6 +29,7 @@
  */
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import os from "node:os";
 
@@ -368,10 +369,27 @@ globalThis.fetch = async function fetchWithFixtures(input, init) {
       // A malformed payload is worth seeing as-is.
     }
     state.mail = state.mail ?? [];
+    /*
+      Attachments are recorded by shape and digest rather than in full: a
+      certificate is hundreds of kilobytes and the state file is read by
+      hand. The digest is what a test actually needs — it proves the bytes
+      that reached the provider are the bytes in the store, which is the
+      whole question.
+    */
+    const attachments = (body.attachments ?? []).map((file) => {
+      const raw = Buffer.from(file.content, "base64");
+      return {
+        filename: file.filename,
+        bytes: raw.byteLength,
+        sha256: createHash("sha256").update(raw).digest("hex"),
+      };
+    });
+
     state.mail.push({
       to: body.to,
       subject: body.subject,
       text: body.text,
+      attachments,
       idempotencyKey: init.headers?.["Idempotency-Key"] ?? null,
       at: new Date().toISOString(),
     });

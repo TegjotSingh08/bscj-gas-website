@@ -1131,6 +1131,16 @@ export const outboundEmails = pgTable(
     /** e.g. "tenant-scheduling-invitation". */
     kind: text("kind").notNull(),
     recipient: text("recipient").notNull(),
+    /**
+     * The address a person approved, frozen when the row was queued.
+     *
+     * Null for the kinds that resolve their recipient at send time — a
+     * tenant invitation goes to whatever address is current, and nobody
+     * approved a particular one. A certificate is the opposite: an
+     * administrator saw the address and chose it, so re-resolving later
+     * could send an approved document somewhere nobody approved.
+     */
+    recipientAddress: text("recipient_address"),
     idempotencyKey: text("idempotency_key").notNull(),
     state: emailStateEnum("state").notNull().default("pending"),
     attempts: integer("attempts").notNull().default(0),

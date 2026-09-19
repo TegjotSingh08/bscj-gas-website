@@ -18,12 +18,20 @@ export const OUTBOX_KINDS = {
   invitation: "tenant-scheduling-invitation",
   confirmation: "tenant-appointment-confirmation",
   lateBooking: "late-booking-exception",
+  /*
+    A released certificate, to one explicitly chosen recipient.
+
+    Keyed on the certificate **version** and the recipient, so a corrected
+    certificate is a new intent rather than a duplicate of the one already
+    sent, and two recipients are two rows that succeed or fail apart.
+  */
+  certificate: "certificate-release",
 } as const;
 
 export type OutboxKind = (typeof OUTBOX_KINDS)[keyof typeof OUTBOX_KINDS];
 
 /** Who a row is for. A role, never an address — resolved at send time. */
-export type OutboxRecipient = "tenant" | "agent" | "bscj";
+export type OutboxRecipient = "tenant" | "agent" | "bscj" | "customer";
 
 /** The kinds whose message describes a specific appointment. */
 export const APPOINTMENT_SCOPED_KINDS: OutboxKind[] = [
@@ -102,6 +110,8 @@ export type OutboxRow = {
   jobId: string;
   kind: string;
   recipient: string;
+  /** Frozen at queue time for the kinds a person approves. See the schema. */
+  recipientAddress?: string;
   idempotencyKey: string;
 };
 
@@ -133,4 +143,77 @@ export function lateBookingRows(input: {
       recipient,
     ),
   }));
+}
+
+/**
+ * A released certificate, keyed on the version, the recipient **and the
+ * approval**.
+ *
+ * The approval number is what makes a re-approval a different message. It
+ * has to be, because this key is also the provider's idempotency key: an
+ * administrator who notices the address changed, corrects it and sends
+ * again is asking for the document to reach a *different address*, and
+ * reusing the key would have Resend recognise it as the message it already
+ * accepted and quietly send nothing.
+ *
+ * So:
+ *
+ * - **A retry of the same intent** — the worker's own bounded attempts —
+ *   keeps the same key and the same payload, which is what makes a retry
+ *   after an ambiguous outcome safe.
+ * - **A newly approved address** is a new approval number, a new row and a
+ *   new key. The earlier row is left exactly as it was, because what was
+ *   attempted to the old address is history and deleting it would hide an
+ *   email that may well have arrived.
+ */
+export function certificateKey(
+  certificateId: string,
+  recipient: OutboxRecipient,
+  approval = 1,
+): string {
+  return `${OUTBOX_KINDS.certificate}:${certificateId}:${recipient}:${approval}`;
+}
+
+/**
+ * One row per recipient the administrator actually chose.
+ *
+ * The address is carried through and frozen on the row: it is the one the
+ * administrator had in front of them when they ticked the box, and the
+ * worker sends to that and nothing else. `approval` distinguishes a fresh
+ * approval of a *different* address from a retry of the same intent — see
+ * `certificateKey`.
+ */
+export function certificateRows(input: {
+  jobId: string;
+  certificateId: string;
+  recipients: readonly {
+    recipient: OutboxRecipient;
+    address: string;
+    /** 1 for the first approval, higher for a re-approval. */
+    approval?: number;
+  }[];
+}): OutboxRow[] {
+  return input.recipients.map(({ recipient, address, approval }) => ({
+    jobId: input.jobId,
+    kind: OUTBOX_KINDS.certificate,
+    recipient,
+    recipientAddress: address,
+    idempotencyKey: certificateKey(input.certificateId, recipient, approval ?? 1),
+  }));
+}
+
+/** The certificate a key was written for, or null if it names none. */
+export function certificateFromKey(key: string): string | null {
+  const parts = key.split(":");
+  // kind : certificateId : recipient : approval
+  if (parts.length !== 4 || parts[0] !== OUTBOX_KINDS.certificate) return null;
+  return parts[1] || null;
+}
+
+/** Which approval a key belongs to, so the next one can be numbered. */
+export function approvalFromKey(key: string): number | null {
+  const parts = key.split(":");
+  if (parts.length !== 4 || parts[0] !== OUTBOX_KINDS.certificate) return null;
+  const approval = Number.parseInt(parts[3], 10);
+  return Number.isInteger(approval) && approval > 0 ? approval : null;
 }

@@ -43,6 +43,8 @@ const PRIVATE_ROOTS = [
   path.join(APP_ROOT, "api", "admin"),
   path.join(APP_ROOT, "api", "portal"),
   path.join(APP_ROOT, "api", "engineer"),
+  /* Document downloads: one route, three audiences, permission from the row. */
+  path.join(APP_ROOT, "api", "documents"),
   /*
     The scheduled worker. Not a page a customer renders and not something the
     public bundle can reach — it is an internal endpoint that authenticates
@@ -109,7 +111,7 @@ describe("the admin gate", () => {
     const matcher = middleware.match(/matcher:[\s\S]*?\[([^\]]*)\]/)?.[1] ?? "";
     const entries = [...matcher.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
 
-    const privatePrefixes = ["/admin", "/api/admin", "/portal", "/api/portal", "/engineer", "/api/engineer"];
+    const privatePrefixes = ["/admin", "/api/admin", "/portal", "/api/portal", "/engineer", "/api/engineer", "/api/documents"];
     assert.ok(entries.length > 0, "the matcher is empty");
     assert.ok(entries.includes("/admin/:path*"));
 

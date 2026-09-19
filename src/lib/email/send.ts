@@ -80,7 +80,8 @@ type EmailKind =
   | "tenant-invitation"
   | "tenant-appointment"
   | "late-booking-agent"
-  | "late-booking-internal";
+  | "late-booking-internal"
+  | "certificate-release";
 
 /**
  * The one place an email is actually sent.
@@ -88,18 +89,38 @@ type EmailKind =
  * Both callers share it so the timeout, the failure categories and the
  * never-throw guarantee cannot drift apart between them.
  */
+export type EmailAttachment = {
+  /** What the recipient sees it saved as. Already sanitised by the caller. */
+  filename: string;
+  /** The bytes. Base64-encoded here, once, at the point of sending. */
+  content: Uint8Array;
+};
+
+/**
+ * The largest attachment this will send.
+ *
+ * Resend's own limit is on the whole encoded request. Base64 inflates by a
+ * third, so the bytes have to leave room for that plus the message body —
+ * 15 MB of PDF is comfortably inside it and far above the ~500 KB a
+ * certificate actually is. A file over this is a fault worth reporting, not
+ * something to try and then have the provider refuse.
+ */
+export const MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024;
+
 async function deliver({
   kind,
   to,
   email,
   reference,
   replyToAddress,
+  attachments,
 }: {
   kind: EmailKind;
   to: string;
   email: RenderedEmail;
   reference: string;
   replyToAddress: string;
+  attachments?: EmailAttachment[];
 }): Promise<EmailResult> {
   const credentials = readCredentials();
   if (!credentials) return { status: "not_configured" };
@@ -125,6 +146,14 @@ async function deliver({
         subject: email.subject,
         html: email.html,
         text: email.text,
+        ...(attachments && attachments.length
+          ? {
+              attachments: attachments.map((file) => ({
+                filename: file.filename,
+                content: Buffer.from(file.content).toString("base64"),
+              })),
+            }
+          : {}),
       }),
       signal: controller.signal,
       cache: "no-store",
@@ -258,24 +287,36 @@ export async function sendOutboxEmail({
   reference,
   idempotencySuffix,
   replyToAddress,
+  attachments,
 }: {
   kind:
     | "tenant-invitation"
     | "tenant-appointment"
     | "late-booking-agent"
-    | "late-booking-internal";
+    | "late-booking-internal"
+    | "certificate-release";
   to: string;
   email: RenderedEmail;
   reference: string;
   idempotencySuffix: string;
   replyToAddress?: string;
+  attachments?: EmailAttachment[];
 }): Promise<EmailResult> {
+  /*
+    `reference` plus the suffix becomes the provider's idempotency key, and
+    it is **stable across retries on purpose**: a second attempt after a
+    timeout must be recognised by Resend as the same message rather than
+    sent again. The one caller that deliberately varies it is the tenant
+    invitation, which mints a new link per attempt and is therefore a
+    genuinely different message.
+  */
   return deliver({
     kind,
     to,
     email,
     reference: `${reference}-${idempotencySuffix}`,
     replyToAddress: replyToAddress ?? replyTo(),
+    attachments,
   });
 }
 

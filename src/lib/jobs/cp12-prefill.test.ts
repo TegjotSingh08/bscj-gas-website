@@ -370,39 +370,35 @@ describe("the copied generator's safety outcomes", () => {
     }
   });
 
-  test("Not applicable is offered only where the check supports it", () => {
+  test("Not applicable is offered nowhere, pending a decision", () => {
     /*
-      The appliance table uses Yes / No / N/A, and that is not a reason to
-      put N/A on these. An emergency control, a tightness test, a pipework
-      inspection and equipotential bonding are applicable to any gas
-      installation being certificated; so is whether a CO alarm is fitted,
-      which is a fact about the property rather than a judgement.
+      It was briefly offered on "CO Alarm(s) tested and satisfactory", on the
+      reasoning that where no alarm is fitted there is nothing to test. That
+      reading came from the form's layout, not from an approved
+      specification, and it was never confirmed. An unapproved option on a
+      safety record is a claim the business has not made, so it is gone.
 
-      The exception is whether an alarm was *tested*: the check immediately
-      above it records whether one is fitted, and where none is, there is
-      nothing to test. That is read off the form's own structure, not
-      invented — and it is the single place N/A is retained, so BSCJ can
-      remove it with one edit if they read it differently.
+      The underlying question — what an engineer should record when no alarm
+      is fitted — is real and unresolved. It is recorded in the handoff as a
+      decision for BSCJ, not settled here.
     */
-    const selects = Object.fromEntries(
-      [...GENERATOR.matchAll(/<select class="outcome" id="(\w+)"[^>]*>([\s\S]*?)<\/select>/g)]
-        .map(([, id, options]) => [id, options]),
-    );
-
-    assert.ok(selects.coTested.includes('value="na"'), "coTested lost Not applicable");
-    for (const id of [
-      "coFitted",
-      "chkEmergency",
-      "chkTightness",
-      "chkPipework",
-      "chkBonding",
-    ]) {
+    const selects = [...GENERATOR.matchAll(/<select class="outcome" id="(\w+)"[^>]*>([\s\S]*?)<\/select>/g)];
+    assert.equal(selects.length, 6);
+    for (const [, id, options] of selects) {
       assert.equal(
-        selects[id].includes('value="na"'),
+        options.includes('value="na"'),
         false,
-        `${id} offers Not applicable without a basis for it`,
+        `${id} still offers an unapproved Not applicable`,
       );
+      // Three outcomes, and no more.
+      assert.equal((options.match(/<option /g) ?? []).length, 3, id);
     }
+  });
+
+  test("a draft that recorded the withdrawn option is not reinterpreted", () => {
+    // It goes back to Not assessed and the notice says what was stored.
+    assert.match(GENERATOR, /data\[id\] === 'na' && OUTCOME_IDS\.includes\(id\)/);
+    assert.match(GENERATOR, /'not applicable'/);
   });
 
   test("no finding is inferred from a legacy checkbox", () => {

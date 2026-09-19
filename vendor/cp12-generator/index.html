@@ -387,7 +387,7 @@
     <div class="coalarm-box">
       <div class="section-title" style="margin:-6px -8px 6px -8px;">CO Alarm(s)</div>
       <div class="check-line"><span>CO Alarm(s) fitted</span><select class="outcome" id="coFitted" aria-label="Outcome"><option value="" data-print="NOT ASSESSED">Not assessed</option><option value="yes" data-print="✔">Satisfactory</option><option value="no" data-print="✗">Not satisfactory</option></select></div>
-      <div class="check-line"><span>CO Alarm(s) tested and satisfactory</span><select class="outcome" id="coTested" aria-label="Outcome"><option value="" data-print="NOT ASSESSED">Not assessed</option><option value="yes" data-print="✔">Satisfactory</option><option value="no" data-print="✗">Not satisfactory</option><option value="na" data-print="N/A">Not applicable</option></select></div>
+      <div class="check-line"><span>CO Alarm(s) tested and satisfactory</span><select class="outcome" id="coTested" aria-label="Outcome"><option value="" data-print="NOT ASSESSED">Not assessed</option><option value="yes" data-print="✔">Satisfactory</option><option value="no" data-print="✗">Not satisfactory</option></select></div>
     </div>
   </div>
 
@@ -1187,8 +1187,11 @@ function reportLegacyOutcomes(originalDraft){
 
   const rows = ids.map(id => {
     const label = qs(id).closest('.check-line').querySelector('span').textContent.trim();
+    const was = legacyOutcomes[id] === 'na'
+      ? 'not applicable'
+      : (legacyOutcomes[id] ? 'ticked' : 'not ticked');
     return '<li>' + escapeHtml(label) + ' — was stored as <strong>' +
-           (legacyOutcomes[id] ? 'ticked' : 'not ticked') + '</strong></li>';
+           was + '</strong></li>';
   }).join('');
 
   showImportReport('bad', 'These safety checks need reassessing',
@@ -1443,6 +1446,16 @@ function loadDraft(){
           untouched by any of this.
         */
         legacyOutcomes[id] = data[id];
+        el.value = '';
+      }
+      else if(data[id] === 'na' && OUTCOME_IDS.includes(id)){
+        /*
+          "Not applicable" was offered on these checks for one build and was
+          never approved — see the handoff. A draft that recorded it is not
+          reinterpreted: the value is kept for the notice and the outcome
+          goes back to "not assessed" for the engineer to decide.
+        */
+        legacyOutcomes[id] = 'na';
         el.value = '';
       }
       else el.value = data[id];

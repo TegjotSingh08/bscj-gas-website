@@ -8,6 +8,13 @@ import { getDb } from "@/lib/db/client";
 import { activities, jobs, outboundEmails } from "@/lib/db/schema";
 import { invitationRow } from "@/lib/notifications/kinds";
 import { assignEngineer, unassignEngineer } from "@/lib/jobs/work-actions";
+import {
+  queueCertificateEmail,
+  releaseCertificate,
+  requeueCertificateEmail,
+} from "@/lib/documents/certificates";
+import { isoDateInZone } from "@/lib/booking/time";
+import { bookingConfig } from "@/lib/booking/config";
 import { eq } from "drizzle-orm";
 
 /**
@@ -159,5 +166,104 @@ export async function unassignEngineerAction(
 
   revalidatePath(`/admin/jobs/${jobId}`);
   revalidatePath("/admin/jobs");
+  return { message: result.message };
+}
+
+// ---------------------------------------------------------------------------
+// Certificates
+// ---------------------------------------------------------------------------
+
+/**
+ * Releasing a reviewed certificate, and sending it.
+ *
+ * Both start with `requireAdmin()` against a verified session, and both
+ * re-derive everything else in `documents/certificates.ts` — including that
+ * the caller's scope is unfiltered, because an agency may read its own
+ * released certificates and may never release or send one.
+ */
+
+export type ReleaseActionState = {
+  message?: string;
+  error?: string;
+  errors?: Record<string, string>;
+};
+
+export async function releaseCertificateAction(
+  _previous: ReleaseActionState,
+  form: FormData,
+): Promise<ReleaseActionState> {
+  const session = await requireAdmin();
+
+  const jobId = String(form.get("jobId") ?? "");
+  const documentId = String(form.get("documentId") ?? "");
+  if (!jobId || !documentId) return { error: "Nothing was named to release." };
+
+  const result = await releaseCertificate({
+    session,
+    jobId,
+    documentId,
+    details: {
+      certificateNumber: form.get("certificateNumber"),
+      inspectionDate: form.get("inspectionDate"),
+      nextDueDate: form.get("nextDueDate"),
+      correctionReason: form.get("correctionReason"),
+    },
+    // The server's day, not the browser's.
+    today: isoDateInZone(new Date(), bookingConfig.timeZone),
+  });
+
+  if (!result.ok) return { error: result.error, errors: result.errors };
+
+  revalidatePath(`/admin/jobs/${jobId}`);
+  revalidatePath(`/portal/jobs/${jobId}`);
+  return { message: result.message };
+}
+
+export async function queueCertificateEmailAction(
+  _previous: ReleaseActionState,
+  form: FormData,
+): Promise<ReleaseActionState> {
+  const session = await requireAdmin();
+
+  const certificateId = String(form.get("certificateId") ?? "");
+  const jobId = String(form.get("jobId") ?? "");
+  if (!certificateId) return { error: "No certificate was named." };
+
+  /*
+    Whatever boxes were ticked. Unrecognised values are dropped in
+    `queueCertificateEmail`, which checks each against the closed list of
+    recipient roles rather than trusting the form.
+  */
+  const recipients = form.getAll("recipients").map(String);
+
+  const result = await queueCertificateEmail({
+    session,
+    certificateId,
+    recipients,
+  });
+  if (!result.ok) return { error: result.error };
+
+  if (jobId) revalidatePath(`/admin/jobs/${jobId}`);
+  return { message: result.message };
+}
+
+export async function requeueCertificateEmailAction(
+  _previous: ReleaseActionState,
+  form: FormData,
+): Promise<ReleaseActionState> {
+  const session = await requireAdmin();
+
+  const certificateId = String(form.get("certificateId") ?? "");
+  const jobId = String(form.get("jobId") ?? "");
+  if (!certificateId) return { error: "No certificate was named." };
+
+  const result = await requeueCertificateEmail({
+    session,
+    certificateId,
+    recipient: form.get("recipient"),
+  });
+  if (!result.ok) return { error: result.error };
+
+  if (jobId) revalidatePath(`/admin/jobs/${jobId}`);
   return { message: result.message };
 }

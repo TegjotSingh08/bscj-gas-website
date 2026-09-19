@@ -47,6 +47,7 @@ const SIGN_IN_PAGES: readonly [string, string][] = [
   ["/api/portal", "/portal/login"],
   ["/admin", "/admin/login"],
   ["/api/admin", "/admin/login"],
+  ["/api/documents", "/admin/login"],
   ["/engineer", "/admin/login"],
   ["/api/engineer", "/admin/login"],
 ];
@@ -114,5 +115,11 @@ export const config = {
     "/api/portal/:path*",
     "/engineer/:path*",
     "/api/engineer/:path*",
+    /*
+      Document downloads. Read by staff, by the engineer on the job and by
+      the owning agency, so it sits under none of their prefixes — but it is
+      private, and the route re-derives the permission from the row anyway.
+    */
+    "/api/documents/:path*",
   ],
 };

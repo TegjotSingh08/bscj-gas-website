@@ -1,5 +1,9 @@
 import Link from "next/link";
 
+import { UploadCertificate } from "./UploadCertificate";
+import type { PendingDocument } from "@/lib/documents/certificates";
+import type { JobCertificate } from "@/lib/documents/certificates";
+
 /**
  * Getting the job's details into the certificate generator.
  *
@@ -22,9 +26,18 @@ import Link from "next/link";
 export function CertificateHandoff({
   jobId,
   reference,
+  pending,
+  released,
+  storageRequirement,
 }: {
   jobId: string;
   reference: string;
+  /** Uploaded and waiting for the office. */
+  pending: PendingDocument[];
+  /** Already released, so the engineer can see it went through. */
+  released: JobCertificate[];
+  /** Set when documents cannot be stored yet; says what is missing. */
+  storageRequirement: string | null;
 }) {
   return (
     <section className="mt-4 rounded-2xl border-2 border-navy-200 bg-white p-5">
@@ -74,7 +87,85 @@ export function CertificateHandoff({
             date and the certificate number for you.
           </p>
         </li>
+        <li>
+          <p className="font-bold text-navy-900">4. Upload it here</p>
+          {storageRequirement ? (
+            <p
+              role="alert"
+              className="mt-1 rounded-xl border-2 border-flame-500 bg-flame-400/10 px-4 py-3 text-sm font-semibold text-navy-900"
+            >
+              Uploads are not available yet. {storageRequirement} Keep the PDF
+              safe and send it to the office the way you do now.
+            </p>
+          ) : (
+            <UploadCertificate jobId={jobId} uploadedCount={pending.length} />
+          )}
+        </li>
       </ol>
+
+      {pending.length > 0 && (
+        <section className="mt-4 rounded-xl bg-navy-50 px-4 py-3">
+          <h3 className="text-xs font-bold uppercase tracking-wide text-navy-600">
+            Waiting for the office
+          </h3>
+          <ul className="mt-2 grid gap-2 text-sm">
+            {pending.map((doc) => (
+              <li key={doc.id} className="flex flex-wrap items-baseline gap-2">
+                <a
+                  href={`/api/documents/${doc.id}`}
+                  target="_blank"
+                  rel="noopener"
+                  className="font-bold text-flame-600 underline"
+                >
+                  {doc.filename}
+                </a>
+                <span className="text-xs text-navy-600">
+                  {(doc.sizeBytes / 1024).toFixed(0)} KB · uploaded{" "}
+                  {doc.uploadedAt.toLocaleString("en-GB", {
+                    dateStyle: "medium",
+                    timeStyle: "short",
+                  })}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs text-navy-600">
+            Not issued yet. An administrator has to read it first.
+          </p>
+        </section>
+      )}
+
+      {released.length > 0 && (
+        <section className="mt-4 rounded-xl bg-trust-50 px-4 py-3">
+          <h3 className="text-xs font-bold uppercase tracking-wide text-trust-600">
+            Issued
+          </h3>
+          <ul className="mt-2 grid gap-1 text-sm text-navy-800">
+            {released.map((cert) => (
+              <li key={cert.id}>
+                <strong className="font-extrabold">
+                  {cert.certificateNumber}
+                </strong>
+                {cert.version > 1 && ` (version ${cert.version})`} ·{" "}
+                {cert.status === "issued" ? "current" : "superseded"}
+                {cert.documentId && (
+                  <>
+                    {" · "}
+                    <a
+                      href={`/api/documents/${cert.documentId}`}
+                      target="_blank"
+                      rel="noopener"
+                      className="font-bold text-flame-600 underline"
+                    >
+                      open
+                    </a>
+                  </>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <p className="mt-4 text-xs leading-relaxed text-navy-600">
         The downloaded file contains customer details. Delete it once the

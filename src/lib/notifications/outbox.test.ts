@@ -23,6 +23,8 @@ type Row = {
   jobId: string | null;
   kind: string;
   recipient: string;
+  /** Frozen at queue time for a certificate. Null for the older kinds. */
+  recipientAddress?: string | null;
   idempotencyKey: string;
   state: string;
   attempts: number;
@@ -56,12 +58,25 @@ let tenantEmail: string | null = "tenant@example.invalid";
 /** Scheduling tokens the worker minted, so a test can count them. */
 let mintedTokens: { jobId: string; tokenHash: string }[] = [];
 let exceptionDetail: Record<string, unknown> | null;
-let sends: { kind: string; to: string; suffix: string }[] = [];
+let sends: {
+  kind: string;
+  to: string;
+  suffix: string;
+  attachments?: { filename: string; content: Uint8Array }[];
+}[] = [];
 let sendResult: { status: string; reason?: string; id?: string | null } = {
   status: "sent",
   id: "e1",
 };
 let internalRecipient: string | null = "ops@example.invalid";
+let customerEmail: string | null = "landlord@example.invalid";
+let organisationActive = true;
+let customerActive = true;
+let organisationOnJob = true;
+/** The certificate row the worker reads, or null to make it missing. */
+let certificateRow: Record<string, unknown> | null = null;
+/** What private storage answers with, and what it hands back. */
+let storedDocument: { ok: boolean; bytes?: Uint8Array } = { ok: true };
 
 const PROPERTY = {
   id: "property-1",
@@ -119,6 +134,15 @@ function makeDb() {
             if (name === "activity") {
               return exceptionDetail ? [{ detail: exceptionDetail }] : [];
             }
+            if (name === "certificate") {
+              return certificateRow ? [certificateRow] : [];
+            }
+            /*
+              Two different reads hit `job`: the one that loads the job for
+              delivery, and the eligibility re-check. Both shapes are
+              returned merged, so each caller finds the fields it
+              destructures without the fake having to guess which is which.
+            */
             return [
               {
                 job,
@@ -126,6 +150,10 @@ function makeDb() {
                 organisationName: "FIXTURE Lettings",
                 organisationEmail,
                 tenantEmail,
+                customerEmail,
+                organisationId: organisationOnJob ? "org-1" : null,
+                organisationActive,
+                customerActive,
               },
             ];
           };
@@ -226,18 +254,35 @@ mock.module("@/lib/db/client", {
   namedExports: { getDb: () => (configured ? makeDb() : null) },
 });
 
+/*
+  Private storage, stubbed. No filesystem, no network, no Blob store — the
+  worker only needs to know whether the bytes came back and what they were.
+*/
+mock.module("@/lib/storage/documents", {
+  namedExports: {
+    getDocument: async () =>
+      storedDocument.ok
+        ? { ok: true, bytes: storedDocument.bytes ?? new Uint8Array([1, 2, 3]) }
+        : { ok: false, error: "unavailable" },
+  },
+});
+
 mock.module("@/lib/email/send", {
   namedExports: {
     internalNotificationRecipient: () => internalRecipient,
+    // The worker reads the cap before it attaches anything.
+    MAX_ATTACHMENT_BYTES: 15 * 1024 * 1024,
     sendOutboxEmail: async (input: {
       kind: string;
       to: string;
       idempotencySuffix: string;
+      attachments?: { filename: string; content: Uint8Array }[];
     }) => {
       sends.push({
         kind: input.kind,
         to: input.to,
         suffix: input.idempotencySuffix,
+        attachments: input.attachments,
       });
       return sendResult;
     },
@@ -934,5 +979,312 @@ describe("a message in flight is invisible, not merely hard to claim", () => {
     // Shorter than the transport's own timeout would let a second worker in
     // while the first was still waiting on the provider.
     assert.ok(LEASE_SECONDS >= 60, `lease is only ${LEASE_SECONDS}s`);
+  });
+});
+
+/**
+ * A released certificate, delivered with the document attached.
+ *
+ * The behavioural half of §20.b. The database and private storage are both
+ * stubbed above, so nothing here touches a store, a provider or a row — but
+ * the worker's own decisions are real: which address it uses, whether it
+ * attaches, what it does when the bytes are unavailable, and what it
+ * refuses to send at all.
+ */
+describe("certificate emails", () => {
+  const CERT_ID = "cert-1";
+  const PDF = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 7, 7, 7, 9, 9]);
+
+  function queueCertificate(over: Partial<Row> = {}) {
+    rows = [
+      {
+        id: "row-cert",
+        jobId: JOB_ID,
+        kind: "certificate-release",
+        recipient: "agent",
+        recipientAddress: "approved@example.invalid",
+        idempotencyKey: `certificate-release:${CERT_ID}:agent:1`,
+        state: "pending",
+        attempts: 0,
+        lastError: null,
+        sentAt: null,
+        updatedAt: new Date(0),
+        ...over,
+      },
+    ];
+  }
+
+  beforeEach(() => {
+    certificateRow = {
+      id: CERT_ID,
+      certificateNumber: "BSCJ-CERT-1",
+      version: 1,
+      status: "issued",
+      inspectionDate: "2026-09-19",
+      nextDueDate: "2027-09-18",
+      correctionReason: null,
+      documentId: "doc-1",
+      filename: "certificate.pdf",
+      blobKey: `doc_${"a".repeat(48)}`,
+      sizeBytes: PDF.byteLength,
+    };
+    storedDocument = { ok: true, bytes: PDF };
+    organisationEmail = "approved@example.invalid";
+    customerEmail = "landlord@example.invalid";
+    organisationActive = true;
+    customerActive = true;
+    organisationOnJob = true;
+    // A certificate is about a record, not an appointment: the calendar
+    // must not gate it.
+    job.calendarSyncState = "pending";
+  });
+
+  test("the exact PDF is attached, and the message goes to the approved address", async () => {
+    queueCertificate();
+    const report = await drainOutbox();
+
+    assert.equal(report.accepted, 1);
+    assert.equal(sends.length, 1);
+    assert.equal(sends[0].to, "approved@example.invalid");
+    assert.equal(sends[0].attachments?.length, 1);
+    assert.equal(sends[0].attachments?.[0].filename, "certificate.pdf");
+    assert.deepEqual([...(sends[0].attachments?.[0].content ?? [])], [...PDF]);
+  });
+
+  test("it is not held behind the calendar", async () => {
+    /*
+      The visit has happened and the diary entry may long since have been
+      tidied away. An appointment-scoped message waits for `synced`; a
+      certificate must not, or the record is held behind a calendar nobody
+      needs any more.
+    */
+    queueCertificate();
+    job.calendarSyncState = "pending";
+    const report = await drainOutbox();
+    assert.equal(report.accepted, 1);
+    assert.equal(sends.at(-1)?.kind, "certificate-release");
+  });
+
+  test("the frozen address wins over a changed record", async () => {
+    /*
+      The whole point of freezing. If this re-resolved, an approved document
+      would be redirected to an address nobody approved — and the
+      eligibility check below is what makes that a refusal rather than a
+      silent redirect.
+    */
+    queueCertificate({ recipientAddress: "approved@example.invalid" });
+    organisationEmail = "approved@example.invalid";
+    await drainOutbox();
+    assert.equal(sends.at(-1)?.to, "approved@example.invalid");
+  });
+
+  test("an address changed after approval stops the send and flags it", async () => {
+    queueCertificate({ recipientAddress: "approved@example.invalid" });
+    organisationEmail = "someone.else@example.invalid";
+
+    const before = sends.length;
+    const report = await drainOutbox();
+
+    assert.equal(report.failed, 1);
+    assert.equal(sends.length, before, "it sent anyway");
+    assert.equal(rows[0].state, "failed");
+    assert.equal(rows[0].lastError, "approved_address_changed");
+  });
+
+  test("a deactivated agency is not sent to", async () => {
+    queueCertificate();
+    organisationActive = false;
+    const before = sends.length;
+    await drainOutbox();
+    assert.equal(sends.length, before);
+    assert.equal(rows[0].lastError, "agency_deactivated");
+  });
+
+  test("an agency no longer on the job is not sent to", async () => {
+    queueCertificate();
+    organisationOnJob = false;
+    const before = sends.length;
+    await drainOutbox();
+    assert.equal(sends.length, before);
+    assert.equal(rows[0].lastError, "agency_no_longer_on_job");
+  });
+
+  test("storage being unavailable retries rather than sending a bare message", async () => {
+    /*
+      The attachment *is* the message for a recipient with no account.
+      Sending without it would be worse than sending late — and the attempt
+      is given back, because waiting is not trying.
+    */
+    queueCertificate();
+    storedDocument = { ok: false };
+
+    const before = sends.length;
+    const report = await drainOutbox();
+
+    assert.equal(sends.length, before, "it sent without the certificate");
+    assert.equal(report.stillQueued, 1);
+    assert.equal(rows[0].state, "pending");
+    assert.equal(rows[0].attempts, 0, "the attempt was not given back");
+  });
+
+  test("a superseded version is stood down, not sent", async () => {
+    queueCertificate();
+    certificateRow = { ...certificateRow!, status: "superseded" };
+
+    const before = sends.length;
+    const report = await drainOutbox();
+
+    assert.equal(sends.length, before);
+    assert.equal(report.cancelled, 1);
+    assert.equal(rows[0].lastError, "superseded_by_correction");
+  });
+
+  test("a certificate whose document has gone is stood down", async () => {
+    queueCertificate();
+    certificateRow = { ...certificateRow!, documentId: null, blobKey: null };
+    await drainOutbox();
+    assert.equal(rows[0].lastError, "certificate_document_missing");
+  });
+
+  test("the provider key is identical across retries", async () => {
+    queueCertificate();
+    sendResult = { status: "failed", reason: "network" };
+    await drainOutbox();
+    const first = sends.at(-1)?.suffix;
+
+    // A retry once the lease has expired.
+    rows[0].updatedAt = new Date(Date.now() - 10 * 60 * 1000);
+    sendResult = { status: "sent", id: "e2" };
+    await drainOutbox();
+    const second = sends.at(-1)?.suffix;
+
+    assert.equal(first, second, "a retry would be a second email");
+    assert.match(first ?? "", /^cert-cert-1-agent-1$/);
+    assert.equal(rows[0].idempotencyKey, `certificate-release:${CERT_ID}:agent:1`);
+    assert.equal(rows[0].state, "sent");
+    assert.equal(rows[0].attempts, 2);
+  });
+
+  test("two workers on one row send once", async () => {
+    // The lease and the conditional claim, over the new kind.
+    queueCertificate();
+    const [a, b] = await Promise.all([drainOutbox(), drainOutbox()]);
+    assert.equal(a.claimed + b.claimed, 1);
+    assert.equal(sends.length, 1);
+  });
+
+  test("a missing address is reported rather than retried forever", async () => {
+    queueCertificate({ recipientAddress: null });
+    organisationEmail = null;
+    const report = await drainOutbox();
+    assert.equal(report.missingRecipient, 1);
+    assert.equal(rows[0].lastError, "agent_email_missing");
+  });
+});
+
+/**
+ * An ambiguous outcome, then a corrected address.
+ *
+ * The sequence the requeue fix exists for, run end to end against the
+ * worker:
+ *
+ * 1. A send is attempted and the answer is ambiguous — a timeout after the
+ *    provider may already have accepted it.
+ * 2. The worker retries. Same row, same key, same payload, so the provider
+ *    recognises it; nothing can be sent twice.
+ * 3. Somebody notices the address on file has changed and approves the new
+ *    one. That is a **new row with a new key**, so it actually goes — and
+ *    the earlier row is untouched, because whatever happened to it is
+ *    history.
+ */
+describe("an ambiguous outcome followed by a new approval", () => {
+  const CERT_ID = "cert-amb";
+  const PDF = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 4, 2]);
+
+  test("the retry reuses the key; the re-approval does not", async () => {
+    certificateRow = {
+      id: CERT_ID,
+      certificateNumber: "BSCJ-CERT-9",
+      version: 1,
+      status: "issued",
+      inspectionDate: "2026-09-19",
+      nextDueDate: "2027-09-18",
+      correctionReason: null,
+      documentId: "doc-9",
+      filename: "certificate.pdf",
+      blobKey: `doc_${"b".repeat(48)}`,
+      sizeBytes: PDF.byteLength,
+    };
+    storedDocument = { ok: true, bytes: PDF };
+    organisationEmail = "first@example.invalid";
+    organisationActive = true;
+    organisationOnJob = true;
+
+    rows = [
+      {
+        id: "row-1",
+        jobId: JOB_ID,
+        kind: "certificate-release",
+        recipient: "agent",
+        recipientAddress: "first@example.invalid",
+        idempotencyKey: `certificate-release:${CERT_ID}:agent:1`,
+        state: "pending",
+        attempts: 0,
+        lastError: null,
+        sentAt: null,
+        updatedAt: new Date(0),
+      },
+    ];
+
+    // 1. Ambiguous: the provider may have taken it; we never found out.
+    sendResult = { status: "failed", reason: "timeout" };
+    await drainOutbox();
+    const firstKey = sends.at(-1)?.suffix;
+    assert.equal(rows[0].attempts, 1);
+    assert.equal(rows[0].state, "pending");
+
+    // 2. The retry, once the lease expires. Identical key and payload.
+    rows[0].updatedAt = new Date(Date.now() - 10 * 60 * 1000);
+    sendResult = { status: "failed", reason: "timeout" };
+    await drainOutbox();
+    const retryKey = sends.at(-1)?.suffix;
+    assert.equal(retryKey, firstKey, "a retry would have been a second email");
+    assert.equal(sends.at(-1)?.to, "first@example.invalid");
+
+    // The address on file changes, and the old intent now refuses to send.
+    organisationEmail = "corrected@example.invalid";
+    rows[0].updatedAt = new Date(Date.now() - 10 * 60 * 1000);
+    const before = sends.length;
+    await drainOutbox();
+    assert.equal(sends.length, before, "it sent to an address nobody approved");
+    assert.equal(rows[0].lastError, "approved_address_changed");
+
+    // 3. The new approval: a second row, a second key, the new address.
+    rows.push({
+      id: "row-2",
+      jobId: JOB_ID,
+      kind: "certificate-release",
+      recipient: "agent",
+      recipientAddress: "corrected@example.invalid",
+      idempotencyKey: `certificate-release:${CERT_ID}:agent:2`,
+      state: "pending",
+      attempts: 0,
+      lastError: null,
+      sentAt: null,
+      updatedAt: new Date(0),
+    });
+    sendResult = { status: "sent", id: "e9" };
+    await drainOutbox();
+
+    const finalSend = sends.at(-1);
+    assert.equal(finalSend?.to, "corrected@example.invalid");
+    assert.notEqual(finalSend?.suffix, firstKey, "the provider would dedupe it away");
+    assert.deepEqual([...(finalSend?.attachments?.[0].content ?? [])], [...PDF]);
+
+    // The earlier attempt is preserved exactly as it ended.
+    const old = rows.find((r) => r.id === "row-1");
+    assert.equal(old?.state, "failed");
+    assert.equal(old?.lastError, "approved_address_changed");
+    assert.equal(old?.recipientAddress, "first@example.invalid");
   });
 });

@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 
 import { requireAgent } from "@/lib/auth/session";
 import { getAgencyJob } from "@/lib/jobs/portal-queries";
+import { listAgencyJobCertificates } from "@/lib/documents/certificates";
 import { productFor } from "@/lib/booking/products";
 import { fetchRecordedException } from "@/lib/notifications/outbox";
 import { LateBookingNotice } from "@/components/jobs/LateBookingNotice";
@@ -49,6 +50,14 @@ export default async function AgencyJobPage({
 
   const found = await getAgencyJob(organisationId, id);
   if (!found) notFound();
+
+  /*
+    Scoped by the organisation in its own `WHERE`, not filtered after. The
+    job was already proved to be theirs above; this proves the certificate
+    is too, which is the check that matters when a document is about to be
+    offered for download.
+  */
+  const certificates = await listAgencyJobCertificates(organisationId, id);
 
   const { job, property, landlord, priceSnapshot, invitation } = found;
   const product = productFor(job.productId);
@@ -155,6 +164,66 @@ export default async function AgencyJobPage({
             <Row label="Postcode" value={property.postcode} />
             <Row label="Landlord" value={landlord.name} />
           </dl>
+        </section>
+
+        <section className="mt-4 rounded-2xl border-2 border-navy-200 bg-white p-5">
+          <h2 className="text-sm font-extrabold text-navy-900">
+            Gas safety record
+          </h2>
+          {/*
+            Released certificates only, and only this organisation's. A PDF
+            that has been uploaded but not yet reviewed does not appear here
+            at all — not greyed out, not "pending", not mentioned. Until
+            somebody at BSCJ has read it, there is nothing to tell an agency
+            about, and a document listed before it is checked is one that
+            gets forwarded to a landlord.
+          */}
+          {certificates.length === 0 ? (
+            <p className="mt-2 text-sm text-navy-700">
+              No certificate has been issued for this job yet. It appears here
+              once the inspection has been carried out and the record checked.
+            </p>
+          ) : (
+            <ul className="mt-2 grid gap-3">
+              {certificates.map((cert) => (
+                <li
+                  key={cert.id}
+                  className={`rounded-xl border-2 px-4 py-3 ${
+                    cert.status === "issued"
+                      ? "border-trust-600 bg-trust-50"
+                      : "border-navy-200 bg-white"
+                  }`}
+                >
+                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                    <p className="text-sm font-extrabold text-navy-900">
+                      {cert.certificateNumber}
+                      {cert.version > 1 && ` · version ${cert.version}`}
+                    </p>
+                    <p className="text-xs font-bold uppercase tracking-wide text-navy-600">
+                      {cert.status === "issued" ? "Current" : "Superseded"}
+                    </p>
+                  </div>
+                  <dl className="mt-1">
+                    <Row label="Inspection date" value={cert.inspectionDate} />
+                    <Row label="Next due" value={cert.nextDueDate} />
+                    {cert.correctionReason && (
+                      <Row label="Correction" value={cert.correctionReason} />
+                    )}
+                  </dl>
+                  {cert.documentId && (
+                    <a
+                      href={`/api/documents/${cert.documentId}`}
+                      target="_blank"
+                      rel="noopener"
+                      className="mt-2 inline-block rounded-xl bg-flame-500 px-5 py-2.5 text-sm font-extrabold text-navy-900 hover:bg-flame-400"
+                    >
+                      Open the certificate
+                    </a>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
 
         <section className="mt-4 rounded-2xl border-2 border-navy-200 bg-white p-5">

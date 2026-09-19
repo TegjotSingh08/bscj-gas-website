@@ -16,6 +16,11 @@ import type { JobLifecycleStatus } from "@/lib/jobs/lifecycle";
 import { EngineerHeader } from "../../EngineerHeader";
 import { CompleteWork, StartWork } from "../../WorkControls";
 import { CertificateHandoff } from "../../CertificateHandoff";
+import {
+  listJobCertificates,
+  listPendingDocuments,
+} from "@/lib/documents/certificates";
+import { storageStatus } from "@/lib/storage/documents";
 
 export const metadata: Metadata = {
   title: "Job",
@@ -78,6 +83,20 @@ export default async function EngineerJobPage({
 
   const startable = canStart(facts, user.id);
   const completable = canComplete(facts, user.id);
+
+  /*
+    Only once the visit has started. Before that the handoff card is not
+    rendered at all, so there is nothing to read and nothing to pay for.
+  */
+  const certificateStage =
+    status === "in_progress" ||
+    status === "remedial_required" ||
+    status === "completed";
+
+  const [pendingDocuments, releasedCertificates] = certificateStage
+    ? await Promise.all([listPendingDocuments(job.id), listJobCertificates(job.id)])
+    : [[], []];
+  const storage = storageStatus();
 
   return (
     <>
@@ -173,10 +192,14 @@ export default async function EngineerJobPage({
           hour. Not offered before: a certificate for a visit that has not
           started is a certificate for a visit that has not happened.
         */}
-        {(status === "in_progress" ||
-          status === "remedial_required" ||
-          status === "completed") && (
-          <CertificateHandoff jobId={job.id} reference={job.reference} />
+        {certificateStage && (
+          <CertificateHandoff
+            jobId={job.id}
+            reference={job.reference}
+            pending={pendingDocuments}
+            released={releasedCertificates}
+            storageRequirement={storage.ready ? null : storage.requirement}
+          />
         )}
 
         {job.completionNotes && (

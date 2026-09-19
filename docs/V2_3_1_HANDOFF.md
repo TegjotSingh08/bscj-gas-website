@@ -1833,3 +1833,531 @@ Development database returned to **1 app_user, 0 business rows**; eight
   application serves its own copy, the two can drift without anyone noticing
   — this is more pressing than it was, not less.
 - Nothing in §13.6 is closed.
+
+---
+
+# 19. V2.6 — certificate upload, review and release
+
+> **Superseded in part by §20 (in progress).** §19 describes the workflow as
+> first built: fixture-only storage and an email that carried no document.
+> §20 replaces the storage adapter and the email, and records what is
+> actually activated. Where the two disagree, §20 is current.
+>
+> §20 stages, in order, each updated here as it completes:
+> **(a)** the real Blob adapter and failed-upload cleanup ·
+> **(b)** attachments, frozen recipients and eligibility re-checks ·
+> **(c)** the journey and its states · **(d)** verification.
+
+**Uncommitted, for review.** On `v2-compliance-platform` at `443a1b1`. No
+migration, no database altered beyond the fixture rows this phase created
+and removed, no real email, nothing pushed or deployed.
+
+## 19.1 No migration was needed
+
+The existing model already carried it. `document` has the blob key, the
+filename, the size, the uploader and the `sent_at` / `sent_to` pair;
+`certificate` has the number, the version, `supersedes_id`, the status, both
+dates and `correction_reason`.
+
+**Release is modelled as the existence of a `certificate` row**, not as a
+flag on the document. A document with no certificate is uploaded and unread;
+one with a certificate is released. That falls out of the schema rather than
+being bolted onto it, and it makes "only released certificates appear in the
+agency's view" a join rather than a condition somebody has to remember.
+
+## 19.2 The four acts
+
+Separate on purpose. Collapsing any two would mean a document reaching a
+customer because a file finished uploading.
+
+1. **Upload** — the assigned engineer, or an administrator. The bytes are
+   checked, stored, and only then recorded.
+2. **Review** — an administrator opens the PDF. The release form will not
+   submit until they have; not a guarantee, but a form completable without
+   the document ever being opened invites exactly that.
+3. **Release** — the number and both dates are typed, and a `certificate`
+   row is written. This is the moment the agency can see it.
+4. **Send** — only if somebody chooses to, to recipients they pick from a
+   list showing the actual addresses.
+
+## 19.3 What is enforced, and where
+
+Every check is server-side, re-derived from the row:
+
+| Act | Capability | Row check |
+|---|---|---|
+| Upload | `certificate:issue` | `canAccessAssignedJob` — the engineer on the job, or an admin. Job must be `in_progress`, `remedial_required` or `completed` |
+| Preview / download | signed in at all | Decided in `readDocumentFor` from the row |
+| Release | `certificate:issue` **and** an unfiltered scope | An agency can never release |
+| Email | `message:write` **and** an unfiltered scope | Recipients validated against a closed list |
+
+`readDocumentFor` is the only way bytes are read. Staff see everything; the
+assigned engineer sees their own job's, released or not; an agency sees its
+own organisation's **and only once released**. Everything else is the same
+404 — distinguishing "not yours" from "not there" turns an id into a probe.
+
+**A tenant scheduling session grants nothing here.** It is a token for
+choosing an appointment, it has never been an identity, and the download
+route does not recognise it. The tenant is also absent from the recipient
+list: whether they are entitled to a compliance document is a decision
+nobody has made.
+
+## 19.4 Storage
+
+`lib/storage/documents.ts`, driver-based. Keys are random and opaque —
+`doc_` plus 24 random bytes — encoding nothing about the job, because keys
+end up in log lines. A key from anywhere else is rejected by shape before it
+reaches a filesystem call.
+
+**Bytes are stored before any row is written.** A storage failure leaves the
+database untouched and the engineer is told nothing was saved, which is
+true. The reverse — an orphaned blob when the insert fails — is unreferenced
+and harmless, and is far better than a record pointing at a document that
+does not exist.
+
+**The `local` driver is implemented; `vercel-blob` is not.** Exact
+activation requirement, as reported by `storageStatus()`:
+
+> The Vercel Blob driver is not implemented. It needs the `@vercel/blob`
+> package added, an adapter written against `putDocument`/`getDocument`, and
+> `BLOB_READ_WRITE_TOKEN` issued with **private** access.
+
+Until then, every screen that would offer an upload says so and tells the
+engineer to send the PDF the way they do now. The local driver refuses to
+load in production, because a serverless filesystem is ephemeral and a
+certificate that vanishes on the next deploy is worse than one never stored.
+
+## 19.5 Nothing is invented, and nothing is overwritten
+
+- **The certificate number is typed.** No numbering scheme exists.
+- **Both dates are typed.** `compliance/renewal.ts` holds a confirmed rule
+  and this phase deliberately does not apply it — the date on the record is
+  the one a person read off the PDF. A test asserts the release module
+  cannot reach the renewal code.
+- **Six assessed outcomes and a generated PDF are not a review.** Nothing
+  treats an upload as an approval.
+- **An issued certificate is never overwritten.** Releasing over one writes
+  a new version with a required reason, marks the previous `superseded`, and
+  keeps both rows and both documents. The supersede and the insert go in one
+  batch, so there is never a job with two current certificates or none.
+- Releasing the same document twice is refused; queueing the same version to
+  the same recipient twice is refused by the unique key.
+
+## 19.6 Email
+
+A new outbox kind, `certificate-release`, keyed on **the certificate version
+and the recipient** — so a correction is a fresh intent and a double click
+is not. It uses the existing worker: claiming, leases, bounded retries.
+
+The queue carries a **role**, never an address. The administrator sees the
+resolved address before sending; the worker resolves it again at send time
+and records what it actually used in `document.sent_to`, appended so a
+second recipient does not erase the first, and only on acceptance.
+
+**The PDF is not attached.** A forwarded message carries a document about
+somebody's property to whoever it is forwarded to. The email states the
+facts already on the record and points the agency at their own account.
+
+At send time the worker re-checks that the version is still current, that
+the document still exists, and that an address resolves. A missing address
+is also refused *before* anything is queued, so a row that can only ever
+fail is never created.
+
+## 19.7 Verification
+
+Gates: `npm test` **0** (1661 tests, up from 1625) · `typecheck` **0** ·
+`lint` **0** · `build` **0**.
+
+**Isolated environment.** A copy of the working tree in the scratchpad, its
+own Next instance on port 3200, `scripts/browser-fixtures.mjs` intercepting
+Google, Upstash and Resend in-process, and `BSCJ_DOCUMENT_STORE=local`
+pointing at a scratch directory. No real service was contacted and no real
+email was sent — the messages below were counted at the stub.
+
+| Check | Result |
+|---|---|
+| Upload a JPEG named `.pdf` | refused: "That is not a PDF" |
+| Upload a truncated PDF | refused: "looks incomplete" |
+| Upload a valid PDF | stored `0600` under an opaque key; row records filename, 5000 bytes, `application/pdf` |
+| Upload as an **administrator** | accepted — the second, corrected document |
+| Document before release — no session | **401** |
+| — engineer on the job | **200** |
+| — administrator | **200** |
+| — **owning agency** | **404** (not released) |
+| — **rival agency** | **404** |
+| — unknown id, non-UUID | **404**, identical body |
+| Agency job page before release | "No certificate has been issued" — no filename, no link in the HTML |
+| Review form before the PDF is opened | submit disabled |
+| Release with a future inspection date and a due date before it | both refused by name |
+| Release with valid details | version 1 issued, timeline and audit written |
+| Document after release — owning agency | **200**; rival still **404**; rival's job page **404** |
+| Agency job page after release | number, both dates, working download |
+| Correction without a reason | refused |
+| Correction with a reason | v1 → `superseded`, v2 `issued` with `supersedes_id`, **both documents kept** |
+| Email with nothing selected | refused |
+| Email to both, addresses shown first | 2 rows queued, no address in either |
+| Queue the same version again | "Already queued for this version" |
+| Drain | 2 accepted; `document.sent_to` recorded both addresses; **no attachment** at the stub |
+| Address missing at send | `missingRecipient`, row stays `pending`, error `customer_email_missing` |
+| Address restored, lease expired, drain again | **sent**, attempts 1 → 2, record intact |
+| Storage absent (the other dev server) | upload control not rendered; the exact activation requirement shown |
+| Admin review screen at tablet width | readable; addresses, versions and both documents legible |
+
+Development database returned to **1 app_user, 0 business rows, 0 documents,
+0 certificates**. The `audit_event` log is append-only and now holds 21 rows
+from this and earlier phases' verification.
+
+## 19.8 The `coTested` "Not applicable" is gone
+
+It was inferred from the form's layout, never approved, and it has been
+removed — all six checks now offer **Not assessed / Satisfactory / Not
+satisfactory** only. A draft that recorded `na` during the one build where
+it existed is not reinterpreted: the value is kept for the notice and the
+outcome returns to *Not assessed*.
+
+**The unresolved business decision, recorded rather than settled:** what
+should an engineer record against *"CO Alarm(s) tested and satisfactory"*
+when no alarm is fitted? Today the honest answer is *Not satisfactory*,
+which may overstate a fault, or leaving it unassessed, which blocks export.
+BSCJ needs to say. It is one line in the generator either way.
+
+## 19.9 Limitations
+
+- **Production storage is not available.** The Blob driver is the one piece
+  of this phase that cannot be used live; §19.4 names exactly what it needs.
+  Everything else is verified against fixtures.
+- **No retention or deletion.** A stored document is kept indefinitely and
+  nothing removes one. A superseded certificate's PDF stays readable to
+  staff and to the agency.
+- **No upload-back from the generator.** The engineer still saves the PDF
+  and chooses it — the bridge is unchanged.
+- **`sent` means the provider accepted it.** No webhooks, no bounce
+  handling; unchanged from §13.6.
+- **An agency with no account cannot read its certificate**, and a customer
+  never can — the email tells them to ask. A customer-facing document link
+  would need a token, which this phase deliberately does not introduce.
+- **Storage failure mid-upload can orphan a blob.** Unreferenced and
+  harmless, but nothing sweeps them.
+- Nothing in §13.6 is closed.
+
+---
+
+# 20. V2.7 — production storage and useful certificate emails
+
+**In progress. Uncommitted.** Stages are recorded here as they complete.
+
+## 20.a Private Blob storage — **done**
+
+`@vercel/blob` **2.8.0** added as a dependency, and the adapter written in
+`src/lib/storage/blob.ts` against the SDK's own types.
+
+- **`access: "private"` on every call, and it is not a variable.** There is
+  no option, no environment variable and no fallback that makes a
+  certificate public. If private access were ever unavailable the upload
+  fails; it does not quietly become public.
+- **The authorisation boundary is unchanged.** `/api/documents/[id]` still
+  re-derives the caller's permission from the row and streams the bytes.
+  The blob URL never leaves the server and is never rendered.
+- Reads use `useCache: false` — a stale read after a correction would hand
+  somebody the wrong version of a safety record.
+- Everything lives under one `certificates/` prefix; `allowOverwrite` is
+  false, so a collision fails rather than destroying a certificate.
+
+**Failed-upload cleanup.** When the bytes are stored and the row then fails
+to write, the object is removed. Bounded by construction rather than by a
+limit: `deleteDocument` takes **one key**, never a prefix or a list; the key
+must match the shape this module mints; and the caller passes the key it
+minted seconds earlier in the same request, which no row references and
+which cannot be a released certificate. If the removal also fails, the key
+is written to the audit log as `document.orphaned` for removal by hand.
+
+**There is deliberately no sweep.** A sweep would decide "unreferenced" from
+a database read, and a read that failed or came back partial would delete
+issued certificates. An orphaned object costs a fraction of a penny; a
+deleted safety record cannot be recovered.
+
+**Configuration now has three states, not two:**
+
+| State | Meaning | What it takes |
+|---|---|---|
+| `ready` | Storage works | — |
+| Blob driver, **no credentials** | *Adapter implemented*, one setting away | Create a Blob store on the Vercel project so `BLOB_READ_WRITE_TOKEN` is injected. **No code change.** |
+| `none` | No driver selected | `BSCJ_DOCUMENT_STORE=local` + `BSCJ_DOCUMENT_DIR` for development, or attach a Blob store |
+
+`isDriverImplemented()` exposes the distinction so a screen can say "this
+needs a setting" rather than "this needs a release".
+
+**Activation, exactly:** create a Blob store in the Vercel project and
+attach it to this project. Vercel injects `BLOB_READ_WRITE_TOKEN`; the
+driver is then selected automatically and `storageStatus().ready` becomes
+true. Nothing else changes. **No store was provisioned and nothing was
+purchased.**
+
+## 20.b Useful emails — **done**
+
+**The exact released PDF is attached.** Fetched from private storage at send
+time and sent through the existing Resend transport, so a recipient with no
+portal account gets the document without needing one. The agency still gets
+its portal link as well.
+
+**Migration 0005** adds `outbound_email.recipient_address`, nullable. It is
+the one thing that genuinely could not be done without a schema change.
+
+- **The approved address is frozen when the row is queued.** It is the
+  address the administrator had on screen when they ticked the box. The
+  worker sends to that and does not re-resolve, so an edit to the agency's
+  or customer's record in between cannot silently redirect an approved
+  document. Rows queued before the column existed fall back to resolving,
+  which is the behaviour they were queued under.
+- **The certificate version is frozen by the key** — it carries the
+  certificate id, and a correction is a different id and therefore a
+  different intent.
+- **Eligibility is re-checked at send time**, which is a different question
+  from *where* to send: an agency removed from the job or deactivated, a
+  deactivated customer, or an address that has since changed all stop the
+  send. A revocation is **failed with a named reason** rather than quietly
+  cancelled, so the job appears on the needs-attention queue for a person.
+  Reasons: `agency_no_longer_on_job`, `agency_deactivated`,
+  `customer_deactivated`, `approved_address_changed`.
+
+**Failure handling, each distinguished:**
+
+| Situation | Outcome |
+|---|---|
+| Storage briefly unreachable | attempt refunded, row stays `pending` — the message is pointless without its attachment |
+| Attachment over 15 MB | `cancelled`, `attachment_too_large` — not retryable, it will be the same size next time |
+| Version superseded while queued | `cancelled`, `superseded_by_correction` |
+| Document row missing | `cancelled`, `certificate_document_missing` |
+| Eligibility revoked | **`failed`**, named reason, flagged for review |
+| Provider refused / timed out | ordinary bounded retry |
+
+**Provider idempotency is stable across retries** — the key is
+`certificate-release-<reference>-cert-<certificateId>-<recipient>`, which
+does not change between attempts, so a retry after a timeout is recognised
+by Resend as the same message. The tenant invitation remains the one
+deliberate exception, because it mints a new link each attempt.
+
+**Nothing is marked accepted before the provider accepts.** `document.sentTo`
+is appended only on a `sent` result, and records the recipient, the address
+actually used, the version and that the PDF was attached.
+
+No billing information is in the message and the recipient policy is
+unchanged: agency and customer only.
+
+## 20.c The journey — **done**
+
+Upload → private preview → explicit review/release → agency download →
+optional email, coherent on desktop and tablet.
+
+- **The version is on the send panel**, and the outbox state is shown per
+  recipient: queued (with attempt count), accepted by the provider, or not
+  sent with the reason in words rather than an error code.
+- **A changed address is called out** next to the recipient — "approved for
+  X, which is no longer the address on file" — rather than silently
+  ignored.
+- **Recovery:** a failed or stood-down recipient gets a *Queue again to the
+  address above* control. It reuses the same row and the same provider key,
+  so the provider still sees one message, and re-approves whatever address
+  is on file now — which is the one displayed immediately above the button.
+- **What actually went out** is listed on each certificate from
+  `document.sentTo`: the address used and when, per version.
+- Previous issued versions stay listed and downloadable, marked superseded.
+- Acceptance is always worded as *accepted by the email provider*, never as
+  delivery.
+- **Opening the PDF still only enables the release form.** It is a prompt to
+  read, and the wording says releasing is the reviewer's assertion — nothing
+  infers that opening a file proves its contents.
+
+## 20.d Verification
+
+Gates: `npm test` **0** (**1711 tests**, up from 1661) · `typecheck`
+**0** · `lint` **0** · `build` **0**.
+
+**Isolated fixtures**, a separate Next instance on port 3200 with Google,
+Upstash and Resend intercepted in-process and a local document store:
+
+| Check | Result |
+|---|---|
+| Engineer upload of a 7,000-byte PDF | stored; on-disk **sha256 matches the uploaded bytes exactly** |
+| Download by admin | bytes returned match the same sha |
+| Before release: engineer / admin | **200** |
+| Before release: owning agency / rival | **404** / **404** |
+| Release with number and both dates | issued, version 1 |
+| After release: owning agency | **200**, bytes match the same sha |
+| After release: rival agency | **404**; rival on the job page **404** |
+| Agency job page | number, both dates, working download |
+
+**The adapter against SDK-compatible mocks** (`blob.test.ts`, 16 tests) —
+explicitly *not* live-service verification. `put` always carries
+`access: "private"`, under the `certificates/` prefix, with
+`addRandomSuffix: false` and `allowOverwrite: false`; `get` reassembles a
+chunked stream into exactly the stored bytes, bypasses the cache, and
+treats 304 and null as failures rather than as an empty body; `del` removes
+one pathname; every SDK error is returned rather than thrown. Static checks
+assert the string `public` appears nowhere, that delete cannot take a list,
+and that the module does not import the list API — so no sweep is possible.
+
+**The store contract against a real directory** (`store.test.ts`, 9 tests):
+bytes round-trip, keys are opaque and unique, a key from anywhere else
+cannot reach the filesystem, a delete removes exactly one object and leaves
+an unrelated file untouched, and the three configuration states report
+correctly.
+
+**The worker against a mocked database and storage** (`outbox.test.ts`, 12
+new tests): the exact PDF bytes are attached; the frozen address is used;
+a changed address **fails with `approved_address_changed` and does not
+send**; a deactivated agency and an agency removed from the job likewise;
+storage being unavailable refunds the attempt and stays queued **without
+sending a bare message**; a superseded version is stood down; the provider
+key is byte-identical across a retry; two concurrent workers send once.
+
+### Blocker: the email path could not be run end-to-end here
+
+Migration **0005 is written and not applied**. This task forbade
+existing-database changes, and the worker's queue read selects
+`recipient_address`, so the outbox cannot run against the development
+database until it is applied.
+
+What that leaves unverified in a browser: queue → drain → attachment
+arriving at the (stubbed) provider. That path is covered behaviourally by
+the twelve worker tests above against a mocked database, which exercise the
+same code.
+
+**To close it:** `npm run db:migrate` (one additive nullable column,
+`drizzle/0005_outbound_recipient_address.sql`), then re-run the fixture
+journey. Deploy order is migrate-then-deploy, as always.
+
+## 20.e Status, and what is still not activated
+
+| Piece | State |
+|---|---|
+| Blob adapter | **Implemented**, private-only, mock-tested. **Never run against a live store.** |
+| Blob credentials | **Absent.** No store provisioned, nothing purchased |
+| Local driver | Implemented and verified; refuses to run in production |
+| Failed-upload cleanup | Implemented and tested; no sweep, by design |
+| Attachments | Implemented; verified against the stubbed provider only |
+| Migration 0005 | Written, **not applied** anywhere |
+
+**Activation, in full:** create a Blob store on the Vercel project and
+attach it, so `BLOB_READ_WRITE_TOKEN` is injected; apply migration 0005;
+deploy. No code change is needed for either.
+
+**Still unresolved and deliberately not decided:** what an engineer should
+record against *"CO Alarm(s) tested and satisfactory"* when no alarm is
+fitted. The unapproved *Not applicable* option is gone; the question is
+BSCJ's.
+
+Nothing in §13.6 is closed. No invoices, renewals or remedial workflows
+were touched.
+
+## 20.f Closeout — two defects found and fixed
+
+The closeout review of §20 found two real faults. Both were in code written
+in that phase; neither had reached a commit.
+
+### A re-approval reused the provider's idempotency key
+
+`requeueCertificateEmail` rewrote the existing row and swapped the address
+in place, keeping the same `idempotency_key`. That key **is** the provider's
+idempotency key, so Resend would have recognised the "new" message as the
+one it had already accepted and sent nothing — the corrected address would
+never have heard, and the screen would have reported success.
+
+Worse, rewriting the row erased what had been attempted to the old address:
+an email that may well have arrived.
+
+**Fixed as two separate concepts, which is what they always were:**
+
+- **A retry** is the worker trying the same intent again. Same row, same
+  payload, same key — which is precisely what makes retrying after an
+  ambiguous outcome safe.
+- **A re-approval** is a person deciding to send to the address as it now
+  stands. It inserts a **new row** with the next approval number, which
+  produces a **new key**, and **leaves the earlier row exactly as it was**.
+
+The key gained an approval component — `certificate-release:<certId>:<recipient>:<n>` —
+and the worker now derives the provider suffix from the row's own key via
+`approvalFromKey` rather than rebuilding it from the certificate and
+recipient. **That second half mattered**: without it the row key changed and
+the provider key did not, so the corrected message would still have been
+deduplicated away. It was caught by the end-to-end test below, not by the
+first fix.
+
+The requeue also refuses while a send is still pending (adding a second
+intent beside one in flight is how a recipient gets two emails) and refuses
+once a version has been accepted for that recipient.
+
+### A failed upload deleted the object on an error, not on a known outcome
+
+The cleanup deleted the stored blob whenever the insert threw. A timeout, a
+dropped connection or an aborted request can all leave a row **committed**
+while the client sees an error — and deleting then destroys the bytes a
+committed record points at, turning a recoverable blip into a certificate
+with nothing behind it.
+
+**Fixed.** The row is now looked for by its unique `blob_key` before
+anything is removed:
+
+| Outcome | Action |
+|---|---|
+| Row found | It committed. Nothing is deleted; the upload is reported as the success it was |
+| Row definitely absent | The object is removed — nothing will ever reference it |
+| The check itself failed | **The object is kept**, `document.upload_uncertain` is audited, and the engineer is told to reload the job before uploading again |
+
+An orphan costs a fraction of a penny; a wrong delete cannot be undone.
+
+### A third fault, found in the browser
+
+The retry control was a `<form>` inside the queue `<form>`. Browsers drop a
+nested form, so the retry button silently became a submit for the queue
+form and did nothing. The queue form is now a **sibling** of the recipient
+list, with the checkboxes joined to it by the `form` attribute. Asserted by
+`document.querySelectorAll("form form").length === 0` on the live page.
+
+### Migration 0005 applied to development
+
+Confirmed before running: exactly one DDL statement,
+`ALTER TABLE "outbound_email" ADD COLUMN IF NOT EXISTS "recipient_address" text`,
+and exactly one migration outstanding. Applied with `npm run db:migrate` to
+the development Neon database only. Verified after: the column exists as
+`text`, nullable; job, user and email counts unchanged. **Production was not
+touched and no other migration was applied.**
+
+### The journey, end to end on isolated fixtures
+
+Google, Upstash and Resend intercepted in-process; local document store.
+
+| Step | Result |
+|---|---|
+| Engineer uploads a 7,000-byte PDF | stored; object sha `bc8ba77a…` |
+| Admin reviews and releases | `BSCJ-CERT-CLOSE`, version 1 |
+| Recipients shown with real addresses, both selected | queued, 2 rows, no address in either key |
+| Drain | 2 accepted; **attachment sha `bc8ba77a…`, 7,000 bytes — identical to the stored object** on both messages |
+| Agency address changed, earlier row failed | screen shows "Approved for …, which is no longer the address on file" |
+| *Queue again to the address above* | **new row, approval 2, new key**; the approval-1 row untouched with its old address and error |
+| Drain | 1 accepted, to `corrected.agency@…`, same PDF, **provider key `…-agent-2`** |
+| All three provider keys | distinct |
+
+`scripts/browser-fixtures.mjs` now records each attachment's filename, size
+and SHA-256 — without which "the exact PDF arrived" could not be checked at
+all. Digest only: a certificate is too large to keep in a state file read by
+hand.
+
+Unit coverage added alongside: the ambiguous-outcome sequence end to end
+against the worker (timeout → retry with an identical key → address changes
+→ old intent refuses → new approval sends), and focused tests for each
+cleanup outcome.
+
+Development database returned to **1 app_user, 0 jobs, 0 documents, 0
+certificates, 0 queued emails**. The 35 `audit_event` rows are preserved —
+the log is append-only and was never a fixture.
+
+### Unchanged blockers
+
+- **No Blob store provisioned**; the adapter remains verified only against
+  SDK-compatible mocks. Activation is still: attach a store so
+  `BLOB_READ_WRITE_TOKEN` is injected, then deploy.
+- **Migration 0005 is applied to development only.** Production needs it
+  before this code is deployed — migrate, then deploy.
+- **The CO-alarm question is still open** and deliberately undecided.
+- Nothing in §13.6 is closed.

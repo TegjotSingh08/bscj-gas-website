@@ -1,11 +1,14 @@
 import "server-only";
 
-import { and, eq, inArray, lt, notInArray, or } from "drizzle-orm";
+import { and, eq, inArray, lt, notInArray, or, sql } from "drizzle-orm";
 
 import { getDb } from "@/lib/db/client";
 import {
   activities,
   agentOrganisations,
+  certificates,
+  customers,
+  documents,
   jobs,
   outboundEmails,
   properties,
@@ -24,15 +27,20 @@ import {
   renderTenantAppointmentEmail,
   renderTenantInvitationEmail,
 } from "@/lib/email/tenant-scheduling";
+import { renderCertificateReleaseEmail } from "@/lib/email/certificate-release";
 import {
   internalNotificationRecipient,
+  MAX_ATTACHMENT_BYTES,
   sendOutboxEmail,
 } from "@/lib/email/send";
+import { getDocument } from "@/lib/storage/documents";
 import { createSchedulingToken } from "@/lib/scheduling/token";
 import type { DeadlineSource } from "@/lib/scheduling/deadline";
 import {
   appointmentFromKey,
   APPOINTMENT_SCOPED_KINDS,
+  approvalFromKey,
+  certificateFromKey,
   confirmationKey,
   lateBookingKey,
   LATE_BOOKING_RECIPIENTS,
@@ -94,6 +102,7 @@ const ALL_KINDS: string[] = [
   OUTBOX_KINDS.invitation,
   OUTBOX_KINDS.confirmation,
   OUTBOX_KINDS.lateBooking,
+  OUTBOX_KINDS.certificate,
 ];
 
 /** The statuses from which a tenant may still act on an invitation link. */
@@ -215,6 +224,7 @@ export async function drainOutbox(
     jobId: string | null;
     kind: string;
     recipient: string;
+    recipientAddress: string | null;
     idempotencyKey: string;
     attempts: number;
   }[];
@@ -226,6 +236,7 @@ export async function drainOutbox(
         jobId: outboundEmails.jobId,
         kind: outboundEmails.kind,
         recipient: outboundEmails.recipient,
+        recipientAddress: outboundEmails.recipientAddress,
         idempotencyKey: outboundEmails.idempotencyKey,
         attempts: outboundEmails.attempts,
       })
@@ -337,6 +348,7 @@ type LoadedJob = {
   organisationName: string | null;
   organisationEmail: string | null;
   tenantEmail: string | null;
+  customerEmail: string | null;
 };
 
 type ClaimedRow = {
@@ -344,6 +356,8 @@ type ClaimedRow = {
   jobId: string | null;
   kind: string;
   recipient: string;
+  /** Frozen at queue time for the kinds a person approves. */
+  recipientAddress: string | null;
   idempotencyKey: string;
   attempts: number;
 };
@@ -359,6 +373,7 @@ async function deliverRow(row: ClaimedRow): Promise<RowOutcome> {
       organisationName: agentOrganisations.name,
       organisationEmail: agentOrganisations.email,
       tenantEmail: tenancies.email,
+      customerEmail: customers.email,
     })
     .from(jobs)
     .innerJoin(properties, eq(properties.id, jobs.propertyId))
@@ -367,6 +382,7 @@ async function deliverRow(row: ClaimedRow): Promise<RowOutcome> {
       eq(agentOrganisations.id, jobs.agentOrganisationId),
     )
     .leftJoin(tenancies, eq(tenancies.id, jobs.tenancyId))
+    .leftJoin(customers, eq(customers.id, jobs.billingCustomerId))
     .where(eq(jobs.id, row.jobId))
     .limit(1);
 
@@ -383,6 +399,16 @@ async function deliverRow(row: ClaimedRow): Promise<RowOutcome> {
 
   if (row.kind === OUTBOX_KINDS.invitation) {
     return deliverInvitation(db, row, loaded);
+  }
+
+  /*
+    A certificate is about a **record**, not an appointment. It must not go
+    through the calendar check below — the visit has happened, the event may
+    long since have been tidied away, and waiting for `synced` would hold a
+    certificate behind a diary entry nobody needs any more.
+  */
+  if (row.kind === OUTBOX_KINDS.certificate) {
+    return deliverCertificate(db, row, loaded);
   }
 
   /*
@@ -495,6 +521,268 @@ async function deliverInvitation(
       idempotencySuffix: `invite-${row.attempts}`,
     }),
   );
+}
+
+/**
+ * A released certificate, to one chosen recipient.
+ *
+ * Three things are re-checked at send time rather than trusted from the
+ * queue, because minutes or hours may have passed:
+ *
+ * - **The certificate is still the current version.** A correction issued
+ *   in between supersedes this one, and telling somebody about a record
+ *   that has been replaced is worse than telling them nothing — the
+ *   correction has its own rows.
+ * - **The address, resolved now.** The queue carries a role. If the
+ *   address has changed since the administrator saw it, the change is what
+ *   is used, and what was actually used is recorded.
+ * - **The document still exists.** A certificate row whose document has
+ *   gone is a fault, not something to announce.
+ */
+async function deliverCertificate(
+  db: NonNullable<ReturnType<typeof getDb>>,
+  row: ClaimedRow,
+  loaded: LoadedJob,
+): Promise<RowOutcome> {
+  const { job, property } = loaded;
+
+  const certificateId = certificateFromKey(row.idempotencyKey);
+  if (!certificateId) return stand(db, row.id, "certificate_key_unreadable");
+
+  const [certificate] = await db
+    .select({
+      id: certificates.id,
+      certificateNumber: certificates.certificateNumber,
+      version: certificates.version,
+      status: certificates.status,
+      inspectionDate: certificates.inspectionDate,
+      nextDueDate: certificates.nextDueDate,
+      correctionReason: certificates.correctionReason,
+      documentId: certificates.documentId,
+      filename: documents.filename,
+      blobKey: documents.blobKey,
+      sizeBytes: documents.sizeBytes,
+    })
+    .from(certificates)
+    .leftJoin(documents, eq(documents.id, certificates.documentId))
+    .where(eq(certificates.id, certificateId))
+    .limit(1);
+
+  if (!certificate) return stand(db, row.id, "certificate_missing");
+
+  /*
+    Superseded while this sat in the queue. A correction has its own rows,
+    so telling somebody about a version that has been replaced would be
+    worse than telling them nothing.
+  */
+  if (certificate.status !== "issued") {
+    return stand(db, row.id, "superseded_by_correction");
+  }
+  if (!certificate.documentId || !certificate.filename || !certificate.blobKey) {
+    return stand(db, row.id, "certificate_document_missing");
+  }
+
+  const recipient = row.recipient as OutboxRecipient;
+
+  /*
+    **The address a person approved**, frozen on the row when they chose it.
+    An edit to the agency's or the customer's record between then and now
+    does not redirect the send — see migration 0005. A row written before
+    that column existed falls back to resolving, which is the behaviour it
+    was queued under.
+  */
+  const to =
+    row.recipientAddress ??
+    (recipient === "agent" ? loaded.organisationEmail : loaded.customerEmail);
+
+  if (!to) {
+    return await missing(
+      db,
+      row,
+      recipient === "agent" ? "agent_email_missing" : "customer_email_missing",
+    );
+  }
+
+  /*
+    Eligibility, re-checked now rather than assumed from the approval.
+
+    Freezing the address is about not being *redirected*; it is not licence
+    to send to somebody who has since stopped being entitled to the
+    document. An agency removed from the job, or deactivated, no longer has
+    a claim on it — and neither does a billing customer who has been
+    replaced.
+
+    A revocation is **not** a retryable failure and not a quiet
+    cancellation: the row is failed with a named reason, which puts the job
+    on the needs-attention queue for a person to look at.
+  */
+  const eligible = await recipientStillEligible(db, job.id, recipient, to);
+  if (!eligible.ok) {
+    await db
+      .update(outboundEmails)
+      .set({
+        state: "failed",
+        lastError: eligible.reason,
+        updatedAt: new Date(),
+      })
+      .where(eq(outboundEmails.id, row.id));
+    return "failed";
+  }
+
+  /*
+    The document itself, fetched now.
+
+    A failure here is **not** a failure of the message — the store may be
+    briefly unreachable — so the attempt is given back and the row stays
+    queued, exactly as an unsynced calendar does. Sending the email without
+    the certificate would be worse than sending it late: the whole point of
+    the message is the attachment, and a recipient without a portal account
+    has no other way to get it.
+  */
+  const stored = await getDocument(certificate.blobKey);
+  if (!stored.ok) {
+    await refund(db, row);
+    return "stillQueued";
+  }
+
+  if (stored.bytes.byteLength > MAX_ATTACHMENT_BYTES) {
+    // Not retryable: the file will be the same size next time.
+    return stand(db, row.id, "attachment_too_large");
+  }
+
+  const email = renderCertificateReleaseEmail({
+    reference: job.reference,
+    certificateNumber: certificate.certificateNumber,
+    address: addressOf(property),
+    postcode: property.postcode,
+    inspectionDate: certificate.inspectionDate,
+    nextDueDate: certificate.nextDueDate,
+    correctionReason: certificate.correctionReason,
+    version: certificate.version,
+    /*
+      The agency reads it in their own account as well. A customer has no
+      account and needs none — the PDF is attached, which is the whole
+      reason this message carries one.
+    */
+    portalLink:
+      recipient === "agent" ? `${business.url}/portal/jobs/${job.id}` : null,
+    timeZone: bookingConfig.timeZone,
+  });
+
+  const result = await sendOutboxEmail({
+    kind: "certificate-release",
+    to,
+    email,
+    reference: job.reference,
+    /*
+      **One intent, one provider key.**
+
+      Taken from the row's own idempotency key, which carries the approval
+      number, so the two can never drift apart:
+
+      - a **retry** of this row is the same key, and the provider
+        recognises it — which is what makes retrying after an ambiguous
+        outcome safe;
+      - a **re-approval** is a different row with a different approval, and
+        therefore a different key, so the corrected address actually
+        receives something instead of being deduplicated away.
+
+      Deriving it rather than rebuilding it is the point: the earlier
+      version rebuilt the suffix from the certificate and recipient alone,
+      which meant a new approval produced a new row and the same provider
+      key, and the second message was silently swallowed.
+    */
+    idempotencySuffix: `cert-${certificate.id}-${recipient}-${
+      approvalFromKey(row.idempotencyKey) ?? 1
+    }`,
+    attachments: [
+      { filename: certificate.filename, content: stored.bytes },
+    ],
+  });
+
+  /*
+    Recorded only on acceptance, and never before it. `sent` means the
+    provider took it — not that it arrived — and the row says so.
+  */
+  if (result.status === "sent") {
+    try {
+      await db
+        .update(documents)
+        .set({
+          sentAt: new Date(),
+          sentTo: sql`COALESCE(${documents.sentTo}, '[]'::jsonb) || ${JSON.stringify([
+            {
+              recipient,
+              address: to,
+              at: new Date().toISOString(),
+              version: certificate.version,
+              attached: true,
+            },
+          ])}::jsonb`,
+        })
+        .where(eq(documents.id, certificate.documentId));
+    } catch {
+      // The message went. A missing note about it is not worth a retry that
+      // would send it again.
+    }
+  }
+
+  return finish(db, row, result);
+}
+
+/**
+ * Is this recipient still entitled to the document?
+ *
+ * Re-derived from the job now, at send time. The approval froze *where* to
+ * send; this decides whether sending is still right at all.
+ *
+ * The address is compared too: if the record has moved on, the approved
+ * address is no longer one the application can vouch for, and that is a
+ * decision for a person rather than something to push through.
+ */
+async function recipientStillEligible(
+  db: NonNullable<ReturnType<typeof getDb>>,
+  jobId: string,
+  recipient: OutboxRecipient,
+  approvedAddress: string,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const [current] = await db
+    .select({
+      organisationId: jobs.agentOrganisationId,
+      organisationEmail: agentOrganisations.email,
+      organisationActive: agentOrganisations.isActive,
+      customerEmail: customers.email,
+      customerActive: customers.isActive,
+    })
+    .from(jobs)
+    .leftJoin(
+      agentOrganisations,
+      eq(agentOrganisations.id, jobs.agentOrganisationId),
+    )
+    .leftJoin(customers, eq(customers.id, jobs.billingCustomerId))
+    .where(eq(jobs.id, jobId))
+    .limit(1);
+
+  if (!current) return { ok: false, reason: "job_missing" };
+
+  if (recipient === "agent") {
+    if (!current.organisationId) return { ok: false, reason: "agency_no_longer_on_job" };
+    if (current.organisationActive === false) {
+      return { ok: false, reason: "agency_deactivated" };
+    }
+    if (current.organisationEmail !== approvedAddress) {
+      return { ok: false, reason: "approved_address_changed" };
+    }
+    return { ok: true };
+  }
+
+  if (current.customerActive === false) {
+    return { ok: false, reason: "customer_deactivated" };
+  }
+  if (current.customerEmail !== approvedAddress) {
+    return { ok: false, reason: "approved_address_changed" };
+  }
+  return { ok: true };
 }
 
 async function deliverConfirmation(
@@ -790,6 +1078,10 @@ export async function fetchRecordedException(
 export type JobNotification = {
   kind: string;
   recipient: string;
+  /** The address a person approved, where one was frozen. */
+  recipientAddress: string | null;
+  /** So a screen can tell which certificate version a row belongs to. */
+  idempotencyKey: string;
   state: string;
   attempts: number;
   lastError: string | null;
@@ -808,6 +1100,8 @@ export async function fetchNotificationStates(
       .select({
         kind: outboundEmails.kind,
         recipient: outboundEmails.recipient,
+        recipientAddress: outboundEmails.recipientAddress,
+        idempotencyKey: outboundEmails.idempotencyKey,
         state: outboundEmails.state,
         attempts: outboundEmails.attempts,
         lastError: outboundEmails.lastError,
