@@ -162,3 +162,35 @@ export function organisationCondition(
       return sql`false`;
   }
 }
+
+/**
+ * Filters a query by *assignment* rather than by organisation.
+ *
+ * The mirror image of `organisationCondition`, and it exists for the same
+ * reason: the engineer surfaces need a filter, and a handler that wrote its
+ * own is the failure the whole design is built to make hard.
+ *
+ * - **`assigned`** — the engineer's own jobs, which is their entire access.
+ * - **`all`** — no filter. An administrator can work the engineer screens,
+ *   and giving them nothing there would only push them into a second,
+ *   unscoped query written by hand.
+ * - **`organisation`** — nothing. An agency has no business on a surface
+ *   whose whole purpose is BSCJ's own work, and widening this to their
+ *   organisation would hand them an engineer's view of it.
+ */
+export function assignmentCondition(
+  column: PgColumn,
+  scope: AccessScope,
+  extra?: SQL | undefined,
+): SQL | undefined {
+  switch (scope.kind) {
+    case "all":
+      return extra;
+    case "assigned":
+      return extra ? and(eq(column, scope.userId), extra) : eq(column, scope.userId);
+    case "organisation":
+      // Explicit false rather than a contradictory comparison, which Postgres
+      // would refuse at query time on a uuid column.
+      return sql`false`;
+  }
+}

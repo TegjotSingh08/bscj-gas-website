@@ -7,6 +7,7 @@ import { recordAudit } from "@/lib/audit/record";
 import { getDb } from "@/lib/db/client";
 import { activities, jobs, outboundEmails } from "@/lib/db/schema";
 import { invitationRow } from "@/lib/notifications/kinds";
+import { assignEngineer, unassignEngineer } from "@/lib/jobs/work-actions";
 import { eq } from "drizzle-orm";
 
 /**
@@ -107,4 +108,56 @@ export async function resendInvitationAction(
     message:
       "Queued. It will be sent on the next run of the outbox, with a fresh link.",
   };
+}
+
+// ---------------------------------------------------------------------------
+// Allocation
+// ---------------------------------------------------------------------------
+
+/**
+ * Putting an engineer on a job, and taking them off again.
+ *
+ * A server action is a public HTTP endpoint with a generated name, so both of
+ * these start with `requireAdmin()` against a verified session before they
+ * look at anything the form sent. Everything else — the job's status, who is
+ * on it, whether the move is legal — is re-read in `work-actions.ts` from the
+ * row rather than taken from the request. The form contributes two ids and
+ * nothing more.
+ */
+
+export type AssignState = { message?: string; error?: string };
+
+export async function assignEngineerAction(
+  _previous: AssignState,
+  form: FormData,
+): Promise<AssignState> {
+  const session = await requireAdmin();
+
+  const jobId = String(form.get("jobId") ?? "");
+  const engineerId = String(form.get("engineerId") ?? "");
+  if (!jobId) return { error: "No job was named." };
+
+  const result = await assignEngineer({ session, jobId, engineerId });
+  if (!result.ok) return { error: result.error };
+
+  revalidatePath(`/admin/jobs/${jobId}`);
+  revalidatePath("/admin/jobs");
+  return { message: result.message };
+}
+
+export async function unassignEngineerAction(
+  _previous: AssignState,
+  form: FormData,
+): Promise<AssignState> {
+  const session = await requireAdmin();
+
+  const jobId = String(form.get("jobId") ?? "");
+  if (!jobId) return { error: "No job was named." };
+
+  const result = await unassignEngineer({ session, jobId });
+  if (!result.ok) return { error: result.error };
+
+  revalidatePath(`/admin/jobs/${jobId}`);
+  revalidatePath("/admin/jobs");
+  return { message: result.message };
 }

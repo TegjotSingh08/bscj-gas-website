@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   assertOrganisationAccess,
+  assignmentCondition,
   canAccessAssignedJob,
   canAccessOrganisation,
   MissingOrganisationError,
@@ -203,5 +204,50 @@ describe("the query filter", () => {
     });
     assert.ok(condition, "an engineer query was left unfiltered");
     assert.match(JSON.stringify(condition), /"false"/);
+  });
+});
+
+describe("the assignment filter", () => {
+  /*
+    The mirror of the organisation filter, and it has to fail the other way
+    round: an engineer gets an equality on their own id, an agency gets
+    nothing at all, and only an administrator is unfiltered. A helper that
+    widened an agency to "no condition" here would hand them the engineer's
+    view of every job BSCJ has.
+  */
+  const column = { name: "assigned_engineer_id" } as never;
+
+  test("an engineer is filtered to their own assignment", () => {
+    const condition = assignmentCondition(column, {
+      kind: "assigned",
+      userId: ENGINEER,
+    });
+    assert.ok(condition, "an engineer query was left unfiltered");
+    assert.equal(/"false"/.test(JSON.stringify(condition)), false);
+  });
+
+  test("an administrator is unfiltered, because they may work these screens", () => {
+    assert.equal(assignmentCondition(column, { kind: "all" }), undefined);
+  });
+
+  test("an agency matches nothing rather than everything", () => {
+    const condition = assignmentCondition(column, agent(ACME));
+    assert.ok(condition, "an agency query was left unfiltered");
+    assert.match(JSON.stringify(condition), /"false"/);
+  });
+
+  test("the two helpers never both return 'no condition' for the same scope", () => {
+    // The pair of them must always leave somebody filtered by something.
+    for (const scope of [
+      agent(ACME),
+      { kind: "assigned", userId: ENGINEER } as AccessScope,
+    ]) {
+      const byOrganisation = organisationCondition(column, scope);
+      const byAssignment = assignmentCondition(column, scope);
+      assert.ok(
+        byOrganisation !== undefined && byAssignment !== undefined,
+        `${scope.kind} escapes both filters`,
+      );
+    }
   });
 });

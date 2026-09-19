@@ -51,6 +51,9 @@ const PRIVATE_ROOTS = [
   // Tenant scheduling: reached without an account, but noindex, without site
   // navigation, and behind its own signed session. Not part of the public site.
   path.join(APP_ROOT, "(schedule)"),
+  // The engineer's own screens: noindex, no navigation, no share preview, and
+  // carrying an address, an access note and a tenant's phone number.
+  path.join(APP_ROOT, "engineer"),
 ];
 
 const pages = allPages.filter(
@@ -240,6 +243,56 @@ describe("the admin area is not part of the public site", () => {
  * Exempting it from the public assertions would be enough to make the suite
  * pass and would prove nothing. It is held to the opposite assertions instead.
  */
+/**
+ * The engineer's screens play by the same rules.
+ *
+ * Exempting them from the public assertions would be enough to make the
+ * suite pass and would prove nothing. They are held to the opposite
+ * assertions instead — and they carry an address, an access note and a
+ * tenant's phone number, so the stakes are higher here than on a login page.
+ */
+describe("the engineer surface is not part of the public site", () => {
+  const engineerRoot = path.join(APP_ROOT, "engineer");
+  const engineerPages = allPages.filter((file) => file.startsWith(engineerRoot));
+
+  test("there is an engineer surface to check", () => {
+    assert.ok(engineerPages.length > 0, "no engineer pages were found");
+  });
+
+  test("every engineer page refuses indexing", () => {
+    for (const file of engineerPages) {
+      assert.match(
+        readFileSync(file, "utf8"),
+        /robots:\s*\{[^}]*index:\s*false/,
+        `${path.relative(process.cwd(), file)} does not refuse indexing`,
+      );
+    }
+  });
+
+  test("no engineer page declares a canonical or a share preview", () => {
+    for (const file of engineerPages) {
+      const contents = readFileSync(file, "utf8");
+      const name = path.relative(process.cwd(), file);
+      assert.equal(/alternates:\s*\{\s*canonical:/.test(contents), false, name);
+      assert.equal(contents.includes("pageOpenGraph"), false, name);
+    }
+  });
+
+  test("the engineer layout refuses indexing for anything beneath it", () => {
+    // A page added without its own metadata still inherits this.
+    const layout = readFileSync(path.join(engineerRoot, "layout.tsx"), "utf8");
+    assert.match(layout, /robots:\s*\{[^}]*index:\s*false/);
+  });
+
+  test("the sitemap lists no engineer route", () => {
+    const sitemap = readFileSync(
+      path.resolve(process.cwd(), "src/app/sitemap.ts"),
+      "utf8",
+    );
+    assert.equal(sitemap.includes("/engineer"), false);
+  });
+});
+
 describe("the agency portal is not part of the public site", () => {
   const portalRoot = path.join(APP_ROOT, "(portal)");
   const portalPages = allPages.filter((file) => file.startsWith(portalRoot));

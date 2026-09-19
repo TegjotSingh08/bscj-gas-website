@@ -123,3 +123,46 @@ export function formatLongDate(isoDate: string, timeZone: string): string {
     year: "numeric",
   }).format(noon);
 }
+
+/**
+ * The instants a local calendar date begins and ends at.
+ *
+ * `start` is inclusive, `end` exclusive — the moment the next day begins —
+ * so a range query needs no fencepost arithmetic and cannot lose an
+ * appointment at midnight. Built from the wall clock rather than from
+ * 24-hour arithmetic, so the two days a year that are 23 or 25 hours long
+ * come out right.
+ */
+export function dayBoundsInZone(
+  isoDate: string,
+  timeZone: string,
+): { start: Date; end: Date } | null {
+  const parsed = parseIsoDate(isoDate);
+  if (!parsed) return null;
+
+  const start = zonedTimeToUtc({ ...parsed, hour: 0, minute: 0 }, timeZone);
+  /*
+    `parseIsoDate` checks the shape, not the calendar: "2026-02-30" passes it
+    and rolls into March. A day boundary that quietly moves to another month
+    is worse than no answer, so the result is required to round-trip back to
+    the date it was asked for.
+  */
+  if (isoDateInZone(start, timeZone) !== isoDate) return null;
+
+  /*
+    Midday on the same date, plus a day, then back to midnight. Stepping from
+    noon keeps the intermediate instant clear of both DST transitions, which
+    happen in the small hours.
+  */
+  const nextNoon = new Date(
+    zonedTimeToUtc({ ...parsed, hour: 12, minute: 0 }, timeZone).getTime() +
+      24 * 60 * 60 * 1000,
+  );
+  const next = getPartsInZone(nextNoon, timeZone);
+  const end = zonedTimeToUtc(
+    { year: next.year, month: next.month, day: next.day, hour: 0, minute: 0 },
+    timeZone,
+  );
+
+  return { start, end };
+}

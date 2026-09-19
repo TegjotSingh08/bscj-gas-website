@@ -656,8 +656,25 @@ export const jobs = pgTable(
      * date. A request, recorded as one — never a promise of a date.
      */
     requestedAsap: boolean("requested_asap").notNull().default(false),
+    /**
+     * When the engineer said they were on site.
+     *
+     * Recorded rather than inferred. The timeline carries the event too, but
+     * a column is what lets a list say "started 10:42" without reading every
+     * activity row for every job on the page.
+     */
+    workStartedAt: timestamp("work_started_at", { withTimezone: true }),
     /** When the engineer actually finished. */
     completedAt: timestamp("completed_at", { withTimezone: true }),
+    /**
+     * What the engineer found, in their own words, recorded at completion.
+     *
+     * Not a certificate and not a substitute for one. It is the operational
+     * note that would otherwise live in somebody's memory between the visit
+     * and the paperwork, and it is deliberately free text: nothing in it is
+     * parsed, and nothing downstream reads a fact out of it.
+     */
+    completionNotes: text("completion_notes"),
     /**
      * When the next inspection is due.
      *

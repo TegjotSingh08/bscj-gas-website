@@ -1013,3 +1013,348 @@ next phase is the day the engineer actually drives somewhere:
 
 Explicitly still out of scope: certificates and documents, invoicing, renewals
 and outreach prioritisation, pricing tiers, and bulk import.
+
+---
+
+# 15. V2.4 — the admin and engineer operations workflow
+
+**Uncommitted, for review.** Everything below is in the working tree on
+`v2-compliance-platform` at `e3c2a2f`. Nothing was pushed or deployed, no
+customer was contacted, and no real email or calendar call was made.
+
+This is §14 items 1, 2, 3, 5 and 6. **Remedials (§14.4) are deliberately not
+here** — they need the approval flow and the stored authority, which is its
+own phase. Certificates, invoicing, renewals and pricing tiers remain out of
+scope and nothing here touches them.
+
+## 15.1 The one schema change
+
+`0004_job_work_record` — two nullable columns on `job`, no index, no backfill,
+a down migration alongside it:
+
+- `work_started_at` — when the engineer said they were on site.
+- `completion_notes` — what they found, free text. **Not a certificate**, not
+  a substitute for one, and nothing parses it or derives a fact from it.
+
+Neither is a filter: the lifecycle status already answers "has this started"
+and "is it done", and an index on a free-text note would only invite querying
+it as though it meant something.
+
+**Applied to the development database** (confirmed by the owner before it was
+run), which is where the browser pass below happened. It has not been applied
+anywhere else.
+
+## 15.2 Totals, and the private/agency distinction
+
+`/admin` was a page of prose with a database-connected badge. It is now the
+day's position, and two rules shape it.
+
+**Every number is clickable.** Each tile links to the job list filtered to
+exactly the rows it counted, so "7 need attention" and the seven jobs are the
+same query rather than two that can disagree. A figure nobody can open is a
+figure nobody can check.
+
+**The overall total is shown with the private/agency split, not apart from
+it.** A job either belongs to an agency or it does not, so the two are exactly
+the parts of the total and a reader can check the page by adding them up.
+Consumer work is the rows with no organisation — which only an
+administrator's unfiltered scope can see at all.
+
+The total is deliberately *not* a fourth tile in the row above: "today" and
+"open" overlap each other, and a total sitting beside them reads as another
+bucket rather than as the sum of the two figures beneath it.
+
+All three counts come from one pass over the same scoped rows — `COUNT(*)`
+plus conditional counts on `agent_organisation_id IS NULL` and `IS NOT NULL`,
+which are mutually exclusive and exhaustive. Nothing is counted twice and
+nothing is missed. Structural tests assert the single pass, the complementary
+conditions, that the open halves are the same split narrowed the same way,
+that `totals.all` is actually rendered, and that every figure links to the
+rows it counted.
+
+The counts are **one pass** over the caller's rows with conditional sums
+(`COUNT(*) FILTER (WHERE …)`), not nine separate queries: nine scans on a page
+opened every visit, and they could disagree with each other if a job moved
+between them.
+
+One thing the dashboard deliberately does **not** count: bookings that exist
+in the calendar and were never recorded here. They live in the reservation
+store, reading it can fail, and a failed read showing as a zero is the one
+thing that page exists not to do. It links to `/admin/reconcile`, which
+already reports them honestly.
+
+## 15.3 Search, filters and pagination
+
+Three kinds of control, kept separate because they are genuinely different
+questions:
+
+- **Views** — the question somebody opens the page with: today, upcoming,
+  nobody allocated, needs attention, open, closed. Not statuses: "today" is
+  true of jobs in four different statuses at once.
+- **Filters** — a fact about the row: private or agency, stage, engineer
+  (anybody / nobody yet / a named one).
+- **Search** — free text over the four things a person actually has in front
+  of them: a reference, a name, a postcode, a street.
+
+A plain `GET` form. No JavaScript is needed to search, filter or page, every
+state of the screen is a URL somebody can send to somebody else, and the back
+button behaves.
+
+**The query string can only ever narrow, never widen.** `lib/jobs/filters.ts`
+validates every field against a closed set or clamps it to a range, and there
+is deliberately **no organisation field in it** — which rows a caller may see
+is decided by `AccessScope`, built from the session, and the scope condition
+is the first term of every `WHERE`. There is a test asserting the absence.
+
+Smaller decisions worth knowing: the page size is capped at 100 so a
+hand-edited URL cannot ask for the whole table; an out-of-range page lands on
+the last page rather than on an empty screen, because the row count can change
+between a link being made and opened; changing any control resets to page one;
+and `%` typed by a person is escaped, so a customer named `%` does not match
+every row.
+
+`ILIKE '%…%'` cannot use an index. That is a deliberate trade at this size —
+the alternative is full-text infrastructure for a business with hundreds of
+jobs — and it is bounded by the same pagination as everything else.
+
+## 15.4 Needs attention, fed by real signals
+
+`derived.ts` already answered *whether* a job needs attention. That is the
+right shape for a badge and the wrong shape for a queue: a count tells nobody
+what to do. `lib/jobs/attention.ts` turns the same facts into **named
+reasons**, each with an obvious action:
+
+| Reason | Signal |
+|---|---|
+| Not yet in the calendar | `calendar_sync_state` is `pending` or `failed` |
+| Old calendar entry to remove | `calendar_previous_event_id` is set |
+| A message could not be sent | a `failed` row in `outbound_email` |
+| Booked after the requested date | `deadline_exception_at` is set |
+| Past / close to the requested date | computed from `complete_by_date` |
+| Remedial waiting for approval | a `remedial` row `awaiting_approval` |
+
+Every one is a recorded signal. Nothing here is a heuristic or an invented
+threshold — a queue that reports things nobody can verify is one that gets
+ignored, and an ignored queue is worse than none.
+
+**The badge and the reasons cannot disagree.** `attentionFor()` returns both,
+and a test enumerates every combination of every status, risk and flag
+(>1,000 cases) asserting that "needs attention" is true exactly when the
+reason list is non-empty. The same signals are expressed once as SQL, so the
+dashboard count, the `attention` view and the per-row chips are one definition.
+
+A cancelled job needs nobody, whatever is outstanding on it: its messages are
+stood down by the outbox and its calendar entry by the sweep.
+
+## 15.5 The job detail page
+
+It was a read-only check that a booking had been recorded. It now carries:
+who is on it, when they started and finished, what they recorded, the reasons
+it needs somebody, the deadline position, the agency or "private", and — the
+new one — **the history**.
+
+`jobTimeline()` reads `activity` **through the job**, so the caller's scope
+decides there exactly as everywhere else: a timeline is a record of somebody's
+property and tenant, and reaching it by job id must not be easier than
+reaching the job. The actor's name is resolved for display; `detail` is never
+rendered raw, only a short allow-list of fields, because it can carry internal
+ids that mean nothing on screen and should not be on one.
+
+## 15.6 Allocation, and the work itself
+
+One mutation on the admin page — **allocation** — and two on the engineer's.
+Starting and completing belong to whoever is standing at the property, so they
+are not duplicated in the admin area; an administrator who needs them opens
+`/engineer`, which they are allowed to do, and acts **as themselves** rather
+than on somebody's behalf. There is still no "view as", and inventing one here
+would be the wrong way to build it.
+
+`lib/jobs/work.ts` holds the rules, pure and dependency-free, and **both the
+buttons and the writes read the same functions** — so a control that is shown
+and an action that is permitted cannot drift apart. The rules:
+
+- Allocation needs an appointment. Allocating somebody to a job with no agreed
+  time is allocating them to nothing, and the day view is built on the time.
+- Reassignment is allowed, including mid-visit: an engineer being swapped is a
+  real operational event, and making it illegal only pushes it into a
+  hand-edited row.
+- Unallocation is allowed only *before* the visit. Once somebody is on site,
+  removing them would leave a job in progress with nobody on it — it is
+  reassigned instead, so somebody is named on it throughout.
+- **Assignment is the whole permission.** An engineer who is not on a job has
+  no more access to it than a stranger. Start and complete check the actor
+  against the allocation, not the screen the request arrived from.
+- Only one action is ever offered. A choice to get wrong at a front door is a
+  choice that gets got wrong.
+
+`lib/jobs/work-actions.ts` performs the writes, and every one of them:
+
+1. **Takes nothing from the caller but an id** (and, for completion, a note).
+   No status, price, ownership or timestamp arrives from a browser; the job is
+   re-read and every decision made from the row. The clocks are the server's.
+2. Checks the **capability** (`job:assign` is BSCJ's, `job:work` is the
+   engineer's) *and* the **row** (`canAccessAssignedJob`). Both are required.
+3. Calls `assertTransition` before writing, so an impossible status fails
+   where it is attempted.
+4. Updates **conditionally on the state that was read**, so concurrent
+   attempts produce one change and one honest refusal.
+5. Writes its own timeline entry. Never fatal — a gap in the timeline is a
+   smaller problem than a refused change.
+
+Nothing here contacts Google or Resend. Allocation and completion do not move
+an appointment, so the calendar has nothing to learn, and no customer is
+written to.
+
+## 15.7 The engineer's surface
+
+`/engineer` and `/engineer/jobs/[id]`, in their own route group with their own
+layout and their own header. Built for a phone held at a front door: one
+column, one card per job, the time and postcode readable at arm's length, and
+the two things needed before knocking — the access note and a number to ring —
+on the card rather than a tap away. The whole card is the tap target; the
+phone numbers are their own `tel:` links because ringing ahead is a different
+intention from opening the job.
+
+The day steps forwards and backwards by date. A date that is not a date is
+today — the parameter chooses which of the caller's *own* days to show, so
+there is nothing to refuse.
+
+**No money appears, and none is loaded.** The engineer role has neither
+`pricing:read` nor `invoice:read`. `engineer-queries.ts` selects no price
+column at all, which is stronger than omitting it from the markup: a value
+that is never read cannot be leaked by a later change to what a page renders.
+Two tests enforce it — one on the queries, one that rejects a `£` anywhere
+under the route group.
+
+`assignmentCondition()` was added to `scope.ts` as the mirror of
+`organisationCondition()`: an engineer gets an equality on their own id, an
+administrator gets no filter (they may work these screens), and **an agency
+gets `false`** — matching nothing rather than everything. A test asserts the
+two helpers never both return "no condition" for the same scope.
+
+## 15.8 A local day is not twenty-four hours
+
+`dayBoundsInZone()` in `booking/time.ts`, because the day view and the "today"
+filter both need one. Twice a year in London a day is 23 or 25 hours, and a
+boundary built on `+ 24 * 60 * 60 * 1000` loses or duplicates an hour of
+appointments on exactly those two days. It is built from the wall clock, the
+end is exclusive so consecutive days meet with no gap and no overlap, and it
+**refuses a date that is not one**: `parseIsoDate` checks the shape rather
+than the calendar, so "2026-02-30" passed it and rolled into March. The result
+now has to round-trip back to the date it was asked for.
+
+## 15.9 Verification
+
+Gates: `npm test` **0** (1578 tests, up from 1490) · `typecheck` **0** ·
+`lint` **0** (one pre-existing warning) · `build` **0**.
+
+**Which server, and what was actually isolated.** This matters, and an
+earlier draft of this section overstated it, so it is set out plainly.
+
+The browser pass ran against the **development server already running on port
+3000** — `next-server` PID 19000, started 17 September, before this phase.
+`scripts/dev-with-fixtures.sh` could not be used: Next refuses a second `next
+dev` in the same directory, and killing somebody else's process was not worth
+doing. So **the in-process network interceptor from §12–13 was not loaded.**
+Three pieces of evidence, not an assertion:
+
+- The process environment carries no `BSCJ_TEST_FIXTURES=1`, without which
+  `browser-fixtures.mjs` refuses to install itself.
+- `/tmp/bscj-fixture-state.json` does not exist. The interceptor writes it on
+  the first call it answers, so its absence means it answered none.
+- `.next/dev/logs/next-development.log` contains no mention of Resend,
+  Upstash or googleapis.
+
+What was isolated was therefore **the data and the code paths**, not the
+network:
+
+- **Data** — `scripts/seed-operations-fixture.mjs`, dev only, refuses without
+  `BSCJ_ALLOW_FIXTURE_SEED=1`, every row marked `FIXTURE` or on
+  `@example.invalid`, `--clean` removes exactly what it wrote. Seven jobs
+  across both client kinds and six lifecycle states, its own admin and
+  engineer accounts, and no existing account touched.
+- **Code paths** — an import-closure walk from the seven verified entry
+  points reaches **51 modules, exactly one of which contains an
+  external-service call site**: `sendOutboxEmail` in `lib/email/send.ts`.
+  That function is called only from `deliverInvitation`,
+  `deliverConfirmation` and `deliverLateBooking`; those only from
+  `deliverRow`; and that only from `drainOutbox`, which runs from the
+  reconciliation sweep and the cron route. **Neither was opened or called.**
+  The three functions this phase does use from `outbox.ts` —
+  `readOutboxSummary`, `fetchNotificationStates`, `fetchRecordedException` —
+  are plain Postgres reads. Google and Upstash are not reachable from these
+  screens at all.
+
+So no real email was sent and no real Google or Upstash call was made, but
+that is because **nothing on these screens can make one**, not because a stub
+caught it. A future phase that touches the booking flow, the outbox worker or
+reconciliation must use the fixtures server, and will need the stale dev
+server on port 3000 stopped first.
+
+| Check | Result |
+|---|---|
+| Dashboard totals | 7 jobs · 3 private / 4 agency · 6 open · 3 today · 3 unallocated · 2 attention — each figure matched the list it links to |
+| Totals add up on screen | all 7 = private 3 + agency 4; open 6 = 2 + 4; 6 open + 1 done + 0 cancelled = 7; the stage breakdown sums to the 6 open |
+| Message counts | 1 given up on, 1 with no address configured, named separately |
+| Search `WV3` | 2 of 7, matching on postcode |
+| View `attention` | exactly the two flagged jobs, with their reasons as chips |
+| Filters combined (`today` + `private` + `nobody yet`) | 1 of 7 |
+| Pagination `size=3` | page 2 correct; `page=99` clamped to the last page, not an empty screen |
+| Allocate an engineer | status → Allocated, timeline entry naming the administrator, unallocate control appeared |
+| Engineer's day (phone width, 375×812) | 3 jobs in time order, access notes and tap-to-call, **no price anywhere** |
+| Engineer → `/admin`, `/admin/jobs` | 307 to `/admin/login` |
+| Engineer → `/portal` | 307 to `/portal/login` |
+| Engineer → a job not theirs | **404**, identical to a job that does not exist |
+| "I'm on site" | status → On site, `work_started_at` set, timeline entry |
+| "Work is done" + note | status → Done, note stored and shown to both audiences, timeline entry |
+| Admin view after completion | full history: recorded → allocated → on site → done, each with its actor |
+
+**Concurrency, deliberately raced.** Five simultaneous `completeWork` calls on
+one job: **one** succeeded, four were refused, and the row carried exactly one
+completion, one note and **one** `job.completed` timeline entry. A second
+engineer's id against the same job got the generic "could not be found".
+
+Development database returned to **1 app_user, 0 business rows**. Four
+`audit_event` rows from the verification remain: the log is append-only by
+design, they name only a fixture reference and a fixture actor, and deleting
+from a security log to tidy up would be the wrong precedent.
+
+## 15.10 What this phase did not do
+
+- **Remedials** (§14.4). The stored authority exists on the organisation and
+  the job; the approval flow does not, and `remedial_awaiting_approval` is
+  read as an attention signal but nothing yet writes it from a screen.
+- **Cancellation from a screen.** The lifecycle allows it from every unfinished
+  status and no interface offers it. It is the obvious next small thing.
+- Nothing in §13.6 is closed. No real email has been sent, no real Google
+  Calendar call has been made, automatic processing is still not active, and
+  `robots.txt` still allows `/` while `/admin` — and now `/engineer` — rely on
+  metadata alone.
+
+One cosmetic thing noticed and **not** changed, because it predates this phase
+and is outside the brief: pages directly under `/admin` render the browser tab
+title as "… | BSCJ Gas & Heating" rather than the admin layout's "… | BSCJ
+Admin". Nested pages such as `/admin/login` and `/admin/jobs` are correct. It
+affects a tab title on a `noindex` page only.
+
+## 15.11 Closeout
+
+The phase was committed after a diff review. Two things came out of it.
+
+**The overall job total was computed and never rendered.** `jobTotals`
+returned `all` from the first commit of this page and the dashboard showed
+only the breakdown — the number being broken down was not on screen. Added
+with the split, where it can be checked by addition, and a test now asserts
+it is rendered.
+
+**§15.9's isolation claim was corrected.** It originally read "browser,
+isolated fixtures", which in §12–13 means the in-process network stub. That
+stub was not loaded for this phase. The section now says which server ran,
+proves the stub was absent, and substantiates what was actually isolated.
+
+Local launch configuration was excluded from the commit. The four
+`audit_event` rows from verification were left in place: the log is
+append-only by design.
+
+Deliberately **not** in this closeout, and still open: cancellation from a
+screen, and the remedial approval flow.

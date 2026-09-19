@@ -23,6 +23,11 @@ const PORTAL_ROOT = path.join(APP_ROOT, "(portal)");
  * site either: noindex, no navigation, and its own signed session.
  */
 const SCHEDULE_ROOT = path.join(APP_ROOT, "(schedule)");
+/**
+ * The engineer's surface. Private, authenticated, and not part of the public
+ * site: it carries an address, an access note and a tenant's phone number.
+ */
+const ENGINEER_ROOT = path.join(APP_ROOT, "engineer");
 
 /**
  * Every authenticated surface, pages and API alike. Add one here when you add
@@ -33,6 +38,7 @@ const PRIVATE_ROOTS = [
   ADMIN_ROOT,
   PORTAL_ROOT,
   SCHEDULE_ROOT,
+  ENGINEER_ROOT,
   path.join(APP_ROOT, "api", "schedule"),
   path.join(APP_ROOT, "api", "admin"),
   path.join(APP_ROOT, "api", "portal"),
@@ -179,6 +185,92 @@ describe("every admin page checks authorisation for itself", () => {
         contents,
         /requireAdmin\(\)/,
         `${relative(file)} does not verify the session`,
+      );
+    }
+  });
+});
+
+describe("every engineer page checks authorisation for itself", () => {
+  const engineerPages = filesUnder(ENGINEER_ROOT, (name) => name === "page.tsx");
+
+  test("there are engineer pages to check", () => {
+    assert.ok(engineerPages.length > 0);
+  });
+
+  test("each one calls the engineer guard", () => {
+    /*
+      `requireEngineer()` admits an engineer or an administrator and nobody
+      else. A page under /engineer that never asked who was calling would be
+      public the moment the middleware matcher is wrong — and these pages
+      carry an address, an access note and a tenant's number.
+    */
+    for (const file of engineerPages) {
+      assert.match(
+        read(file),
+        /requireEngineer\(\)/,
+        `${relative(file)} does not verify the session`,
+      );
+    }
+  });
+
+  test("its server actions verify the session too", () => {
+    // A server action is a public HTTP endpoint with a generated name.
+    const actions = filesUnder(ENGINEER_ROOT, (name) => name === "actions.ts");
+    assert.ok(actions.length > 0, "no engineer actions were found to check");
+    for (const file of actions) {
+      const source = read(file);
+      assert.match(source, /"use server"/, relative(file));
+      for (const [, name] of source.matchAll(
+        /export async function (\w+)\(/g,
+      )) {
+        const body = source.slice(source.indexOf(`export async function ${name}(`));
+        assert.match(
+          body.slice(0, body.indexOf("\n}")),
+          /requireEngineer\(\)/,
+          `${relative(file)}: ${name} does not verify the session`,
+        );
+      }
+    }
+  });
+
+  test("no engineer page is indexable", () => {
+    for (const file of [
+      ...engineerPages,
+      path.join(ENGINEER_ROOT, "layout.tsx"),
+    ]) {
+      assert.match(read(file), /index: false/, relative(file));
+    }
+  });
+
+  test("no money is rendered on the engineer's screens", () => {
+    /*
+      The engineer role carries neither `pricing:read` nor `invoice:read`. A
+      restricted interface that happens to show an agency's negotiated rate
+      is not restricted, and the query behind these pages deliberately selects
+      no money column at all — this is the second line of that, against a
+      page that later reaches for one.
+    */
+    const files = filesUnder(ENGINEER_ROOT, (name) => /\.tsx?$/.test(name));
+    for (const file of files) {
+      const source = withoutComments(read(file));
+      for (const forbidden of [
+        "priceTotalPence",
+        "priceSnapshot",
+        "unitPricePence",
+        "listPricePence",
+        "@/lib/pricing/",
+        "@/lib/invoices/",
+      ]) {
+        assert.equal(
+          source.includes(forbidden),
+          false,
+          `${relative(file)} reaches for ${forbidden}`,
+        );
+      }
+      assert.equal(
+        /£/.test(source),
+        false,
+        `${relative(file)} renders a price`,
       );
     }
   });
