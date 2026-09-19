@@ -136,12 +136,22 @@ describe("what needs a person", () => {
     risk: null,
     hasRemedialAwaitingApproval: false,
     calendarSyncFailed: false,
+    hasDeadlineException: false,
   };
 
   test("a job proceeding normally does not", () => {
     assert.equal(needsAttention(base), false);
     assert.equal(needsAttention({ ...base, risk: "normal" }), false);
     assert.equal(needsAttention({ ...base, risk: "approaching" }), false);
+  });
+
+  test("an appointment accepted after the deadline does", () => {
+    /*
+      Nothing is blocked — the tenant has booked — but a date the agent asked
+      for is going to be missed, and that is not something to leave them to
+      discover from a certificate that never arrived.
+    */
+    assert.equal(needsAttention({ ...base, hasDeadlineException: true }), true);
   });
 
   test("a failed calendar write always does", () => {
@@ -168,6 +178,7 @@ describe("what needs a person", () => {
         risk: "overdue",
         hasRemedialAwaitingApproval: true,
         calendarSyncFailed: true,
+        hasDeadlineException: true,
       }),
       false,
     );

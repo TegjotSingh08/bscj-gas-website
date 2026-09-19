@@ -5,6 +5,9 @@ import { loadTenantJob } from "@/lib/scheduling/access";
 import { readSchedulingSession, SCHEDULING_COOKIE } from "@/lib/scheduling/session";
 import { productFor } from "@/lib/booking/products";
 import { loadAvailability } from "@/lib/booking/availability";
+import { fetchJobDeadline } from "@/lib/scheduling/deadline-lookup";
+import { isDeadlinePast, toNotice } from "@/lib/scheduling/deadline";
+import { bookingConfig } from "@/lib/booking/config";
 import { TenantScheduler } from "./TenantScheduler";
 
 export const dynamic = "force-dynamic";
@@ -41,6 +44,14 @@ export default async function AppointmentPage() {
     productId: job.productId,
     ownJobId: job.jobId,
   });
+
+  /*
+    The cutoff the picker filters on. Resolved here so the tenant's first view
+    already excludes times that miss it — but this is a courtesy, not the
+    enforcement: `confirmTenantAppointment` re-reads both dates and decides for
+    itself. See `lib/scheduling/deadline.ts`.
+  */
+  const { deadline } = await fetchJobDeadline(job.jobId, bookingConfig.timeZone);
 
   return (
     <main className="mx-auto max-w-2xl px-4 py-8">
@@ -89,6 +100,8 @@ export default async function AppointmentPage() {
         product={product}
         existingStart={job.appointmentStart?.toISOString() ?? null}
         initialDays={availability.status === "ok" ? availability.days : null}
+        deadline={toNotice(deadline)}
+        deadlineOverdue={isDeadlinePast(deadline, new Date())}
       />
     </main>
   );

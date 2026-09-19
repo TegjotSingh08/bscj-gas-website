@@ -55,6 +55,8 @@ export async function POST(request: Request) {
         calendarFailed: report.calendarSync.failed,
         calendarCleaned: report.calendarCleanup.cleaned,
         bookingsRecovered: report.bookingRecovery.recovered,
+        alertsAccepted: report.notifications.accepted,
+        alertsFailed: report.notifications.failed,
       },
     });
 

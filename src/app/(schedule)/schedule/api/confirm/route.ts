@@ -81,9 +81,21 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "bad_json" }, { status: 400 });
   }
 
-  const body = payload as { slotStart?: unknown; holdToken?: unknown };
+  const body = payload as {
+    slotStart?: unknown;
+    holdToken?: unknown;
+    acknowledgedLateBooking?: unknown;
+  };
   const slotStart = typeof body.slotStart === "string" ? body.slotStart : "";
   const holdToken = typeof body.holdToken === "string" ? body.holdToken : "";
+  /*
+    The only new field, and it only ever *permits*. The deadline itself is
+    re-read from the database and the exception is recorded server-side, so
+    forging this books late and is recorded as late — it cannot make a late
+    appointment look as though it met the deadline. Anything other than
+    literal `true` is a no.
+  */
+  const acknowledgedLateBooking = body.acknowledgedLateBooking === true;
 
   if (!slotStart) {
     return NextResponse.json({ error: "bad_request" }, { status: 400 });
@@ -101,6 +113,7 @@ export async function POST(request: Request) {
       jobId: session.jobId,
       slotStart,
       holdToken,
+      acknowledgedLateBooking,
     });
   } catch {
     return NextResponse.json(
@@ -133,6 +146,26 @@ export async function POST(request: Request) {
     });
   }
 
+  if (result.status === "deadline_exceeded") {
+    /*
+      Not a refusal the tenant can do nothing about — it is a question. The
+      cutoff travels with it so the page can name the date and say which of the
+      two dates produced it, rather than showing an empty list.
+    */
+    return NextResponse.json(
+      {
+        ok: false,
+        error: result.status,
+        message: result.overdue
+          ? MESSAGES.deadline_overdue
+          : MESSAGES.deadline_exceeded,
+        deadline: result.deadline,
+        overdue: result.overdue,
+      },
+      { status: 409 },
+    );
+  }
+
   return NextResponse.json(
     { ok: false, error: result.status, message: MESSAGES[result.status] },
     { status: statusCodeFor(result.status) },
@@ -153,6 +186,10 @@ const MESSAGES: Record<string, string> = {
   */
   conflict:
     "This appointment was changed somewhere else. Please reload the page to see the latest time.",
+  deadline_exceeded:
+    "That time is after the date this work needs to be completed by. Please confirm you understand before we book it.",
+  deadline_overdue:
+    "The date this work needed to be completed by has already passed. Any time you choose will be after it. Please confirm you understand before we book it.",
   unavailable: "We could not confirm that appointment. Please try again.",
 };
 

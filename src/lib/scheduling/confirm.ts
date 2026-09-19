@@ -22,6 +22,18 @@ import {
 } from "@/lib/booking/daily-limit";
 import { fetchBookingEvents, fetchBusyPeriods } from "@/lib/google/calendar";
 import { isoDateInZone, parseIsoDate, zonedTimeToUtc } from "@/lib/booking/time";
+import {
+  isDeadlinePast,
+  meetsDeadline,
+  toNotice,
+  type DeadlineNotice,
+} from "./deadline";
+import { fetchJobDeadline } from "./deadline-lookup";
+import {
+  cancelSupersededNotifications,
+  DEADLINE_EXCEPTION_KIND,
+  lateBookingRows,
+} from "@/lib/notifications/outbox";
 
 /**
  * A tenant setting, or moving, an appointment.
@@ -71,6 +83,16 @@ export type ConfirmInput = {
   jobId: string;
   slotStart: string;
   holdToken: string;
+  /**
+   * The tenant has been shown the deadline warning and accepted it.
+   *
+   * It **permits**; it never asserts. The cutoff itself is re-read from the
+   * database here and the exception is recorded here, so a request that sets
+   * this without having seen a warning books late *and is recorded as late* —
+   * which is the only property that matters. What it cannot do is make a late
+   * appointment look as though it met the deadline.
+   */
+  acknowledgedLateBooking?: boolean;
 };
 
 /** Which of the two operations a confirmation turned out to be. */
@@ -93,6 +115,18 @@ export type ConfirmResult =
    * cannot succeed. The honest answer is "reload and look again".
    */
   | { status: "conflict" }
+  /**
+   * The slot finishes after the deadline and the tenant has not accepted that.
+   *
+   * Carries the cutoff so the page can say *which* date and *why*, rather than
+   * showing an empty list and leaving the tenant to guess.
+   */
+  | {
+      status: "deadline_exceeded";
+      deadline: DeadlineNotice;
+      /** The cutoff has already gone by, so no slot at all can meet it. */
+      overdue: boolean;
+    }
   | { status: "unavailable" }
   | { status: "not_found" };
 
@@ -225,6 +259,33 @@ export async function confirmTenantAppointment(
     };
   }
 
+  /*
+    The deadline, re-read now.
+
+    The page filtered on a cutoff it resolved when it rendered. Between then
+    and now an agent can have moved `complete_by_date` and a certificate can
+    have been superseded, so what the browser was shown is a courtesy and this
+    is the decision. Client-side filtering is never the enforcement.
+  */
+  const { deadline } = await fetchJobDeadline(job.id, config.timeZone);
+  const late = !meetsDeadline(end, deadline);
+  const notice = toNotice(deadline);
+
+  if (late && notice) {
+    if (!input.acknowledgedLateBooking) {
+      /*
+        Refused before the day lock and before Google is touched: this is a
+        definite answer that costs nothing to give, and the tenant is about to
+        be asked a question rather than told to try again.
+      */
+      return {
+        status: "deadline_exceeded",
+        deadline: notice,
+        overdue: isDeadlinePast(deadline, new Date()),
+      };
+    }
+  }
+
   // The reservation must still exist, belong to this attempt, and match this
   // slot. The browser carries an opaque token; ownership is decided here.
   const hold = await checkHold(input.slotStart, input.holdToken);
@@ -350,6 +411,9 @@ export async function confirmTenantAppointment(
     const supersededEventId =
       mode === "reschedule" && job.calendarEventId ? job.calendarEventId : null;
 
+    /** One instant for the exception and the acknowledgement it rests on. */
+    const acknowledgedAt = new Date();
+
     /*
       Optimistic concurrency, on the exact row this request read.
 
@@ -379,6 +443,16 @@ export async function confirmTenantAppointment(
         calendarEventId: null,
         calendarPreviousEventId: supersededEventId,
         calendarSyncState: "pending",
+        /*
+          Set when this appointment is late, and **cleared when it is not**.
+
+          A tenant who reschedules from a late slot into a compliant one has
+          fixed the problem, and leaving the flag up would keep a job on the
+          needs-attention list forever for something that is no longer true.
+          The exception's own timeline entry stays either way — the history is
+          not rewritten, only the current position.
+        */
+        deadlineExceptionAt: late ? acknowledgedAt : null,
         updatedAt: new Date(),
       })
       .where(
@@ -434,6 +508,50 @@ export async function confirmTenantAppointment(
       reach this path at all, and the unique key means a retry re-sends nothing
       that already went.
     */
+    /*
+      The exception, and the intent to tell people about it.
+
+      Both go in the **same transaction as the appointment**. A late booking
+      that was recorded without its exception would read as an ordinary one,
+      and an exception recorded without the intent to notify would leave an
+      agency to discover it themselves. The notification rows are the durable
+      intent; sending is the outbox's job, and no failure of it can reach here.
+
+      `onConflictDoNothing` on all three: a tenant who submits twice must not
+      record two exceptions or queue four emails.
+    */
+    const lateWrites =
+      late && notice
+        ? [
+            db
+              .insert(activities)
+              .values({
+                jobId: job.id,
+                propertyId: job.propertyId,
+                agentOrganisationId: job.agentOrganisationId,
+                kind: DEADLINE_EXCEPTION_KIND,
+                actor: "tenant",
+                /*
+                  Frozen here, so a later change to either date cannot
+                  re-describe what the tenant was actually warned about. Both
+                  underlying dates are kept, never just the cutoff.
+                */
+                detail: {
+                  deadlineDate: notice.date,
+                  deadlineSource: notice.source,
+                  requestedBy: notice.requestedBy,
+                  certificateDueBy: notice.certificateDueBy,
+                  appointmentStart: start.toISOString(),
+                  appointmentEnd: end.toISOString(),
+                  acknowledgedAt: acknowledgedAt.toISOString(),
+                },
+              }),
+            ...lateBookingRows({ jobId: job.id, appointmentStart: start }).map(
+              (row) => db.insert(outboundEmails).values(row).onConflictDoNothing(),
+            ),
+          ]
+        : [];
+
     try {
       await db.batch([
         db.insert(activities).values({
@@ -451,6 +569,7 @@ export async function confirmTenantAppointment(
             ...(mode === "reschedule" && job.appointmentStart
               ? { previousStart: job.appointmentStart.toISOString() }
               : {}),
+            ...(late ? { afterDeadline: true } : {}),
           },
         }),
         db
@@ -462,10 +581,23 @@ export async function confirmTenantAppointment(
             idempotencyKey: `appointment:${job.id}:${start.toISOString()}`,
           })
           .onConflictDoNothing(),
+        ...lateWrites,
       ]);
     } catch {
       // The appointment is the record. A missing timeline entry is a smaller
       // problem than a refused booking, and the row above is already committed.
+    }
+
+    /*
+      Anything still queued for the time this job has just left would now
+      describe a visit that is not happening. Only unsent rows are stood down;
+      something the provider has already accepted cannot be recalled, and
+      rewriting its state to pretend otherwise would be a lie in the record.
+    */
+    try {
+      await cancelSupersededNotifications(job.id, start);
+    } catch {
+      // The drain recognises a stale row from its key regardless.
     }
 
     // The reservation has done its job: the appointment is now a real row, and

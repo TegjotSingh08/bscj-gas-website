@@ -6,6 +6,11 @@ import { requireAdmin } from "@/lib/auth/session";
 import { getJob } from "@/lib/jobs/queries";
 import { productFor } from "@/lib/booking/products";
 import { bookingConfig } from "@/lib/booking/config";
+import {
+  fetchNotificationStates,
+  fetchRecordedException,
+} from "@/lib/notifications/outbox";
+import { LateBookingNotice } from "@/components/jobs/LateBookingNotice";
 
 export const metadata: Metadata = {
   title: "Job",
@@ -61,6 +66,15 @@ export default async function AdminJobPage({
         })
       : null;
 
+  /*
+    Only read when the job actually carries an exception, so an ordinary job
+    costs nothing extra. The flag is on the row; the detail is on the timeline.
+  */
+  const exception = job.deadlineExceptionAt
+    ? await fetchRecordedException(job.id, job.appointmentStart)
+    : null;
+  const notifications = exception ? await fetchNotificationStates(job.id) : [];
+
   return (
     <main className="mx-auto max-w-3xl px-4 py-10">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
@@ -75,6 +89,14 @@ export default async function AdminJobPage({
         </Link>
       </div>
 
+      {exception && (
+        <LateBookingNotice
+          exception={exception}
+          notifications={notifications}
+          audience="admin"
+        />
+      )}
+
       <section className="mt-6 rounded-2xl border-2 border-navy-200 bg-white p-5">
         <h2 className="text-sm font-extrabold text-navy-900">Appointment</h2>
         <dl className="mt-2">
@@ -88,6 +110,7 @@ export default async function AdminJobPage({
           <Row label="Status" value={job.lifecycleStatus.replace(/_/g, " ")} />
           <Row label="Booked by" value={job.schedulingMethod.replace(/_/g, " ")} />
           <Row label="Source" value={job.source.replace(/_/g, " ")} />
+          <Row label="Requested completion date" value={job.completeByDate} />
         </dl>
       </section>
 

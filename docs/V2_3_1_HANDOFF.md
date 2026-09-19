@@ -1,4 +1,9 @@
-# V2.3.1 — corrective phase
+# V2.3.1 — corrective phase, and V2.3.2 — deadlines
+
+> **V2.3.2 is implemented and unreviewed.** Deadline-aware scheduling, recorded
+> late-booking exceptions and their notifications are in the working tree on
+> top of checkpoint `2e854bd`. See **§11**. Tenant invitation *delivery* is
+> still absent, so V2.3 remains incomplete.
 
 > **Closed out.** A review pass after the first implementation found seven
 > further defects in this phase's own work; all are fixed and covered by tests.
@@ -386,10 +391,9 @@ Carried forward from the audit, **not** addressed here and still open:
 
 ## 7. Next permitted phase
 
-**V2.3.2 — deadlines and tenant communications.** Deadline cutoff applied in
-availability and re-checked at confirmation, the recorded exception path
-(`deadline_exception_at`) when no slot fits, and the invitation/confirmation
-outbox with a worker. It depends on the late-booking policy decision above.
+~~**V2.3.2 — deadlines and tenant communications.**~~ The deadline half is now
+implemented — see **§11**. What remains of V2.3.2 is **tenant invitation
+delivery**: tokens are minted and never sent.
 
 Do not begin V2.4.
 
@@ -601,3 +605,128 @@ Deadlines stored and ignored; tenant invitation delivery does not exist; secret
 replacement has no access policy (§3); and the BSCJ decisions in §6 — late
 booking, deadline source of truth, renewal rule, payer separation, agency
 onboarding, tier pricing — remain unanswered. None was invented here.
+
+---
+
+# 11. V2.3.2 — deadline-aware scheduling and late-booking exceptions
+
+Built on checkpoint `2e854bd`. **No migration was needed**: every column this
+uses already existed (`job.complete_by_date`, `job.deadline_exception_at`,
+`compliance_cycle.due_date`, `outbound_email`). No database was altered.
+
+## 11.1 The approved rules, and where each one lives
+
+| Rule | Where |
+|---|---|
+| Earlier of the requested completion date and the active certificate due date; both preserved separately | `lib/scheduling/deadline.ts` — pure, `resolveDeadline` |
+| One date only → that one; neither → normal availability | same, `status: "none"` is distinct from a lenient cutoff |
+| Must **finish** by the end of that date, Europe/London | `endOfDayInZone` — exclusive bound at the next day's London midnight |
+| Show only compliant appointments first | `TenantScheduler`, filtered on the slot's **end** |
+| "None of these times work" reveals later times after a clear warning | `TenantScheduler`, an explicit button — never a silent widening |
+| Tenant must explicitly acknowledge; no BSCJ approval needed | unticked checkbox gates a disabled button; `acknowledgedLateBooking` permits |
+| Preserve the deadline, record exception + acknowledgement, notify agency and BSCJ, flag needs-attention | `confirmTenantAppointment` writes all of it in **one batch** |
+| Never imply the deadline was met or extend the certificate | asserted in tests and in the email/UI copy |
+
+## 11.2 Enforcement is server-side
+
+`confirmTenantAppointment` **re-reads both dates** (`fetchJobDeadline`) at
+confirmation. The browser's filtering decides what is *shown*; this decides
+what is *allowed*. An agent can move `complete_by_date` while a tenant is
+choosing, and the confirmation catches it — tested.
+
+`acknowledgedLateBooking` only ever **permits**. Forging it books late *and is
+recorded, flagged and notified as late*. What it cannot do is make a late
+appointment look on-time, which is the only property that matters.
+
+## 11.3 Rescheduling
+
+- Late → compliant: `deadline_exception_at` is **cleared**, so the job leaves
+  the needs-attention list. The exception's timeline entry stays — history is
+  not rewritten, only the current position.
+- Late → another late slot: a new exception is recorded against the new
+  appointment, and queued alerts for the old one are stood down.
+- Any move: `cancelSupersededNotifications` cancels **unsent** rows only.
+  Something the provider already accepted cannot be recalled, and rewriting its
+  state to pretend otherwise would be a lie in the record.
+
+## 11.4 Notifications
+
+Durable intent in `outbound_email`, written **in the same batch as the
+appointment**. Sending is separate and can never touch the appointment.
+
+- `pending` = queued · `sent` = **the provider accepted it** · `failed` = gave
+  up after 5 attempts · `cancelled` = superseded.
+- **`sent` is not a delivery receipt** and nothing in the UI, the audit line or
+  the report says it is: the admin view reads "accepted by the email provider".
+- Keyed on job + **appointment** + recipient, so a reschedule is a new alert and
+  a retry is not a duplicate; `onConflictDoNothing` stops a double submission
+  queueing four.
+- **Never ahead of the diary**: a row whose job is not `calendar_sync_state =
+  synced` stays queued and does **not** consume an attempt.
+- **Missing address is visible**: recorded as `agent_email_missing` /
+  `bscj_email_missing`, surfaced by name on `/admin/reconcile`.
+- Drained last in the existing reconciliation sweep, bounded.
+
+## 11.5 Where it is displayed
+
+`/admin/jobs/[id]` and `/portal/jobs/[id]` show the deadline, **both**
+underlying dates, which one produced the cutoff, and when the tenant
+acknowledged. The admin view additionally shows each notification's state.
+`needsAttention` now includes `hasDeadlineException`.
+
+## 11.6 Verification
+
+Gates: `npm test` **0** (1435 tests) · `typecheck` **0** · `lint` **0** ·
+`build` **0**.
+
+New tests: `lib/scheduling/deadline.test.ts` (23 — including GMT/BST, both
+clock changes, the 25-hour day, month/year/leap-year ends, and that the
+appointment's **end** is what is compared), `lib/notifications/outbox.test.ts`
+(29), and additions to `lib/scheduling/confirm.test.ts` covering ordinary
+bookings, explicit late bookings, tampered acknowledgement, a deadline changed
+mid-session, and both reschedule directions.
+
+**Browser journey, isolated fixtures** (local dev database, Google/Upstash/
+Resend stubbed in-process, no real email, no real calendar event):
+
+- Deadline 21 Sep (requested) vs 1 Dec (certificate) → banner named **21 Sep**,
+  and only the two compliant dates were offered.
+- "None of these times work" → warning naming the date, stating it does not
+  change and does not extend any certificate → 10 dates offered.
+- Late slot selected → **"Confirm this late appointment" disabled** until the
+  unticked box was ticked → confirmed.
+- Recorded: `deadline_exception_at` set; exception activity with both dates,
+  the source, the appointment and the acknowledgement; two queued alerts.
+- Over HTTP: the same slot **without** acknowledgement → 409 `deadline_exceeded`
+  carrying both dates; **with** it → 200.
+- Overdue deadline (10 Sep) → straight to the warning, no empty list, no
+  pointless escape button.
+- Sweep with no addresses configured → `bscj_email_missing` and
+  `transport_not_configured`, both visible, row still queued. With addresses
+  configured → both **accepted by the provider**, timestamped; a second sweep
+  considered 0.
+- `/admin/jobs/[id]` rendered the notice with both dates and
+  "accepted by the email provider".
+
+**A defect this found:** `cancelSupersededNotifications` used a disjunction of
+inequalities for its keep-set, which is true of every key — so a confirmation
+cancelled the two alerts it had just queued and nobody would ever have been
+told. Fixed to `notInArray`, with a regression test.
+
+## 11.7 Limitations
+
+- **Still no real email has ever been sent.** Resend is stubbed in every run;
+  provider acceptance is modelled, not observed. Unchanged from §10.3.
+- **Nothing schedules the sweep.** Alerts wait for someone to open
+  `/admin/reconcile`. Unchanged from §10.1.
+- **The compliance cycle is read, never written.** Nothing in this phase
+  creates or supersedes one, so the certificate date only participates where an
+  active cycle already exists.
+- **Renewal calculation remains inert**; no pricing, payer or commercial
+  default was introduced.
+- **Only the tenant flow enforces the deadline.** The public consumer booking
+  and agent-created jobs are unchanged — a consumer booking has no deadline to
+  miss, and an agent choosing a time is choosing their own.
+- `job.complete_by_date` is a `date` column that the driver returns as a
+  timestamp; the admin row prints it raw. Cosmetic, not a data problem.
+- **Seven-day customer-data retention (§10.2) is still unapproved.**

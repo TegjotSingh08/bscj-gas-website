@@ -32,7 +32,9 @@ export default async function ReconcilePage() {
   const nothingOutstanding =
     queue.awaitingCalendarSync.length === 0 &&
     queue.awaitingCalendarCleanup.length === 0 &&
-    queue.unpersistedBookings.length === 0;
+    queue.unpersistedBookings.length === 0 &&
+    queue.notifications.pending === 0 &&
+    queue.notifications.failed === 0;
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-10">
@@ -93,6 +95,7 @@ export default async function ReconcilePage() {
             note="The appointment exists in the calendar and the customer has their confirmation. Only our own record is missing."
             rows={queue.unpersistedBookings}
           />
+          <NotificationQueue notifications={queue.notifications} />
         </div>
       )}
 
@@ -102,6 +105,42 @@ export default async function ReconcilePage() {
         </Link>
       </p>
     </main>
+  );
+}
+
+/**
+ * Late-booking alerts, by state.
+ *
+ * "Queued" and "given up" are separated because they need different actions,
+ * and a missing address is called out by name: it is a deployment gap that
+ * would otherwise read as an ordinary failure and be retried forever.
+ */
+function NotificationQueue({
+  notifications,
+}: {
+  notifications: { pending: number; failed: number; missingRecipient: number };
+}) {
+  if (notifications.pending === 0 && notifications.failed === 0) return null;
+
+  return (
+    <section className="rounded-2xl border-2 border-navy-200 bg-white p-5">
+      <h2 className="text-sm font-extrabold text-navy-900">
+        Late-booking alerts ({notifications.pending + notifications.failed})
+      </h2>
+      <p className="mt-1 text-xs text-navy-600">
+        The agency and BSCJ are told when a tenant books after the deadline.
+      </p>
+      <ul className="mt-3 grid gap-1 text-sm text-navy-800">
+        <li>{notifications.pending} queued, waiting to be sent</li>
+        <li>{notifications.failed} given up on — these need a person</li>
+        {notifications.missingRecipient > 0 && (
+          <li className="font-bold text-flame-600">
+            {notifications.missingRecipient} cannot be sent: no address is
+            configured for that recipient
+          </li>
+        )}
+      </ul>
+    </section>
   );
 }
 

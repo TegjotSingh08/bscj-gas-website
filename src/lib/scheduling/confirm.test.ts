@@ -37,6 +37,7 @@ type JobRow = {
   calendarEventId: string | null;
   calendarPreviousEventId: string | null;
   calendarSyncState: string;
+  deadlineExceptionAt: Date | null;
   updatedAt: Date;
 };
 
@@ -73,6 +74,7 @@ function baseJob(overrides: Partial<JobRow> = {}): JobRow {
     calendarEventId: null,
     calendarPreviousEventId: null,
     calendarSyncState: "not_required",
+    deadlineExceptionAt: null,
     updatedAt: new Date("2026-09-01T00:00:00.000Z"),
     ...overrides,
   };
@@ -297,6 +299,43 @@ mock.module("@/lib/booking/reservations", {
   },
 });
 
+/** The two dates a cutoff is made of, as the confirmation re-reads them. */
+let jobDeadline: { requestedBy: string | null; certificateDueBy: string | null } = {
+  requestedBy: null,
+  certificateDueBy: null,
+};
+
+mock.module("./deadline-lookup", {
+  namedExports: {
+    fetchJobDeadline: async () => {
+      const { resolveDeadline } = await import("./deadline");
+      return {
+        deadline: resolveDeadline(jobDeadline, "Europe/London"),
+        complianceCycleId: null,
+      };
+    },
+  },
+});
+
+let cancelledNotifications = 0;
+
+mock.module("@/lib/notifications/outbox", {
+  namedExports: {
+    DEADLINE_EXCEPTION_KIND: "appointment.deadline_exception",
+    lateBookingRows: (input: { jobId: string; appointmentStart: Date }) =>
+      ["agent", "bscj"].map((recipient) => ({
+        jobId: input.jobId,
+        kind: "late-booking-exception",
+        recipient,
+        idempotencyKey: `late-booking-exception:${input.jobId}:${input.appointmentStart.toISOString()}:${recipient}`,
+      })),
+    cancelSupersededNotifications: async () => {
+      cancelledNotifications += 1;
+      return 0;
+    },
+  },
+});
+
 mock.module("@/lib/booking/slots", {
   namedExports: {
     countBookingsByDate: () => new Map(),
@@ -324,6 +363,8 @@ function endOf(slot: string, minutes = 45): Date {
 
 beforeEach(() => {
   job = baseJob();
+  jobDeadline = { requestedBy: null, certificateDueBy: null };
+  cancelledNotifications = 0;
   interleave = null;
   inserts = [];
   history = [];
@@ -995,5 +1036,305 @@ describe("no event outlives the appointment it belonged to", () => {
     });
     history = [];
     assert.deepEqual(await orphanedEventIdsForJob("job-1"), []);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Deadlines
+// ---------------------------------------------------------------------------
+
+/** SLOT_A falls on 2026-10-05 and SLOT_B on 2026-10-06. */
+const BEFORE_A = "2026-10-04";
+const ON_A = "2026-10-05";
+/** Later than either, for moving *back* into the deadline. */
+const LATER_SLOT = "2026-10-07T11:00:00.000Z";
+
+describe("a slot that meets the deadline books normally", () => {
+  test("an appointment finishing on the deadline date is ordinary", async () => {
+    jobDeadline = { requestedBy: ON_A, certificateDueBy: null };
+
+    const result = await confirmTenantAppointment({
+      jobId: "job-1",
+      slotStart: SLOT_A,
+      holdToken: "a".repeat(64),
+    });
+
+    assert.equal(result.status, "confirmed");
+    assert.equal(job.deadlineExceptionAt, null, "an on-time booking was flagged");
+    assert.equal(
+      inserts.some((i) => i.row.kind === "appointment.deadline_exception"),
+      false,
+    );
+    assert.equal(
+      inserts.some((i) => i.table === "outbound_email" && i.row.recipient === "agent"),
+      false,
+      "an on-time booking queued a late-booking alert",
+    );
+  });
+
+  test("no deadline at all books normally", async () => {
+    jobDeadline = { requestedBy: null, certificateDueBy: null };
+
+    const result = await confirmTenantAppointment({
+      jobId: "job-1",
+      slotStart: SLOT_A,
+      holdToken: "a".repeat(64),
+    });
+
+    assert.equal(result.status, "confirmed");
+    assert.equal(job.deadlineExceptionAt, null);
+  });
+});
+
+describe("a slot after the deadline is refused until it is accepted", () => {
+  test("without acknowledgement it is refused, and nothing is written", async () => {
+    jobDeadline = { requestedBy: BEFORE_A, certificateDueBy: null };
+
+    const result = await confirmTenantAppointment({
+      jobId: "job-1",
+      slotStart: SLOT_A,
+      holdToken: "a".repeat(64),
+    });
+
+    assert.equal(result.status, "deadline_exceeded");
+    assert.equal(job.lifecycleStatus, "tenant_outreach", "the job was moved");
+    assert.deepEqual(inserts, [], "a refused booking wrote to the timeline");
+  });
+
+  test("the refusal names the cutoff and keeps both dates", async () => {
+    jobDeadline = { requestedBy: BEFORE_A, certificateDueBy: "2026-12-01" };
+
+    const result = (await confirmTenantAppointment({
+      jobId: "job-1",
+      slotStart: SLOT_A,
+      holdToken: "a".repeat(64),
+    })) as { deadline: Record<string, unknown>; overdue: boolean };
+
+    assert.equal(result.deadline.date, BEFORE_A);
+    assert.equal(result.deadline.source, "requested");
+    assert.equal(result.deadline.requestedBy, BEFORE_A);
+    assert.equal(result.deadline.certificateDueBy, "2026-12-01");
+  });
+
+  test("an already-passed deadline is reported as overdue", async () => {
+    // Nothing bookable can meet it, so the tenant must be told that plainly
+    // rather than shown an empty list.
+    jobDeadline = { requestedBy: "2020-01-01", certificateDueBy: null };
+
+    const result = (await confirmTenantAppointment({
+      jobId: "job-1",
+      slotStart: SLOT_A,
+      holdToken: "a".repeat(64),
+    })) as { status: string; overdue: boolean };
+
+    assert.equal(result.status, "deadline_exceeded");
+    assert.equal(result.overdue, true);
+  });
+
+  test("with acknowledgement it books, and is recorded as late", async () => {
+    jobDeadline = { requestedBy: BEFORE_A, certificateDueBy: null };
+
+    const result = await confirmTenantAppointment({
+      jobId: "job-1",
+      slotStart: SLOT_A,
+      holdToken: "a".repeat(64),
+      acknowledgedLateBooking: true,
+    });
+
+    assert.equal(result.status, "confirmed");
+    assert.ok(job.deadlineExceptionAt, "the exception flag was not set");
+
+    const exception = inserts.find(
+      (i) => i.row.kind === "appointment.deadline_exception",
+    );
+    assert.ok(exception, "no exception was recorded");
+    const detail = exception.row.detail as Record<string, unknown>;
+    assert.equal(detail.deadlineDate, BEFORE_A);
+    assert.equal(detail.requestedBy, BEFORE_A);
+    assert.equal(detail.appointmentStart, SLOT_A);
+    assert.ok(detail.acknowledgedAt, "the acknowledgement was not recorded");
+  });
+
+  test("the deadline is never moved to fit the appointment", async () => {
+    /*
+      The rule that matters most. A late booking records that it is late; it
+      must never rewrite the date it missed, and it must never extend the
+      certificate.
+    */
+    jobDeadline = { requestedBy: BEFORE_A, certificateDueBy: "2026-10-04" };
+
+    await confirmTenantAppointment({
+      jobId: "job-1",
+      slotStart: SLOT_A,
+      holdToken: "a".repeat(64),
+      acknowledgedLateBooking: true,
+    });
+
+    const detail = inserts.find(
+      (i) => i.row.kind === "appointment.deadline_exception",
+    )!.row.detail as Record<string, unknown>;
+
+    assert.equal(detail.deadlineDate, BEFORE_A);
+    assert.equal(detail.certificateDueBy, "2026-10-04");
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(job, "completeByDate") &&
+        (job as Record<string, unknown>).completeByDate !== undefined,
+      false,
+      "the confirmation wrote to the requested completion date",
+    );
+  });
+
+  test("both recipients are queued, in the same transaction", async () => {
+    jobDeadline = { requestedBy: BEFORE_A, certificateDueBy: null };
+
+    await confirmTenantAppointment({
+      jobId: "job-1",
+      slotStart: SLOT_A,
+      holdToken: "a".repeat(64),
+      acknowledgedLateBooking: true,
+    });
+
+    const alerts = inserts.filter(
+      (i) => i.table === "outbound_email" && i.row.kind === "late-booking-exception",
+    );
+    assert.deepEqual(
+      alerts.map((a) => a.row.recipient).sort(),
+      ["agent", "bscj"],
+    );
+    assert.equal(batches, 1, "the alerts were not written with the appointment");
+  });
+});
+
+describe("a tampered acknowledgement cannot hide a late booking", () => {
+  test("claiming acknowledgement books late AND records it as late", async () => {
+    /*
+      The flag only ever *permits*. The cutoff is re-read from the database
+      here and the exception is written here, so forging the flag books an
+      appointment that is recorded, flagged and notified exactly as if the
+      tenant had ticked the box. What it cannot do is make the booking look
+      on-time.
+    */
+    jobDeadline = { requestedBy: BEFORE_A, certificateDueBy: null };
+
+    await confirmTenantAppointment({
+      jobId: "job-1",
+      slotStart: SLOT_A,
+      holdToken: "a".repeat(64),
+      acknowledgedLateBooking: true,
+    });
+
+    assert.ok(job.deadlineExceptionAt);
+    assert.ok(
+      inserts.some((i) => i.row.kind === "appointment.deadline_exception"),
+    );
+    assert.equal(
+      inserts.filter((i) => i.row.kind === "late-booking-exception").length,
+      2,
+      "a forged acknowledgement skipped the notifications",
+    );
+  });
+
+  test("a slot the browser was told was fine is re-judged here", async () => {
+    /*
+      The page filtered against a cutoff it read when it rendered. If the agent
+      moved the date in between, the browser's view is stale — and this is the
+      decision, not that view.
+    */
+    jobDeadline = { requestedBy: "2026-12-31", certificateDueBy: null };
+    const beforeChange = await confirmTenantAppointment({
+      jobId: "job-1",
+      slotStart: SLOT_A,
+      holdToken: "a".repeat(64),
+    });
+    assert.equal(beforeChange.status, "confirmed");
+
+    // The agent brings the date forward, past the appointment already taken.
+    job = baseJob();
+    inserts = [];
+    jobDeadline = { requestedBy: BEFORE_A, certificateDueBy: null };
+
+    const afterChange = await confirmTenantAppointment({
+      jobId: "job-1",
+      slotStart: SLOT_A,
+      holdToken: "a".repeat(64),
+    });
+    assert.equal(afterChange.status, "deadline_exceeded");
+  });
+});
+
+describe("rescheduling and the exception flag", () => {
+  test("moving from a late slot into a compliant one clears the flag", async () => {
+    /*
+      The tenant has fixed the problem. Leaving the flag up would keep the job
+      on the needs-attention list forever for something that is no longer true
+      — while the exception's own timeline entry stays, so the history is not
+      rewritten.
+    */
+    job = baseJob({
+      lifecycleStatus: "scheduled",
+      appointmentStart: new Date(LATER_SLOT),
+      appointmentEnd: endOf(LATER_SLOT),
+      calendarEventId: "old-event",
+      calendarSyncState: "synced",
+      deadlineExceptionAt: new Date("2026-09-01T00:00:00.000Z"),
+    });
+    jobDeadline = { requestedBy: ON_A, certificateDueBy: null };
+
+    const result = await confirmTenantAppointment({
+      jobId: "job-1",
+      slotStart: SLOT_A,
+      holdToken: "a".repeat(64),
+    });
+
+    assert.equal(result.status, "confirmed");
+    assert.equal(job.deadlineExceptionAt, null, "the flag was left up");
+  });
+
+  test("moving from one late slot to another re-records the exception", async () => {
+    job = baseJob({
+      lifecycleStatus: "scheduled",
+      appointmentStart: new Date(SLOT_A),
+      appointmentEnd: endOf(SLOT_A),
+      calendarEventId: "old-event",
+      calendarSyncState: "synced",
+      deadlineExceptionAt: new Date("2026-09-01T00:00:00.000Z"),
+    });
+    jobDeadline = { requestedBy: BEFORE_A, certificateDueBy: null };
+
+    await confirmTenantAppointment({
+      jobId: "job-1",
+      slotStart: SLOT_B,
+      holdToken: "a".repeat(64),
+      acknowledgedLateBooking: true,
+    });
+
+    const detail = inserts.find(
+      (i) => i.row.kind === "appointment.deadline_exception",
+    )!.row.detail as Record<string, unknown>;
+    assert.equal(
+      detail.appointmentStart,
+      SLOT_B,
+      "the exception still described the old appointment",
+    );
+  });
+
+  test("a move stands down alerts queued for the time it left", async () => {
+    // A queued alert describes a visit that is no longer happening.
+    job = baseJob({
+      lifecycleStatus: "scheduled",
+      appointmentStart: new Date(SLOT_A),
+      appointmentEnd: endOf(SLOT_A),
+      calendarEventId: "old-event",
+      calendarSyncState: "synced",
+    });
+    jobDeadline = { requestedBy: null, certificateDueBy: null };
+
+    await confirmTenantAppointment({
+      jobId: "job-1",
+      slotStart: SLOT_B,
+      holdToken: "a".repeat(64),
+    });
+
+    assert.equal(cancelledNotifications, 1);
   });
 });

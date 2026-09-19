@@ -57,6 +57,14 @@ mock.module("@/lib/ops/reconcile", {
           eventMissing: 0,
           failed: 0,
         },
+        notifications: {
+          considered: 2,
+          accepted: 2,
+          cancelled: 0,
+          stillQueued: 0,
+          failed: 0,
+          missingRecipient: 0,
+        },
       };
     },
   },

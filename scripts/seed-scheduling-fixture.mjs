@@ -14,6 +14,13 @@
  * Usage:
  *   BSCJ_ALLOW_FIXTURE_SEED=1 node scripts/seed-scheduling-fixture.mjs
  *   BSCJ_ALLOW_FIXTURE_SEED=1 node scripts/seed-scheduling-fixture.mjs --clean
+ *
+ * Options:
+ *   --requested-by=YYYY-MM-DD   the date the agent asked for
+ *   --certificate-due=YYYY-MM-DD  an active compliance cycle's due date
+ *
+ * The two are deliberately separate switches, because the whole point of the
+ * rule they exercise is that they are different things.
  */
 
 import { randomUUID, createHash, createHmac, randomBytes } from "node:crypto";
@@ -45,8 +52,14 @@ const MARK = "FIXTURE";
 const REFERENCE = "BSCJ-FX0001";
 const POSTCODE = "WV1 1AA";
 
+function option(name) {
+  const found = argv.find((a) => a.startsWith(`--${name}=`));
+  return found ? found.slice(name.length + 3) : null;
+}
+
 async function clean() {
   // Children first: the foreign keys deliberately restrict.
+  await sql`DELETE FROM "compliance_cycle" WHERE property_id IN (SELECT id FROM "property" WHERE house_or_name LIKE ${MARK + "%"})`;
   await sql`DELETE FROM "activity" WHERE job_id IN (SELECT id FROM "job" WHERE reference = ${REFERENCE})`;
   await sql`DELETE FROM "outbound_email" WHERE job_id IN (SELECT id FROM "job" WHERE reference = ${REFERENCE})`;
   await sql`DELETE FROM "scheduling_token" WHERE job_id IN (SELECT id FROM "job" WHERE reference = ${REFERENCE})`;
@@ -115,6 +128,24 @@ await sql`
     'tenant_selected', 'tenant_outreach', 'not_required', 'portal', ${"fixture-" + jobId}
   )`;
 
+const requestedBy = option("requested-by");
+const certificateDue = option("certificate-due");
+
+if (requestedBy) {
+  await sql.query(`UPDATE "job" SET complete_by_date = $2 WHERE id = $1`, [
+    jobId,
+    requestedBy,
+  ]);
+}
+
+if (certificateDue) {
+  await sql`
+    INSERT INTO "compliance_cycle"
+      (id, property_id, agent_organisation_id, product_id, due_date, due_date_source, status)
+    VALUES (${randomUUID()}, ${propertyId}, ${organisationId}, 'cp12',
+            ${certificateDue}, 'manual', 'active')`;
+}
+
 // Minted exactly as `lib/scheduling/token.ts` does, so the application's own
 // verification is what the browser test exercises.
 const token = randomBytes(32).toString("hex");
@@ -131,7 +162,15 @@ await sql`
 
 console.log(
   JSON.stringify(
-    { jobId, organisationId, reference: REFERENCE, postcode: POSTCODE, token },
+    {
+      jobId,
+      organisationId,
+      reference: REFERENCE,
+      postcode: POSTCODE,
+      token,
+      requestedBy,
+      certificateDue,
+    },
     null,
     2,
   ),

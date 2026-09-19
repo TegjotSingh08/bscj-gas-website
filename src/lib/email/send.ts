@@ -73,8 +73,12 @@ function reportFailure(
   console.warn(`[${kind}] send failed (${reason}) for reference ${reference}`);
 }
 
-/** Which of the two emails a send belongs to, for logs and idempotency keys. */
-type EmailKind = "booking-confirmation" | "booking-notification";
+/** Which email a send belongs to, for logs and provider idempotency keys. */
+type EmailKind =
+  | "booking-confirmation"
+  | "booking-notification"
+  | "late-booking-agent"
+  | "late-booking-internal";
 
 /**
  * The one place an email is actually sent.
@@ -229,4 +233,47 @@ export async function sendBookingNotification({
     reference,
     replyToAddress: customerEmail,
   });
+}
+
+/**
+ * A send driven by the durable outbox.
+ *
+ * The same transport, the same timeout, the same never-throw guarantee — the
+ * only difference is that the caller already has a row recording the intent,
+ * so it decides what the outcome means rather than this module.
+ *
+ * `idempotencySuffix` becomes part of the provider idempotency key, so two
+ * recipients of the same event cannot collapse into one message while a retry
+ * of either still cannot produce a second.
+ *
+ * **`sent` means the provider accepted it.** It is not a delivery receipt and
+ * must never be reported as one.
+ */
+export async function sendOutboxEmail({
+  kind,
+  to,
+  email,
+  reference,
+  idempotencySuffix,
+  replyToAddress,
+}: {
+  kind: "late-booking-agent" | "late-booking-internal";
+  to: string;
+  email: RenderedEmail;
+  reference: string;
+  idempotencySuffix: string;
+  replyToAddress?: string;
+}): Promise<EmailResult> {
+  return deliver({
+    kind,
+    to,
+    email,
+    reference: `${reference}-${idempotencySuffix}`,
+    replyToAddress: replyToAddress ?? replyTo(),
+  });
+}
+
+/** The internal alert address, for callers that must report it as missing. */
+export function internalNotificationRecipient(): string | null {
+  return notificationRecipient();
 }

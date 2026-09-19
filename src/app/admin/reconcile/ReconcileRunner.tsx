@@ -40,7 +40,7 @@ export function ReconcileRunner() {
       {state.report && (
         <dl
           role="status"
-          className="mt-4 grid gap-2 rounded-xl border-2 border-navy-200 bg-navy-50 px-4 py-3 text-sm text-navy-800 sm:grid-cols-3"
+          className="mt-4 grid gap-2 rounded-xl border-2 border-navy-200 bg-navy-50 px-4 py-3 text-sm text-navy-800 sm:grid-cols-2"
         >
           <Line
             label="Calendar writes"
@@ -56,6 +56,16 @@ export function ReconcileRunner() {
               state.report.bookingRecovery.listed
                 ? `${state.report.bookingRecovery.recovered} of ${state.report.bookingRecovery.considered}`
                 : "store could not be listed"
+            }
+          />
+          <Line
+            label="Alerts accepted"
+            value={
+              /*
+                "Accepted by the provider" is the furthest thing we know. It is
+                not a delivery receipt and is never described as one.
+              */
+              `${state.report.notifications.accepted} of ${state.report.notifications.considered} accepted by the provider`
             }
           />
         </dl>

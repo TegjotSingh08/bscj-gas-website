@@ -15,6 +15,12 @@ import {
   RECOVERY_BATCH_LIMIT,
   type SweepResult,
 } from "@/lib/jobs/booking-recovery";
+import {
+  drainOutbox,
+  OUTBOX_BATCH_LIMIT,
+  readOutboxSummary,
+  type DrainReport,
+} from "@/lib/notifications/outbox";
 
 /**
  * Finishing what an external call could not.
@@ -35,6 +41,10 @@ import {
  *    recorded on its `appointment.rescheduled` entries.
  * 3. **Bookings the database never recorded** — a note in the reservation
  *    store from a website booking whose Postgres write failed.
+ * 4. **Notifications nobody has been sent** — late-booking alerts queued in
+ *    `outbound_email`. Drained **last**, on purpose: a notification must never
+ *    describe an appointment the calendar does not yet hold, so it goes out
+ *    only after the sync pass above has had its chance.
  *
  * **Bounded on purpose.** Each pass takes a limited number of each kind. A
  * sweep that tried to drain everything would hold a request open for as long
@@ -74,6 +84,7 @@ export type ReconcileReport = {
   calendarSync: CalendarSyncReport;
   calendarCleanup: CalendarCleanupReport;
   bookingRecovery: SweepResult;
+  notifications: DrainReport;
 };
 
 /** How much of each queue one pass will take on. */
@@ -166,7 +177,31 @@ export async function runReconciliation(
     Math.min(limit, RECOVERY_BATCH_LIMIT),
   );
 
-  return { calendarSync: sync, calendarCleanup: cleanup, bookingRecovery };
+  /*
+    Last, so the calendar has already been brought into line. A row whose job
+    is still `pending` is left queued rather than failed — waiting for the
+    diary is not an error and must not consume one of its attempts.
+  */
+  let notifications: DrainReport;
+  try {
+    notifications = await drainOutbox(Math.min(limit, OUTBOX_BATCH_LIMIT));
+  } catch {
+    notifications = {
+      considered: 0,
+      accepted: 0,
+      cancelled: 0,
+      stillQueued: 0,
+      failed: 0,
+      missingRecipient: 0,
+    };
+  }
+
+  return {
+    calendarSync: sync,
+    calendarCleanup: cleanup,
+    bookingRecovery,
+    notifications,
+  };
 }
 
 export type ReconcileQueue = {
@@ -176,19 +211,26 @@ export type ReconcileQueue = {
   unpersistedBookings: string[];
   /** False when the reservation store could not be enumerated. */
   unpersistedListed: boolean;
+  /** Late-booking notifications, by state. Counts only — no addresses. */
+  notifications: { pending: number; failed: number; missingRecipient: number };
 };
 
 /** What is outstanding, without touching any of it. */
 export async function readReconcileQueue(
   limit = RECONCILE_BATCH_LIMIT,
 ): Promise<ReconcileQueue> {
-  const [awaitingCalendarSync, awaitingCalendarCleanup, pending] =
+  const [awaitingCalendarSync, awaitingCalendarCleanup, pending, notifications] =
     await Promise.all([
       fetchJobsAwaitingCalendarSync(limit).catch(() => []),
       fetchJobsAwaitingCalendarCleanup(limit).catch(() => []),
       listUnpersistedBookings(limit).catch(
         () => ({ status: "unavailable" }) as const,
       ),
+      readOutboxSummary().catch(() => ({
+        pending: 0,
+        failed: 0,
+        missingRecipient: 0,
+      })),
     ]);
 
   return {
@@ -199,5 +241,6 @@ export async function readReconcileQueue(
     })),
     unpersistedBookings: pending.status === "ok" ? pending.keys : [],
     unpersistedListed: pending.status === "ok",
+    notifications,
   };
 }

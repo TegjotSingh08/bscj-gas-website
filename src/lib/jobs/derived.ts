@@ -90,12 +90,21 @@ export type AttentionFacts = {
   risk: DeadlineRisk | null;
   hasRemedialAwaitingApproval: boolean;
   calendarSyncFailed: boolean;
+  /**
+   * An appointment was accepted after the deadline and recorded as such.
+   *
+   * It stays on the list until somebody deals with it: the tenant has booked,
+   * so nothing is *blocked*, but a date the agent asked for is going to be
+   * missed and that is not something to leave for them to discover.
+   */
+  hasDeadlineException: boolean;
 };
 
 export function needsAttention(facts: AttentionFacts): boolean {
   if (facts.lifecycleStatus === "cancelled") return false;
   if (facts.calendarSyncFailed) return true;
   if (facts.hasRemedialAwaitingApproval) return true;
+  if (facts.hasDeadlineException) return true;
   if (facts.risk === "urgent" || facts.risk === "overdue") return true;
   return false;
 }

@@ -5,6 +5,8 @@ import { notFound } from "next/navigation";
 import { requireAgent } from "@/lib/auth/session";
 import { getAgencyJob } from "@/lib/jobs/portal-queries";
 import { productFor } from "@/lib/booking/products";
+import { fetchRecordedException } from "@/lib/notifications/outbox";
+import { LateBookingNotice } from "@/components/jobs/LateBookingNotice";
 import { PortalNav } from "../../PortalNav";
 
 export const metadata: Metadata = {
@@ -51,6 +53,15 @@ export default async function AgencyJobPage({
   const { job, property, landlord, priceSnapshot, invitation } = found;
   const product = productFor(job.productId);
 
+  /*
+    The agency sees the same facts BSCJ does, minus the notification plumbing:
+    whether their own alert was accepted by a provider is our operational
+    detail, not theirs.
+  */
+  const exception = job.deadlineExceptionAt
+    ? await fetchRecordedException(job.id, job.appointmentStart)
+    : null;
+
   return (
     <>
       <PortalNav
@@ -83,6 +94,14 @@ export default async function AgencyJobPage({
               : "We will be in touch to arrange access."}
           </p>
         </div>
+
+        {exception && (
+          <LateBookingNotice
+            exception={exception}
+            notifications={[]}
+            audience="agent"
+          />
+        )}
 
         <section className="mt-4 rounded-2xl border-2 border-navy-200 bg-white p-5">
           <h2 className="text-sm font-extrabold text-navy-900">Work requested</h2>

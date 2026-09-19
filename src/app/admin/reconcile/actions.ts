@@ -44,6 +44,8 @@ export async function runReconciliationAction(): Promise<ReconcileState> {
       calendarFailed: report.calendarSync.failed,
       calendarCleaned: report.calendarCleanup.cleaned,
       bookingsRecovered: report.bookingRecovery.recovered,
+      alertsAccepted: report.notifications.accepted,
+      alertsFailed: report.notifications.failed,
     },
   });
 
