@@ -1,9 +1,12 @@
 # CP12 prefill bridge — the element mapping
 
-**Nothing here is implemented.** This is the contract the bridge will be
-built against, written down first so the decisions are reviewable before any
-code depends on them. The baseline it targets is `vendor/cp12-generator/`;
-the tool BSCJ actually uses is still the untracked original.
+**Implemented.** This was written as the contract first; the bridge now
+exists and is built against it. See handoff §17 for what shipped, and
+`src/lib/jobs/cp12-prefill.ts` for the server half — the allow-list there and
+the one in the generator's importer are asserted identical by a test.
+
+The baseline it targets is `vendor/cp12-generator/`; the tool BSCJ actually
+uses is still the untracked original.
 
 ## The contract
 
@@ -19,8 +22,8 @@ schema to design and no parser to write — a payload in this shape is already
 something the generator knows how to consume.
 
 The live sheet holds **157 controls**: 31 static fields and 126 appliance
-cells (6 rows × 21 columns). The bridge fills **at most 13 of the 31**, and
-never an appliance cell.
+cells (6 rows × 21 columns). The allow-list is **13 of the 31**, and never
+an appliance cell.
 
 ## What the bridge sends
 
@@ -42,11 +45,20 @@ two years.
 
 | Element | Source | Notes |
 |---|---|---|
-| `landlordName` | `customer.name` | The commissioning customer |
-| `landlordCompany` | `customer.company`, else `agentOrganisation.name` | |
+| `landlordName` | `customer.name` | The party the certificate is issued to |
+| `landlordCompany` | `customer.company` **only** | Never the agency's name |
 | `landlordTel` | `customer.phone` | |
 | `landlordAddress` | — | **Not available.** See gaps below |
-| `landlordPostcode` | `agentOrganisation.billingPostcode`, for agency work only | Null for private work |
+| `landlordPostcode` | — | **Not available.** Never the agency's billing postcode |
+
+**The agency is not this party.** A job routed through a letting agency is
+still the landlord's certificate. An earlier version filled the company line
+from the agency when the customer had none, and the postcode line from the
+agency's *billing* postcode — a finance address. Both answered "who sent us
+this work" on a line that asks "who is this certificate for", and a
+certificate naming the wrong party has to be reissued. `Cp12PrefillFacts`
+now carries no agency at all, so the mapping cannot reach one however it is
+later edited.
 
 ### The engineer and the business
 
@@ -114,13 +126,11 @@ None of these is sent, ever:
   `chkBonding` — the six pass/fail checks
 - `issuedPrintName`, `receivedPrintName` — the signature block
 
-**A live hazard worth naming.** The generator ticks all six checks
-*satisfactory* on a new certificate, and pre-ticks them in the markup. That
-is a pass assertion nobody has made yet. The bridge does not touch them, so
-it does not make this worse — but it does put the sheet in front of an
-engineer more often, and **BSCJ should decide whether those defaults should
-start unticked** before the bridge ships. This is a question for BSCJ, not a
-change to make unilaterally: it alters what a half-completed record claims.
+**The hazard this raised has been fixed.** The generator used to tick all
+six checks *satisfactory* on a new certificate, and pre-ticked them in the
+markup — a pass assertion nobody had made. In the baseline they are now
+explicit outcomes that start at *Not assessed*, and the final PDF export is
+refused until each one has been chosen. See handoff §17.3.
 
 ## Gaps — what BSCJ or a later phase must supply
 
@@ -128,7 +138,7 @@ change to make unilaterally: it alters what a half-completed record claims.
 |---|---|---|
 | `business.identity` is **empty** | Six installer fields arrive blank; the engineer types them once and saves them as defaults, exactly as today | `business_setting`, from BSCJ |
 | The engineer's **Gas Safe ID card number** is stored nowhere | `instIdCard` cannot be prefilled | A column on `app_user`, or per-engineer settings — a schema change, out of scope here |
-| No **customer address** is stored | `landlordAddress` cannot be prefilled; `landlordPostcode` only for agency work | `customers` holds name, company, email and phone only. A schema change |
+| No **customer address** is stored | Neither `landlordAddress` nor `landlordPostcode` can be prefilled. An agency's address is not a substitute | `customers` holds name, company, email and phone only. A schema change |
 | No **certificate numbering** decision | `certNo` stays manual | A business decision, then a sequence |
 | The **original is untracked** | The tool BSCJ uses and the baseline can drift apart | Put `~/Gas Cert Generator/` under version control |
 
@@ -141,19 +151,28 @@ and leaves the rest as it is today. That is worth having on its own.
 Two requirements shape this: **no customer data in a URL**, and
 **authorisation decided on the server against the job**.
 
-### Proposed mechanism
+### The mechanism, as built
 
 1. **The engineer opens their own job** at `/engineer/jobs/<id>` and presses
-   *Prepare certificate*.
+   *Download CP12 job details*. The control appears once the job is in
+   progress and stays after completion — paperwork routinely follows the
+   visit by an hour.
 2. **The browser requests the payload** from
    `GET /api/engineer/jobs/<id>/cp12-prefill`. The job id is an opaque UUID
    in the path — not customer data, and not a reference. Nothing else is in
    the URL: no name, no address, no postcode, no query string.
-3. **The server authorises before it reads.** `requireEngineerOrThrow()` for
-   the audience, then `canAccessAssignedJob()` against the row, exactly as
-   `work-actions.ts` already does. An engineer who is not on the job gets
-   the same answer as one asking about a job that does not exist. **A
-   booking reference never authorises anything**, per the V2 rule.
+2b. **The generator opens at `/engineer/certificate`**, served by a route
+   handler from `vendor/cp12-generator/` behind the same session guard. Not
+   from `public/`, which is served to anyone who knows the path. Three files
+   are named explicitly in a lookup table, so there is no path to traverse,
+   and every response is `private` so no shared cache holds it.
+3. **The server authorises before it reads.** `requireEngineerOrThrow()`
+   for the audience, then the read itself is scoped by
+   `assignmentCondition`, so an out-of-scope row is never loaded rather than
+   loaded and rejected. An engineer who is not on the job gets the same
+   answer as one asking about a job that does not exist. **A booking
+   reference never authorises anything**, per the V2 rule — it is not even
+   accepted as an identifier.
 4. **The response is a download**, not a rendered page:
    `Content-Type: application/json`,
    `Content-Disposition: attachment; filename="BSCJ-XXXXXX-prefill.json"`,
@@ -168,6 +187,11 @@ Two requirements shape this: **no customer data in a URL**, and
    a file on disk can be edited.
 6. **It is one-way.** The finished PDF is still saved by the engineer as it
    is today. Upload-back is the next slice, not this one.
+7. **Importing over existing findings starts a fresh certificate.** If the
+   sheet already carries readings, outcomes, defects, comments, signatures
+   or a certificate number, the importer names the incoming job and asks.
+   Confirming clears the sheet and then imports; it never merges. Two jobs
+   are never combined.
 
 ### Why a download rather than the alternatives
 

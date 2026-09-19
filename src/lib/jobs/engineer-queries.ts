@@ -3,7 +3,14 @@ import "server-only";
 import { and, asc, eq, gte, isNotNull, lt, notInArray } from "drizzle-orm";
 
 import { getDb } from "@/lib/db/client";
-import { customers, jobs, properties, tenancies } from "@/lib/db/schema";
+import {
+  agentOrganisations,
+  appUsers,
+  customers,
+  jobs,
+  properties,
+  tenancies,
+} from "@/lib/db/schema";
 import { assignmentCondition, type AccessScope } from "@/lib/auth/scope";
 import { bookingConfig } from "@/lib/booking/config";
 import { dayBoundsInZone } from "@/lib/booking/time";
@@ -211,4 +218,68 @@ export async function nextAssignedJob(
     .limit(1);
 
   return (row as EngineerJobRow | undefined) ?? null;
+}
+
+/**
+ * Everything the CP12 prefill needs, for one assigned job.
+ *
+ * A separate read from `getAssignedJob` because it reaches wider — the
+ * customer's company, the agency's name and billing postcode, the allocated
+ * engineer's name — and there is no reason for the job screen to pay for any
+ * of that on every view.
+ *
+ * Scoped by `assignmentCondition` like everything else here, so an engineer
+ * cannot produce a payload for a job that is not theirs. Still no money
+ * column: a certificate carries no price and neither does this.
+ */
+export async function getJobForPrefill(
+  scope: AccessScope,
+  id: string,
+): Promise<{
+  reference: string;
+  houseOrName: string | null;
+  street: string | null;
+  town: string | null;
+  postcode: string;
+  tenantName: string | null;
+  tenantPhone: string | null;
+  customerName: string | null;
+  customerCompany: string | null;
+  customerPhone: string | null;
+  organisationName: string | null;
+  organisationPostcode: string | null;
+  engineerName: string | null;
+} | null> {
+  const db = getDb();
+  if (!db || !UUID.test(id)) return null;
+
+  const [row] = await db
+    .select({
+      reference: jobs.reference,
+      houseOrName: properties.houseOrName,
+      street: properties.street,
+      town: properties.town,
+      postcode: properties.postcode,
+      tenantName: tenancies.name,
+      tenantPhone: tenancies.phone,
+      customerName: customers.name,
+      customerCompany: customers.company,
+      customerPhone: customers.phone,
+      organisationName: agentOrganisations.name,
+      organisationPostcode: agentOrganisations.billingPostcode,
+      engineerName: appUsers.name,
+    })
+    .from(jobs)
+    .innerJoin(properties, eq(properties.id, jobs.propertyId))
+    .leftJoin(tenancies, eq(tenancies.id, jobs.tenancyId))
+    .leftJoin(customers, eq(customers.id, jobs.customerId))
+    .leftJoin(
+      agentOrganisations,
+      eq(agentOrganisations.id, jobs.agentOrganisationId),
+    )
+    .leftJoin(appUsers, eq(appUsers.id, jobs.assignedEngineerId))
+    .where(assignmentCondition(jobs.assignedEngineerId, scope, eq(jobs.id, id)))
+    .limit(1);
+
+  return row ?? null;
 }

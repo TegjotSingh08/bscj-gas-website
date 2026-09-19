@@ -32,6 +32,20 @@ const nextConfig: NextConfig = {
   // an attacker should be handed.
   poweredByHeader: false,
 
+  /*
+    The certificate generator is read from disk at request time by
+    `/engineer/certificate`, so its three files have to travel with the
+    deployment. Nothing imports them, so the bundler cannot infer that on
+    its own, and the failure mode without this is a 500 in production and a
+    working generator everywhere else.
+  */
+  outputFileTracingIncludes: {
+    "/engineer/certificate/[[...file]]": [
+      "./vendor/cp12-generator/index.html",
+      "./vendor/cp12-generator/lib/*.js",
+    ],
+  },
+
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },

@@ -1488,3 +1488,348 @@ file).
   the blocker recorded in `V2_CURRENT_STATE.md`.
 
 Nothing in §13.6 is closed by this phase.
+
+---
+
+# 17. V2.5 — the CP12 job-prefill bridge
+
+**Uncommitted, for review.** On `v2-compliance-platform` at `2fa51a2`. Nothing
+pushed or deployed, no migration, no external-service call, no upload or
+storage of any certificate, no invoice and no email.
+
+The contract is §16 and `docs/CP12_PREFILL_MAPPING.md`, which was written
+first and is now marked implemented.
+
+## 17.1 The download
+
+`GET /api/engineer/jobs/<id>/cp12-prefill`, reached from a *Download CP12 job
+details* control on the engineer's own job screen.
+
+- **Authorised twice, neither time by a reference.** `requireEngineerOrThrow()`
+  for the audience, then the read is scoped by `assignmentCondition`, so an
+  out-of-scope row is never loaded rather than loaded and then rejected. A
+  booking reference is not accepted as an identifier at all.
+- **Nothing private in the URL.** The path carries a job UUID and there is no
+  query string. No name, address or postcode reaches browser history, a
+  referrer or a proxy log.
+- **An attachment**, `Cache-Control: no-store, max-age=0`,
+  `X-Content-Type-Options: nosniff`, filename `<reference>-cp12-details.json`
+  — the reference only, never a name or a postcode in something that will sit
+  in a downloads folder.
+- **Audited.** Who took it, which job, how many fields — never the contents.
+  A file of customer details leaving the application is worth accounting for.
+- It is otherwise a pure read: no job is written, nothing is sent.
+
+The payload is a flat `{elementId: value}` map — the generator's own draft
+format, so there is no new schema — restricted to the allow-list, plus a
+`missing` list naming what the engineer still has to type and **why**.
+
+## 17.2 The importer
+
+*Import job details* in the generator's toolbar. It validates kind, version,
+shape and reference, then applies **only allow-listed ids**.
+
+The loop iterates the allow-list rather than the file's keys. That direction
+is the point: looping over the file and skipping unknown keys is one
+forgotten check away from applying everything, whereas looping over the list
+cannot reach a field that is not on it. The server sending a correct payload
+is not the defence — a file on disk can be edited.
+
+An absent value is **omitted rather than sent as an empty string**, so an
+import never clears a box the engineer filled from their own saved defaults.
+
+**Two jobs are never combined.** If the sheet already carries inspection work
+— any appliance cell, any outcome, defects, labels, comments, either
+signature name, or a certificate number — the importer names the incoming job
+and its property and asks. Confirming **starts a fresh certificate and then
+imports**; declining leaves the sheet untouched. The guard deliberately looks
+only at findings, not at prefilled boxes, so re-importing the same job onto a
+sheet that has only ever been prefilled is not obstructed.
+
+The result panel is `aria-live`, says how many fields were filled and for
+which job, lists what still needs manual entry, and reports how many
+unrecognised fields were ignored.
+
+## 17.3 Safety outcomes: the pre-ticked pass is gone
+
+The hazard named in §16.4, now fixed in the baseline.
+
+The six checks were checkboxes, pre-ticked *satisfactory* in the markup and
+re-ticked by "New Certificate". A half-finished record asserted six passes
+nobody had made. They are now explicit outcomes:
+
+**Not assessed** (the start) · **Satisfactory** · **Not satisfactory** ·
+**Not applicable**
+
+- **New drafts start unassessed.** Not assessed is amber and italic, not
+  satisfactory is red — an outstanding outcome reads as outstanding rather
+  than as an empty box somebody already dealt with.
+- **Final PDF export is refused** until every one has been chosen, naming
+  the ones outstanding and focusing the first.
+- **Incomplete drafts still save.** `saveDraft()` runs first in
+  `downloadPdf()`, before any check — an engineer halfway through, in a cold
+  hallway, must never lose work to a gate.
+- **No criterion is invented.** It checks only that a choice was made, never
+  what the choice should be. *Not applicable* exists for the cases where the
+  question does not arise, using the same vocabulary the appliance table
+  already uses (Yes / No / N/A).
+- **The certificate looks the same.** The printed sheet still shows a tick:
+  the outcome carries a `data-print` mark and the capture path renders that,
+  not the select's value. Nothing about the layout changed.
+- **Historical documents are untouched.** Issued certificates are PDFs on
+  disk. For a *draft* saved before this change, a legacy `true` — the shipped
+  default, which says only that nobody changed it — becomes *Not assessed*
+  rather than a pass nobody made; a legacy `false` was a deliberate untick
+  and is kept as *Not satisfactory*.
+- **The external original is untouched**, as throughout.
+
+## 17.4 What stays manual, and what is still not invented
+
+Editable by hand and never filled by the bridge: the certificate number, the
+inspection date, the landlord's address, the Gas Safe ID card number, and any
+installer field the business settings do not hold. Each appears in the
+`missing` list with the reason, so a blank box is a known gap rather than a
+bug to report.
+
+- **No renewal rule is activated.** `nextInspection` is not sent and
+  `cp12-prefill.ts` does not import `compliance/renewal.ts` — asserted by a
+  test. The generator still derives it from the date the engineer confirms.
+- **No certificate numbering is invented.** None exists to draw on.
+- **An agency address is never passed off as a landlord's.** What is stored
+  is the agency's *billing* postcode; it fills `landlordPostcode` on agency
+  work only, and there is no `landlordAddress` key at all, so nothing can
+  fill one.
+
+## 17.5 Verification
+
+Gates: `npm test` **0** (1615 tests, up from 1584) · `typecheck` **0** ·
+`lint` **0** · `build` **0**.
+
+**HTTP, against the development server with fixture rows:**
+
+| Check | Result |
+|---|---|
+| Engineer, own in-progress job | **200**, attachment, `no-store`, `BSCJ-OP0003-cp12-details.json` |
+| Payload contents | 8 fields; no date, no number, no reading, no outcome, no signature |
+| `missing` list | 9 entries, each with a reason |
+| No session | **401** |
+| Engineer, job not theirs | **404** |
+| Engineer, job does not exist | **404**, byte-identical body |
+| Engineer, id that is not a UUID | **404** |
+| Administrator | **200** — they may work the engineer screens |
+| Cross-origin `fetch` with cookies | blocked by CORS; the endpoint is not readable from another origin |
+| Audit | one row per download, naming who and which job, never the contents |
+
+**Browser, the generator served locally:**
+
+| Check | Result |
+|---|---|
+| Fresh load | all six outcomes *Not assessed*, amber |
+| Export with outcomes unassessed | refused, all six named, **draft saved** with the half-finished note intact |
+| Valid import | 8 fields applied; outcomes, appliance table, defects, comments, signatures, `certNo` all untouched |
+| Tampered file (11 extra keys: outcomes, `certNo`, `sigDate`, `nextInspection`, defects, signature, appliance cells) | **all 11 ignored**, legitimate fields still applied, report said "11 unrecognised fields … ignored" |
+| Not JSON · an array · wrong kind · wrong version · no `fields` · no reference · only forbidden keys | **7 of 7 refused**, each with its own message, sheet left empty |
+| Import over existing findings, declined | prompt named the incoming job; sheet left exactly as it was |
+| Import over existing findings, accepted | fresh certificate then import — job A's defects, outcomes, company and phone all gone, only job B present. **No merge** |
+| All six assessed → export | proceeded and produced the PDF |
+| Printed marks | `✔ ✔ ✔ ✔ ✔ N/A` — the certificate's appearance is unchanged |
+
+**Engineer job screen** verified at tablet width (768×1024) and desktop: the
+two numbered steps, the download button and the instructions read clearly,
+and the instructions name the file to open and say no setup is needed.
+
+Development database returned to **1 app_user, 0 business rows**. Six
+`audit_event` rows remain, two of them from this phase's downloads; the log
+is append-only by design.
+
+## 17.6 Limitations
+
+- **The generator is still opened by hand** from `vendor/cp12-generator/index.html`,
+  and the file is moved by the engineer. That is step A by design; the port
+  (step B) removes both.
+- **Opened as a `file://` page, the vendored libraries do not load** — a
+  browser will not fetch `lib/` from a file origin. Verification used a local
+  static server. **This needs confirming on the engineer's actual machine**,
+  where the original works because it is opened the same way; if it does not,
+  the fix is to open it from a folder the browser will serve, or to bring the
+  port forward.
+- **Nothing is uploaded.** The finished PDF is saved by the engineer exactly
+  as today; it is not stored against the job and not exposed to the agent.
+- **Six of fourteen mapped fields are blank** until `business.identity` is
+  filled in, and two more (`landlordAddress`, `instIdCard`) need schema
+  changes that are out of scope.
+- **The downloaded file is customer data at rest** in a downloads folder. The
+  screen says to delete it; nothing enforces that, and a retention decision
+  is still outstanding alongside the Redis one in §13.6.
+- **`window.print()` is not gated**, only the PDF export. Printing a working
+  copy mid-visit is legitimate, but a printed draft can carry unassessed
+  outcomes. Worth a decision.
+- Nothing in §13.6 is closed.
+
+---
+
+# 18. V2.5.1 — four corrections, and the bridge is finished
+
+Four things in §17 were wrong or half-done. Each is corrected below. The
+download/import bridge is retained as it is; **upload-back is still not
+built**.
+
+## 18.1 The generator opens from the job, not from a file path
+
+§17.6 admitted the engineer had to find `index.html` on disk, and that a
+`file://` page cannot load its own `lib/`. Both are gone.
+
+`/engineer/certificate` serves the generator from a route handler, behind
+`requireEngineerOrThrow()` — the same guard as every other engineer surface.
+The job screen links to it, opening in a new tab so the job stays put. No
+paths, no static server, no setup.
+
+- **Not in `public/`.** Anything there is served to whoever knows the path.
+- **Three files, named in a lookup table.** The handler does not join a
+  request path onto a directory, so there is nothing to traverse — verified
+  with `..`-style and unknown-file requests, all **404**.
+- **`private` on every response**, so no proxy or CDN holds a staff URL. The
+  page itself is additionally `no-store`; the two libraries are
+  `private, max-age=3600, must-revalidate`, because 550 KB matters on a van's
+  connection and they never change.
+- **`outputFileTracingIncludes`** in `next.config.ts` carries the three files
+  into the deployment. Nothing imports them, so the bundler cannot infer it,
+  and the failure mode without it is a 500 in production only.
+
+One change to the vendored file was needed: a `<base href="/engineer/certificate/">`,
+because the route has no trailing slash and the two relative `src` attributes
+would otherwise resolve a directory too high. **This was caught in the
+browser, not in a test** — the libraries silently did not load and the page
+looked fine until the PDF engine was needed. The script tags themselves are
+untouched.
+
+## 18.2 The party mapping is the party, not the agency
+
+The correction that mattered most. `landlordCompany` used to fall back to the
+agency's name, and `landlordPostcode` came from the agency's **billing**
+postcode. Both are now gone:
+
+- `landlordCompany` ← `customer.company` **only**.
+- `landlordPostcode` ← removed from the allow-list entirely. We do not hold
+  the customer's, and a finance address is not it.
+- **`Cp12PrefillFacts` no longer carries an agency at all**, so no later edit
+  can reach for one when a customer field is empty. That is a stronger
+  guarantee than a rule in a comment.
+
+Both address lines are reported in `missing`, each saying *why* — including
+that an agency's address is not a substitute. The allow-list is now **13**
+fields.
+
+A focused test covers it: an agency job fills only the recorded customer,
+neither address key exists, and the facts type is asserted to contain no
+`organisation`, `billingPostcode` or `agentOrganisation`.
+
+## 18.3 No finding is inferred from a legacy checkbox
+
+§17.3 read a legacy `false` as *Not satisfactory*. That was an inference from
+a control that could not express what it meant: under two states, an untick
+could have been "not satisfactory", "not applicable" or "not done yet".
+
+Now **both `true` and `false` become *Not assessed*** and the engineer
+reassesses. Nothing is discarded:
+
+- The pre-migration draft is kept verbatim under
+  `gascert_draft_pre_outcomes_v1`.
+- A notice lists each check and **what was stored** — "was stored as ticked"
+  — without translating it into a finding.
+- Everything else in the draft (address, defects, comments, certificate
+  number) loads normally.
+
+**"Not applicable" was also too widely offered.** It was added to all six
+because the appliance table uses Yes/No/N/A — which is not a reason. It is
+now on **`coTested` only**: the check above it records whether an alarm is
+fitted, and where none is there is nothing to test. That is read off the
+form's own structure. The other five — alarm fitted, emergency control,
+tightness, pipework, bonding — offer **Not assessed / Satisfactory / Not
+satisfactory**, and are applicable to any installation being certificated.
+It is one line to remove if BSCJ reads `coTested` differently.
+
+## 18.4 Incomplete working copies say so
+
+- **Unassessed prints as `NOT ASSESSED` in red**, not as a blank. A blank in
+  a tick column reads as a box somebody dealt with.
+- **A `DRAFT — INCOMPLETE · NOT A VALID GAS SAFETY RECORD` banner** sits
+  inside the sheet, so it is part of anything the sheet becomes — a print, a
+  print-to-PDF, a screenshot. It is driven by the outcomes rather than by the
+  print button, so it is already correct whatever route is taken out.
+- **Incomplete drafts still save**, unconditionally and before any check.
+- **Final PDF export is still gated.**
+
+**Browser printing cannot be prevented, and nothing here claims it can.**
+Ctrl+P, the operating system's print-to-PDF and a screenshot are all outside
+this page's reach. What is possible is to make an incomplete copy declare
+itself, and that is what this does. The print button now says so in the
+status line rather than pretending to gate anything.
+
+## 18.5 Verification
+
+Gates: `npm test` **0** (1624 tests) · `typecheck` **0** · `lint` **0** ·
+`build` **0**.
+
+**The journey, from the engineer's job screen:**
+
+| Step | Result |
+|---|---|
+| Job screen → *Download CP12 job details* | attachment, `no-store`, 7 fields for the agency job |
+| Job screen → *Open the certificate generator* | `/engineer/certificate`, **both libraries loaded**, no page errors |
+| Import the downloaded file | 7 fields applied; report named both address lines and why |
+| Partly assessed | banner on screen **and in the print clone**; marks `✔ NOT ASSESSED ✔ ✗ NOT ASSESSED NOT ASSESSED` |
+| Export while partly assessed | refused, three outcomes named, draft kept with its note |
+| All six assessed | banner cleared, export ran, PDF saved |
+
+**Access:**
+
+| Check | Result |
+|---|---|
+| `/engineer/certificate`, no session | **307** to `/admin/login` |
+| `…/lib/jspdf.umd.min.js`, no session | **307** |
+| Both, signed in as engineer | **200** |
+| `…/lib/../../../.env.local` (unencoded) | **404** |
+| `…/README.md`, `…/index.html`, `…/lib/evil.js` | **404** each |
+| Page `Cache-Control` | `private, no-store, max-age=0` |
+| Library `Cache-Control` | `private, max-age=3600, must-revalidate` |
+
+**Party mapping, against an agency job whose agency had a billing postcode
+of `WV6 0RY`:** neither `WV6 0RY` nor the agency's name appeared anywhere in
+the payload or on the sheet. `landlordCompany` was left empty rather than
+filled from the agency.
+
+**Legacy draft**, seeded with five `true` and one `false`: all six loaded as
+*Not assessed*, the original draft was kept verbatim under its own key, the
+notice listed what each had been stored as, and the address, defects,
+comments and certificate number all survived.
+
+One thing worth recording because it cost time: **the first export attempt
+hung**. It was the File System Access directory picker — original, untouched
+code — waiting for a human to choose a folder, which an automated browser
+cannot do. With the picker unavailable the generator takes its documented
+fallback and saves to Downloads, which completed in under ten seconds. Not a
+defect, and not something this phase touched.
+
+Development database returned to **1 app_user, 0 business rows**; eight
+`audit_event` rows remain, the log being append-only.
+
+## 18.6 Remaining limitations
+
+- **No upload-back.** The finished PDF is still saved by the engineer. It is
+  not stored against the job and not exposed to the agent. Deliberate.
+- **The import is still a file the engineer moves.** Retained on purpose;
+  `postMessage` becomes the right answer only once the generator is a page
+  of the application rather than a served document, which is step B.
+- **Five of thirteen mapped fields are blank** until `business.identity` is
+  filled in; `landlordAddress`, `landlordPostcode` and `instIdCard` need
+  schema changes that remain out of scope.
+- **Printing is not preventable**, only marked. A completed certificate can
+  also be printed before it is exported, and that print carries no banner —
+  correctly, because it is complete.
+- **The `coTested` "Not applicable" is a reading of the form**, not a quoted
+  specification. Flagged for BSCJ to confirm or remove.
+- **The original generator is still untracked** on one machine. Now that the
+  application serves its own copy, the two can drift without anyone noticing
+  — this is more pressing than it was, not less.
+- Nothing in §13.6 is closed.

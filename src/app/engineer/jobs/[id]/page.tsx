@@ -15,6 +15,7 @@ import {
 import type { JobLifecycleStatus } from "@/lib/jobs/lifecycle";
 import { EngineerHeader } from "../../EngineerHeader";
 import { CompleteWork, StartWork } from "../../WorkControls";
+import { CertificateHandoff } from "../../CertificateHandoff";
 
 export const metadata: Metadata = {
   title: "Job",
@@ -165,6 +166,18 @@ export default async function EngineerJobPage({
             </p>
           )}
         </section>
+
+        {/*
+          Offered from the moment somebody is on site, and still there once
+          the job is done — the paperwork routinely follows the visit by an
+          hour. Not offered before: a certificate for a visit that has not
+          started is a certificate for a visit that has not happened.
+        */}
+        {(status === "in_progress" ||
+          status === "remedial_required" ||
+          status === "completed") && (
+          <CertificateHandoff jobId={job.id} reference={job.reference} />
+        )}
 
         {job.completionNotes && (
           <section className="mt-4 rounded-2xl border-2 border-navy-200 bg-white p-5">

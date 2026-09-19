@@ -1,6 +1,17 @@
 <!doctype html>
 <html lang="en">
 <head>
+<!--
+  The generator is served by the application at /engineer/certificate, which
+  has no trailing slash, so a relative src would resolve one directory too
+  high. This fixes the base for the two script tags below — the only relative
+  URLs in the file — and leaves them byte-identical to the original.
+
+  It also means this file is no longer meant to be opened straight off disk.
+  It never really was: a browser will not fetch lib/ from a file:// origin,
+  which is why the engineer now opens it from inside the signed-in area.
+-->
+<base href="/engineer/certificate/">
 <meta charset="UTF-8">
 <title>Gas Safety Record Generator</title>
 <style>
@@ -136,8 +147,48 @@
   .defects-box textarea{height:58px;}
   .defects-box .sub-label{font-size:11px;font-weight:bold;margin-top:5px;}
   .coalarm-box{flex:1;background:#f4f7fc;padding:8px 10px;border:1px solid #999;border-radius:4px;}
-  .check-line{display:flex;align-items:center;justify-content:space-between;margin:6px 0;font-size:12px;}
-  .check-line input[type=checkbox]{width:18px;height:18px;}
+  .check-line{display:flex;align-items:center;justify-content:space-between;margin:6px 0;font-size:12px;gap:8px;}
+  /*
+    A safety outcome is a choice, not a tick that is already made. The
+    original shipped six checkboxes pre-ticked "satisfactory", which meant a
+    half-finished record asserted four passes and two alarm checks nobody had
+    carried out. They are selects now, starting at "Not assessed", and an
+    unassessed one is visibly unfinished — amber, not blank, so it reads as
+    outstanding rather than as an empty box somebody already dealt with.
+  */
+  .check-line select.outcome{font-size:12px;padding:3px 4px;min-width:124px;min-height:30px;
+    border:1px solid #999;border-radius:3px;background:#fff;}
+  .check-line select.outcome:focus-visible{outline:2px solid #0b1b30;outline-offset:1px;}
+  .check-line select.outcome[data-state=""]{background:#fff6e5;border-color:#d08b00;font-style:italic;}
+  .check-line select.outcome[data-state="no"]{background:#fdecec;border-color:#c0392b;font-weight:bold;}
+
+  /*
+    The import result. `aria-live` so a screen reader hears the outcome, and
+    wide enough to list what still needs typing — a bare "imported" tells an
+    engineer nothing about the boxes that are still empty and why.
+  */
+  .import-report{flex-basis:100%;margin-top:8px;padding:10px 12px;border-radius:6px;
+    font-size:12px;line-height:1.5;background:#fff;color:#0b1b30;border:2px solid #c2d5ec;}
+  .import-report.ok{border-color:#0f7a52;background:#eaf6f1;}
+  .import-report.bad{border-color:#c0392b;background:#fdecec;}
+  .import-report h3{margin:0 0 4px;font-size:13px;}
+  .import-report ul{margin:6px 0 0 18px;padding:0;}
+  .import-report .dismiss{margin-top:8px;font-size:11px;}
+
+  /*
+    The incomplete mark.
+
+    Inside the sheet, so it is part of anything the sheet becomes — a print,
+    a print-to-PDF, a screenshot. **Browser printing cannot be prevented**:
+    Ctrl+P, the print-to-PDF driver and a screen capture are all outside
+    this page's reach, and claiming otherwise would be worse than useless.
+    What can be done is make an incomplete working copy say so, loudly, on
+    the paper.
+  */
+  .draft-banner{background:#c0392b;color:#fff;font-weight:bold;text-align:center;
+    padding:6px 8px;margin-bottom:6px;letter-spacing:0.06em;font-size:13px;
+    border:2px solid #7d2118;border-radius:3px;}
+  .pv-unassessed{color:#c0392b;font-weight:bold;font-size:9px;letter-spacing:0.03em;}
 
   /* bottom row: checks / comments */
   .bottom-row{display:flex;gap:10px;margin-bottom:10px;}
@@ -236,6 +287,10 @@
     input, select, textarea{background:transparent !important;border:none !important;}
     table.appliance td, table.appliance th{border:1px solid #666;}
     fieldset, .info-box, .defects-box, .coalarm-box, .checks-box, .comments-box, .sig-row{border-color:#666 !important;}
+    /* The incomplete mark must survive the print stylesheet. */
+    .draft-banner{background:#c0392b !important;color:#fff !important;
+      -webkit-print-color-adjust:exact;print-color-adjust:exact;}
+    .pv-unassessed{color:#c0392b !important;}
     .landlord-select-line, .save-btn, .row-btns{display:none !important;}
     select{background-image:none !important;}
     @page{ size: A4 landscape; margin:8mm; }
@@ -252,14 +307,18 @@
   </label>
   <button id="btnManageLandlords">Manage Landlords</button>
   <button id="btnNewCert">New Certificate</button>
+  <button id="btnImportJob" title="Load a job's property and contact details from a file downloaded from the BSCJ engineer app">📥 Import job details</button>
+  <input type="file" id="importJobFile" accept="application/json,.json" hidden>
   <button id="btnDownloadPdf" class="primary">⬇ Download Certificate PDF</button>
   <button id="btnPickFolder" title="Choose the GAS CERTS folder once — certificates are then saved into it automatically, sorted by month and landlord">📁 Save folder</button>
   <button id="btnPrint" style="font-size:11px;">🖨️ Print instead</button>
   <div class="status" id="statusLine">Draft auto-saves in this browser as you type. Certificates save sorted by month → landlord into your chosen folder (📁 Save folder).</div>
+  <div class="import-report" id="importReport" role="status" aria-live="polite" hidden></div>
 </div>
 
 <div class="sheet" id="sheet">
 
+  <div class="draft-banner" id="draftBanner" hidden>DRAFT — INCOMPLETE · NOT A VALID GAS SAFETY RECORD</div>
   <div class="header-row">
     <img class="logo" src="data:image/jpeg;base64,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" alt="Gas Safe Register">
     <div class="title-block">
@@ -327,17 +386,17 @@
     </div>
     <div class="coalarm-box">
       <div class="section-title" style="margin:-6px -8px 6px -8px;">CO Alarm(s)</div>
-      <div class="check-line"><span>CO Alarm(s) fitted</span><input type="checkbox" id="coFitted" checked></div>
-      <div class="check-line"><span>CO Alarm(s) tested and satisfactory</span><input type="checkbox" id="coTested" checked></div>
+      <div class="check-line"><span>CO Alarm(s) fitted</span><select class="outcome" id="coFitted" aria-label="Outcome"><option value="" data-print="NOT ASSESSED">Not assessed</option><option value="yes" data-print="✔">Satisfactory</option><option value="no" data-print="✗">Not satisfactory</option></select></div>
+      <div class="check-line"><span>CO Alarm(s) tested and satisfactory</span><select class="outcome" id="coTested" aria-label="Outcome"><option value="" data-print="NOT ASSESSED">Not assessed</option><option value="yes" data-print="✔">Satisfactory</option><option value="no" data-print="✗">Not satisfactory</option><option value="na" data-print="N/A">Not applicable</option></select></div>
     </div>
   </div>
 
   <div class="bottom-row">
     <div class="checks-box">
-      <div class="check-line"><span>Emergency Control Accessible</span><input type="checkbox" id="chkEmergency" checked></div>
-      <div class="check-line"><span>Gas Tightness Satisfactory</span><input type="checkbox" id="chkTightness" checked></div>
-      <div class="check-line"><span>Gas Installation Pipework Visual Inspection Satisfactory</span><input type="checkbox" id="chkPipework" checked></div>
-      <div class="check-line"><span>Equipotential Bonding</span><input type="checkbox" id="chkBonding" checked></div>
+      <div class="check-line"><span>Emergency Control Accessible</span><select class="outcome" id="chkEmergency" aria-label="Outcome"><option value="" data-print="NOT ASSESSED">Not assessed</option><option value="yes" data-print="✔">Satisfactory</option><option value="no" data-print="✗">Not satisfactory</option></select></div>
+      <div class="check-line"><span>Gas Tightness Satisfactory</span><select class="outcome" id="chkTightness" aria-label="Outcome"><option value="" data-print="NOT ASSESSED">Not assessed</option><option value="yes" data-print="✔">Satisfactory</option><option value="no" data-print="✗">Not satisfactory</option></select></div>
+      <div class="check-line"><span>Gas Installation Pipework Visual Inspection Satisfactory</span><select class="outcome" id="chkPipework" aria-label="Outcome"><option value="" data-print="NOT ASSESSED">Not assessed</option><option value="yes" data-print="✔">Satisfactory</option><option value="no" data-print="✗">Not satisfactory</option></select></div>
+      <div class="check-line"><span>Equipotential Bonding</span><select class="outcome" id="chkBonding" aria-label="Outcome"><option value="" data-print="NOT ASSESSED">Not assessed</option><option value="yes" data-print="✔">Satisfactory</option><option value="no" data-print="✗">Not satisfactory</option></select></div>
       <div class="next-insp">
         <label>NEXT INSPECTION DUE BEFORE</label>
         <input type="text" id="nextInspection" placeholder="dd/mm/yyyy">
@@ -802,12 +861,14 @@ function newCertificate(skipConfirm){
   document.querySelectorAll('#sheet input[type=text], #sheet textarea').forEach(el=>el.value='');
   document.querySelectorAll('#sheet select').forEach(el=>el.selectedIndex=0);
   applyEngineerDefaults();
-  qs('coFitted').checked = true;
-  qs('coTested').checked = true;
-  qs('chkEmergency').checked = true;
-  qs('chkTightness').checked = true;
-  qs('chkPipework').checked = true;
-  qs('chkBonding').checked = true;
+  /*
+    Every outcome starts unassessed. The original set all six to
+    "satisfactory" here, which is an assertion about a property nobody has
+    been to yet. The line above already resets every select to its first
+    option; this makes the intent explicit and repaints the amber state.
+  */
+  OUTCOME_IDS.forEach(id=>{ qs(id).value = ''; });
+  refreshOutcomeStates();
   qs('sigDate').value = todayUk();
   updateNextInspection();
   applyLandlordSelection('');
@@ -817,7 +878,23 @@ function newCertificate(skipConfirm){
 qs('btnNewCert').addEventListener('click', ()=>newCertificate(false));
 
 /* ---------------- Print (fallback) ---------------- */
-qs('btnPrint').addEventListener('click', ()=>{ saveDraft(); window.print(); });
+qs('btnPrint').addEventListener('click', ()=>{
+  /*
+    Printing is never blocked. It cannot be — Ctrl+P, the operating
+    system's print-to-PDF and a screenshot are all outside this page — and
+    a working copy mid-visit is a legitimate thing to want. What an
+    incomplete one carries is the banner and a red NOT ASSESSED against
+    every outcome still outstanding, so the paper says what it is.
+  */
+  saveDraft();
+  const outstanding = unassessedOutcomes().length;
+  if(outstanding){
+    qs('statusLine').textContent = 'Printing a working copy — ' + outstanding +
+      ' outcome' + (outstanding === 1 ? '' : 's') +
+      ' not assessed, so it is marked DRAFT — INCOMPLETE.';
+  }
+  window.print();
+});
 
 /* ---------------- Download landscape PDF (primary path) ----------------
    Renders the certificate sheet to a high-res image and places it on a true
@@ -849,6 +926,15 @@ function makePrintClone(){
     if(orig.type === 'checkbox'){
       rep.className = 'pv pv-check';
       rep.textContent = orig.checked ? '✔' : ' ';
+    } else if(orig.classList.contains('outcome')){
+      /*
+        A safety outcome prints as the mark it has always printed — a
+        tick for satisfactory — not as the value the select carries.
+        The certificate's appearance is unchanged; only the way the
+        engineer chooses it has.
+      */
+      rep.className = 'pv pv-check' + (orig.value === '' ? ' pv-unassessed' : '');
+      rep.textContent = orig.selectedOptions[0]?.dataset.print || ' ';
     } else {
       rep.className = 'pv' + (orig.tagName === 'TEXTAREA' ? ' pv-multi' : '');
       rep.textContent = orig.value;
@@ -969,7 +1055,44 @@ qs('btnPickFolder').addEventListener('click', pickCertsRoot);
 getCertsRoot(false).then(h=>{ if(h) setSaveFolderStatus(h.name); });
 
 async function downloadPdf(){
+  /*
+    The draft is saved first, unconditionally and before any check below.
+    An incomplete certificate must always be savable — the engineer may be
+    halfway through, in a cold hallway, with one more appliance to do.
+    What is gated is the **final PDF**, not the work in progress.
+  */
   saveDraft();
+
+  /*
+    No outcome may be left unassessed on a certificate that gets filed and
+    sent. The original shipped all six pre-ticked "satisfactory", so a
+    half-finished record asserted six passes; they now start unassessed, and
+    this is what stops "unassessed" silently becoming a blank box on a
+    finished document.
+
+    It checks only that a choice was made. It does not decide what the
+    choice should be, and it invents no criterion for making one: whether an
+    installation is satisfactory is the engineer's judgement, and
+    "Not applicable" is available for the cases where the question does not
+    arise.
+  */
+  const unassessed = unassessedOutcomes();
+  if(unassessed.length){
+    showImportReport('bad', 'Certificate not exported',
+      '<p>These safety outcomes have not been assessed yet. Choose an outcome for each — ' +
+      '<em>Satisfactory</em>, <em>Not satisfactory</em> or <em>Not applicable</em> — then export again.</p>' +
+      '<ul>' + unassessed.map(l => '<li>' + escapeHtml(l) + '</li>').join('') + '</ul>' +
+      '<p>Your draft has been saved. Nothing has been lost.</p>');
+    qs('statusLine').textContent = unassessed.length + ' safety outcome' +
+      (unassessed.length === 1 ? '' : 's') + ' still to assess. Draft saved.';
+    qs(OUTCOME_IDS.find(id => !qs(id).value)).focus();
+    return;
+  }
+
+  // The gate has passed, so a refusal still on screen from a previous
+  // attempt is stale and would be read as the current answer.
+  qs('importReport').hidden = true;
+
   const btn = qs('btnDownloadPdf');
   const origBtnText = btn.textContent;
 
@@ -1010,6 +1133,265 @@ async function downloadPdf(){
 }
 qs('btnDownloadPdf').addEventListener('click', downloadPdf);
 
+/* ==========================================================================
+   Safety outcomes, and importing a job's details
+   --------------------------------------------------------------------------
+   Added for the BSCJ integration. Everything above this point is the
+   original generator; nothing here changes how the certificate is drawn.
+   ========================================================================== */
+
+/* The six outcomes at the bottom of the sheet. */
+const OUTCOME_IDS = ['coFitted','coTested','chkEmergency','chkTightness','chkPipework','chkBonding'];
+
+/*
+  Paints the amber "not assessed" and red "not satisfactory" states.
+  Driven from a data attribute rather than a class so the CSS stays
+  declarative and there is one place that knows the mapping.
+*/
+function refreshOutcomeStates(){
+  OUTCOME_IDS.forEach(id=>{
+    const el = qs(id);
+    if(el) el.setAttribute('data-state', el.value);
+  });
+  /*
+    The banner tracks the outcomes rather than being switched on by the
+    print button, so it is already right whatever route the sheet takes out
+    of the browser — Print, print-to-PDF, or a screenshot.
+  */
+  const banner = qs('draftBanner');
+  if(banner) banner.hidden = unassessedOutcomes().length === 0;
+}
+OUTCOME_IDS.forEach(id=>{
+  const el = qs(id);
+  if(el) el.addEventListener('change', refreshOutcomeStates);
+});
+
+/*
+  Tells the engineer that a draft predates the explicit outcomes, shows what
+  was stored against each check, and keeps the original draft verbatim under
+  its own key.
+
+  It states what was stored; it does not translate it into a finding. The
+  point of the notice is that only the engineer can say what those ticks
+  were supposed to mean, and on a safety record a guess is worse than a
+  blank.
+*/
+function reportLegacyOutcomes(originalDraft){
+  const ids = Object.keys(legacyOutcomes);
+  if(ids.length === 0) return;
+
+  if(originalDraft){
+    try{ localStorage.setItem(LEGACY_DRAFT_KEY, originalDraft); }
+    catch{ /* Storage full or blocked: the notice below still stands. */ }
+  }
+
+  const rows = ids.map(id => {
+    const label = qs(id).closest('.check-line').querySelector('span').textContent.trim();
+    return '<li>' + escapeHtml(label) + ' — was stored as <strong>' +
+           (legacyOutcomes[id] ? 'ticked' : 'not ticked') + '</strong></li>';
+  }).join('');
+
+  showImportReport('bad', 'These safety checks need reassessing',
+    '<p>This draft was saved before the safety checks recorded an explicit ' +
+    'outcome. A tick could have meant satisfactory, not applicable, or simply ' +
+    'not done yet — so none of them has been carried over as a finding, and ' +
+    'each is now <em>Not assessed</em>.</p>' +
+    '<p>What the old draft had stored:</p><ul>' + rows + '</ul>' +
+    '<p>Your original draft has been kept unchanged in this browser.</p>');
+}
+
+/** Which outcomes are still unassessed. Empty means the sheet is complete. */
+function unassessedOutcomes(){
+  return OUTCOME_IDS
+    .filter(id => !qs(id).value)
+    .map(id => qs(id).closest('.check-line').querySelector('span').textContent.trim());
+}
+
+/* --------------------------------------------------------------------------
+   Importing a job's details
+   --------------------------------------------------------------------------
+   The payload comes from the BSCJ engineer app, which authorises the
+   download against the job and the signed-in engineer. This end trusts none
+   of that: a file on disk can be edited, so the allow-list below — not the
+   server — is what decides which boxes may be filled.
+   -------------------------------------------------------------------------- */
+
+/*
+  The only element ids an imported file may touch. It mirrors
+  CP12_PREFILL_FIELDS in src/lib/jobs/cp12-prefill.ts, and a test asserts the
+  two lists stay identical.
+
+  Deliberately absent, and they must stay absent: every appliance cell, all
+  six safety outcomes, defects, labelsIssued, comments, both signature print
+  names, certNo, sigDate and nextInspection. A reading, an outcome, a
+  signature or a date is the engineer's, and no file may supply one.
+
+  `landlordAddress` and `landlordPostcode` are absent for a different
+  reason. That block names the party the certificate is issued to, and the
+  application holds no address for them — only, sometimes, a letting
+  agency's billing address, which belongs to somebody else. They are typed
+  in here, and the import report says so.
+*/
+const IMPORT_ALLOWED = [
+  'jobName','jobAddress','jobPostcode','jobTel',
+  'landlordName','landlordCompany','landlordTel',
+  'instEngineer','instCompany','instAddress','instPostcode','instTel','instGasSafeReg'
+];
+
+const IMPORT_KIND = 'bscj.cp12-prefill';
+const IMPORT_VERSION = 1;
+
+function importReport(){ return qs('importReport'); }
+
+function showImportReport(kind, title, bodyHtml){
+  const box = importReport();
+  box.className = 'import-report ' + kind;
+  box.innerHTML = '<h3>' + escapeHtml(title) + '</h3>' + bodyHtml +
+    '<div class="dismiss"><button type="button" id="btnDismissImport">Dismiss</button></div>';
+  box.hidden = false;
+  qs('btnDismissImport').addEventListener('click', ()=>{ box.hidden = true; });
+}
+
+/*
+  Is there inspection work on this sheet already?
+
+  This is the guard against filling one property's details over another
+  property's findings. It asks only about things the import never writes —
+  readings, outcomes, defects, comments, signatures, the number and the date
+  — so re-importing the same job onto a sheet that has only ever been
+  prefilled is not obstructed, and importing over real work always is.
+*/
+function sheetHasInspectionWork(){
+  const applianceValues = [...document.querySelectorAll('table.appliance input, table.appliance select')]
+    .some(el => el.value.trim() !== '');
+  if(applianceValues) return true;
+  if(OUTCOME_IDS.some(id => qs(id).value !== '')) return true;
+  for(const id of ['defects','labelsIssued','comments','issuedPrintName','receivedPrintName','certNo']){
+    const el = qs(id);
+    if(el && el.value.trim() !== '') return true;
+  }
+  return false;
+}
+
+function applyImport(payload){
+  /* Only allow-listed keys, only strings, and never a blank that would wipe
+     something the engineer has already typed. */
+  const applied = [];
+  for(const id of IMPORT_ALLOWED){
+    const value = payload.fields[id];
+    if(typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    if(trimmed === '') continue;
+    const el = qs(id);
+    if(!el) continue;
+    el.value = trimmed;
+    applied.push(id);
+  }
+
+  const ignored = Object.keys(payload.fields).filter(k => !IMPORT_ALLOWED.includes(k));
+
+  saveDraft();
+  refreshOutcomeStates();
+
+  const missing = Array.isArray(payload.missing) ? payload.missing : [];
+  let body = '<p>Filled ' + applied.length + ' field' + (applied.length === 1 ? '' : 's') +
+             ' for <strong>' + escapeHtml(payload.reference) + '</strong> — ' + escapeHtml(payload.propertyLabel) + '.</p>';
+
+  body += '<p><strong>Still to enter by hand:</strong></p><ul>';
+  body += '<li>Every appliance row, and the six safety outcomes — these are never imported.</li>';
+  for(const m of missing.slice(0, 12)){
+    if(!m || typeof m.label !== 'string') continue;
+    body += '<li>' + escapeHtml(m.label) + (typeof m.reason === 'string' ? ' — ' + escapeHtml(m.reason) : '') + '</li>';
+  }
+  body += '</ul>';
+
+  if(ignored.length){
+    body += '<p>' + ignored.length + ' unrecognised field' + (ignored.length === 1 ? ' was' : 's were') +
+            ' in the file and ' + (ignored.length === 1 ? 'was' : 'were') + ' ignored.</p>';
+  }
+
+  showImportReport('ok', 'Job details imported', body);
+  qs('statusLine').textContent = 'Imported ' + payload.reference + '. Readings, outcomes and the date are still yours to enter.';
+}
+
+/** Validates the file. Says what is wrong rather than failing silently. */
+function parseImport(text){
+  let data;
+  try{ data = JSON.parse(text); }
+  catch{ return {error:'That file is not readable. It should be the .json file downloaded from the job screen.'}; }
+
+  if(typeof data !== 'object' || data === null || Array.isArray(data)){
+    return {error:'That file does not contain job details.'};
+  }
+  if(data.kind !== IMPORT_KIND){
+    return {error:'That is not a BSCJ job details file. Download one from the job screen in the engineer app.'};
+  }
+  if(data.version !== IMPORT_VERSION){
+    return {error:'That file was made by a different version of the engineer app. Download it again.'};
+  }
+  if(typeof data.fields !== 'object' || data.fields === null || Array.isArray(data.fields)){
+    return {error:'That file is missing its details, so there is nothing to import.'};
+  }
+  if(typeof data.reference !== 'string' || data.reference.trim() === ''){
+    return {error:'That file does not say which job it belongs to.'};
+  }
+  if(typeof data.propertyLabel !== 'string') data.propertyLabel = data.reference;
+
+  const usable = IMPORT_ALLOWED.filter(id => typeof data.fields[id] === 'string' && data.fields[id].trim() !== '');
+  if(usable.length === 0){
+    return {error:'That file has no details this form can use.'};
+  }
+  return {payload:data};
+}
+
+qs('btnImportJob').addEventListener('click', ()=>{
+  // Reset first, or choosing the same file twice fires no change event.
+  qs('importJobFile').value = '';
+  qs('importJobFile').click();
+});
+
+qs('importJobFile').addEventListener('change', async (e)=>{
+  const file = e.target.files && e.target.files[0];
+  if(!file) return;
+
+  let text;
+  try{ text = await file.text(); }
+  catch{ showImportReport('bad','Could not read that file','<p>Try downloading it again.</p>'); return; }
+
+  const result = parseImport(text);
+  if(result.error){
+    showImportReport('bad','Nothing was imported', '<p>' + escapeHtml(result.error) + '</p>');
+    return;
+  }
+
+  /*
+    Never silently combine two jobs.
+
+    If there is inspection work on this sheet, the engineer is told whose
+    details are about to land on it and has to start a fresh certificate
+    first. Confirming does NOT merge: it clears the sheet and then imports,
+    so what is on screen afterwards belongs to exactly one job.
+  */
+  if(sheetHasInspectionWork()){
+    const ok = confirm(
+      'This certificate already has inspection details on it.\n\n' +
+      'Importing ' + result.payload.reference + ' (' + result.payload.propertyLabel + ') ' +
+      'will START A NEW CERTIFICATE and discard what is on screen.\n\n' +
+      'Two jobs are never combined. Continue?'
+    );
+    if(!ok){
+      showImportReport('bad','Nothing was imported',
+        '<p>The certificate on screen was left alone. Finish it, or press ' +
+        '<strong>New Certificate</strong> first, then import.</p>');
+      return;
+    }
+    newCertificate(true);
+  }
+
+  applyImport(result.payload);
+});
+
+
 /* ---------------- Autosave draft ---------------- */
 let saveTimer = null;
 function saveDraft(){
@@ -1022,6 +1404,17 @@ function saveDraft(){
   const status = qs('statusLine');
   status.textContent = 'Draft saved ' + new Date().toLocaleTimeString();
 }
+/*
+  What a pre-migration draft had stored against each outcome.
+
+  Filled by `loadDraft`, shown to the engineer, and never turned into a
+  finding. Empty for any draft saved since the outcomes became explicit.
+*/
+const legacyOutcomes = {};
+
+/** The pre-migration draft, kept verbatim so nothing is lost to the change. */
+const LEGACY_DRAFT_KEY = 'gascert_draft_pre_outcomes_v1';
+
 function loadDraft(){
   try{
     const raw = localStorage.getItem(DRAFT_KEY);
@@ -1031,6 +1424,27 @@ function loadDraft(){
       const el = qs(id);
       if(!el) return;
       if(el.type==='checkbox') el.checked = !!data[id];
+      else if(typeof data[id] === 'boolean' && OUTCOME_IDS.includes(id)){
+        /*
+          A draft saved before the outcomes became explicit.
+
+          **No finding is inferred from it.** A stored `true` was the
+          shipped default and says only that nobody changed it. A stored
+          `false` is a deliberate untick, but under a two-state control it
+          could have meant "not satisfactory", "not applicable" or "I have
+          not got to this yet" — the control could not tell them apart, so
+          neither can this. Both are ambiguous, so both become *Not
+          assessed* and the engineer reassesses.
+
+          The original values are **not discarded**: they are collected
+          here, the pre-migration draft is kept under its own key, and the
+          notice below shows what was stored so a person can see what they
+          had. Certificates already issued are PDFs on disk and are
+          untouched by any of this.
+        */
+        legacyOutcomes[id] = data[id];
+        el.value = '';
+      }
       else el.value = data[id];
     });
     return true;
@@ -1049,9 +1463,18 @@ document.addEventListener('change', (e)=>{
 /* ---------------- Init ---------------- */
 buildApplianceTable();
 populateLandlordSelects();
+/*
+  The draft exactly as it was stored, taken before anything can rewrite it.
+  Only kept when it turns out to predate the explicit outcomes.
+*/
+const draftBeforeLoad = localStorage.getItem(DRAFT_KEY);
 if(!loadDraft()){
   newCertificate(true);
 }
+// After the draft is restored, so the amber "not assessed" state reflects
+// what was actually saved rather than the markup's starting point.
+refreshOutcomeStates();
+reportLegacyOutcomes(draftBeforeLoad);
 </script>
 </body>
 </html>

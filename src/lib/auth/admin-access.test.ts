@@ -233,6 +233,54 @@ describe("every engineer page checks authorisation for itself", () => {
     }
   });
 
+  test("its route handlers verify the session too", () => {
+    /*
+      The generator is served from inside the authenticated area rather than
+      from `public/`, which means a route handler reads files off disk and
+      returns them. It must ask who is calling exactly as a page does —
+      anything under `public/` is served to whoever knows the path, and this
+      deliberately is not.
+    */
+    const handlers = filesUnder(ENGINEER_ROOT, (name) => name === "route.ts");
+    assert.ok(handlers.length > 0, "no engineer route handlers were found");
+    for (const file of handlers) {
+      assert.match(
+        read(file),
+        /requireEngineer(OrThrow)?\(\)/,
+        `${relative(file)} does not verify the session`,
+      );
+    }
+  });
+
+  test("a handler that serves files names them, rather than joining a path", () => {
+    // A request path joined onto a directory is a traversal waiting to be
+    // found. An object lookup has nothing to traverse.
+    const generator = path.join(
+      ENGINEER_ROOT,
+      "certificate",
+      "[[...file]]",
+      "route.ts",
+    );
+    const source = read(generator);
+    assert.match(source, /const SERVABLE: Record<string,/);
+    assert.match(source, /const entry = SERVABLE\[key\];/);
+    assert.match(source, /if \(!entry\)/);
+  });
+
+  test("authenticated staff responses are never shared-cached", () => {
+    // `private` at minimum, so no proxy or CDN holds a staff response.
+    const handlers = filesUnder(ENGINEER_ROOT, (name) => name === "route.ts");
+    for (const file of handlers) {
+      const source = read(file);
+      assert.match(source, /"Cache-Control"/, relative(file));
+      assert.equal(
+        /"Cache-Control":\s*"(?!private|no-store)/.test(source),
+        false,
+        `${relative(file)} may be cached by a shared cache`,
+      );
+    }
+  });
+
   test("no engineer page is indexable", () => {
     for (const file of [
       ...engineerPages,
