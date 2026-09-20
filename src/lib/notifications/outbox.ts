@@ -18,7 +18,6 @@ import {
   tenancies,
 } from "@/lib/db/schema";
 import { bookingConfig } from "@/lib/booking/config";
-import { business } from "@/lib/business";
 import { productFor, isProductId } from "@/lib/booking/products";
 import {
   renderLateBookingAgentEmail,
@@ -39,6 +38,7 @@ import {
 } from "@/lib/email/send";
 import { getDocument } from "@/lib/storage/documents";
 import { createSchedulingToken } from "@/lib/scheduling/token";
+import { resolveAppOrigin } from "@/lib/config/origin";
 import { issueCredential } from "@/lib/auth/credentials";
 import { CREDENTIAL_LIFETIME_HOURS } from "@/lib/auth/credential-token";
 import {
@@ -574,6 +574,15 @@ async function deliverAccountAccess(
   const to = found.email;
   if (!to) return await missing(db, row, "account_email_missing");
 
+  /*
+    Checked **before** a credential is minted. Minting first would spend a
+    single-use credential on a message that cannot be addressed, and the retry
+    would mint another — so a missing setting would quietly burn one
+    credential per attempt.
+  */
+  const origin = resolveAppOrigin();
+  if (!origin.ok) return await missing(db, row, "app_origin_not_configured");
+
   const purpose = isInvitation ? "invitation" : "password_reset";
   const issued = await issueCredential({
     userId: found.id,
@@ -590,7 +599,13 @@ async function deliverAccountAccess(
   const path = isInvitation ? "invitation" : "reset";
   const facts = {
     name: found.name,
-    link: `${business.url}/account/${path}/${issued.token}`,
+    /*
+      **This** deployment's origin, not the canonical marketing one. An
+      invitation minted on staging that points at production sends the person
+      to a site where their account does not exist and their token hashes to
+      nothing — which looks forged to them and broken to us.
+    */
+    link: `${origin.origin}/account/${path}/${issued.token}`,
     lifetimeHours: CREDENTIAL_LIFETIME_HOURS[purpose],
   };
 
@@ -641,6 +656,10 @@ async function deliverInvitation(
   const to = loaded.tenantEmail;
   if (!to) return await missing(db, row, "tenant_email_missing");
 
+  // Addressable before anything is minted, for the same reason as above.
+  const origin = resolveAppOrigin();
+  if (!origin.ok) return await missing(db, row, "app_origin_not_configured");
+
   /*
     A fresh token, minted for **this attempt**.
 
@@ -671,7 +690,7 @@ async function deliverInvitation(
     productName: product.name,
     appointmentMinutes: product.durationMinutes,
     organisationName: loaded.organisationName,
-    link: `${business.url}/schedule/${minted.token}`,
+    link: `${origin.origin}/schedule/${minted.token}`,
     expiresAt: minted.expiresAt,
     timeZone: bookingConfig.timeZone,
   });
@@ -832,8 +851,7 @@ async function deliverCertificate(
       account and needs none — the PDF is attached, which is the whole
       reason this message carries one.
     */
-    portalLink:
-      recipient === "agent" ? `${business.url}/portal/jobs/${job.id}` : null,
+    portalLink: agentPortalLink(recipient, `/portal/jobs/${job.id}`),
     timeZone: bookingConfig.timeZone,
   });
 
@@ -1017,8 +1035,7 @@ async function deliverInvoice(
       has no account and needs none — the PDF is attached, which is the whole
       reason this message carries one.
     */
-    portalLink:
-      recipient === "agent" ? `${business.url}/portal/invoices/${invoice.id}` : null,
+    portalLink: agentPortalLink(recipient, `/portal/invoices/${invoice.id}`),
     timeZone: bookingConfig.timeZone,
   });
 
@@ -1288,6 +1305,25 @@ async function deliverLateBooking(
 // ---------------------------------------------------------------------------
 // Recording outcomes
 // ---------------------------------------------------------------------------
+
+/**
+ * A deep link into the agency's own portal, on **this** deployment.
+ *
+ * Returns null for anyone but the agency — a private customer has no account
+ * and needs none, because the document is attached.
+ *
+ * Also returns null when the origin cannot be resolved, rather than failing
+ * the send. These two messages carry the certificate or the invoice as an
+ * attachment; the link is a convenience on top of it. Withholding a
+ * convenience is the right degradation, where withholding the document would
+ * not be — unlike an invitation, which *is* its link and is therefore refused
+ * outright when it cannot be addressed.
+ */
+function agentPortalLink(recipient: string, path: string): string | null {
+  if (recipient !== "agent") return null;
+  const origin = resolveAppOrigin();
+  return origin.ok ? `${origin.origin}${path}` : null;
+}
 
 function addressOf(property: typeof properties.$inferSelect): string {
   return [property.houseOrName, property.street, property.town]

@@ -3,7 +3,7 @@
 **Read this first.** It exists so a new session does not have to re-audit the
 repository. Update it at the end of every piece of work.
 
-Last updated: 19 September 2026.
+Last updated: 20 September 2026 (pilot checkpoint).
 
 ---
 
@@ -502,6 +502,117 @@ rows — the log is append-only and is the record of what this phase did.
 
 ---
 
+## Pilot preparation — 20 September 2026
+
+### Repository state, resolved
+
+One checkout only: `/Users/tegjot/Projects/bscj-gas-website`, with a real
+`.git` directory (not a worktree or a gitfile). A filesystem sweep found no
+second clone, so nothing is stranded and no recovery is needed. `HEAD` is
+`0e03282` on `v2-compliance-platform`. See the corrected entry under "Known
+issues, V2" for the push position.
+
+### Transactional links no longer point at production from everywhere
+
+`business.url` was a single constant doing two different jobs. It is the
+canonical **marketing** origin — right for the sitemap, `robots`,
+`metadataBase`, schema.org and an email footer, in every environment. It was
+also being used to build **transactional** links: account invitations, password
+resets, tenant scheduling links and portal deep links. So an invitation minted
+anywhere but production pointed at production, where the account does not exist
+and the token hashes to nothing — the link looks forged to the recipient and
+broken to us. That is precisely the configuration a pilot runs in.
+
+`lib/config/origin.ts` now resolves the app origin server-side, validated, with
+explicit behaviour per deployment: an explicit `BSCJ_APP_ORIGIN` wins
+everywhere; production falls back to the canonical origin, so a correct
+production deployment needs no new variable; a preview uses the
+platform-injected `VERCEL_URL`; development uses localhost. `VERCEL_ENV` is
+read rather than `NODE_ENV`, because a preview builds with
+`NODE_ENV=production` and reading `NODE_ENV` alone is how a preview sends
+production links.
+
+**No request header is read.** `Host` and `X-Forwarded-Host` are attacker
+controlled, and a request carrying `Host: evil.example` must not be able to
+mint an invitation pointing there — the token in it is a working credential.
+A structural test asserts the module reads no header, and a second asserts the
+outbox no longer references `business.url` at all.
+
+An unresolvable origin is a refusal, not a fallback: an invitation is *its*
+link, so it is left queued with `app_origin_not_configured` and the credential
+is not minted. A certificate or invoice degrades instead — it carries the
+document as an attachment, so the convenience portal link is simply omitted.
+
+### The scheduler — resolved, and a method defect found
+
+**Vercel Pro is now active**, so `vercel.json` declares `* * * * *`: the outbox
+drains once a minute. Pro allows a one-minute minimum with per-minute
+precision; Hobby is once a day and rejects a sub-daily expression at deploy
+time, which is why the expression requires Pro.
+
+**A defect was found while confirming this.** Vercel Cron invokes a job with a
+**GET**, and `/api/cron/outbox` was POST-only — every scheduled run would have
+answered `405` and the queue would never have drained, silently. Nothing in the
+application reports that state: every invitation, reset, tenant link,
+certificate and invoice would simply have sat `pending` while the site looked
+healthy.
+
+Fixed by giving the route a GET handler that requires
+`Authorization: Bearer $CRON_SECRET` **with no session or same-origin
+fallback**. The original objection to a mutating GET — that prefetchers and
+link checkers follow it — is answered by the credential rather than the method:
+without the secret a GET is `401` and changes nothing. POST keeps the
+administrator's same-origin manual drain. `vercel-cron/1.0` and
+`x-vercel-cron-schedule` are deliberately *not* treated as credentials; both
+are request headers anyone can send.
+
+Verified against a live server: GET with no credential `401`, GET with a wrong
+bearer `401`, GET with the correct bearer `200` and drains, POST with the
+correct bearer `200`.
+
+**Cron runs against a project's production deployment**, not a preview. That is
+why the pilot is a **separate Vercel project tracking `v2-compliance-platform`**,
+whose production deployment *is* the pilot, with its own database, calendar,
+Redis, Blob store and controlled recipients. A preview of this branch on the
+existing project would never drain. The live site is unaffected: the existing
+project keeps deploying `main`.
+
+Also confirmed and documented in the runbook: delivery is best effort, a failed
+invocation is **not** retried, the same run can occasionally fire twice, and
+overlap is possible at one-minute intervals. The drain is already safe on all
+counts — it reconciles outstanding work rather than a delta, claims each row
+conditionally under a 120-second lease, and sends with a stable provider
+idempotency key.
+
+*Historical:* before Pro, `vercel.json` declared `*/10 * * * *`, which Hobby
+rejects at deploy time. The options recorded then were Pro, a once-daily
+schedule, or an external scheduler. Pro resolved it. The external-scheduler
+route still works unchanged if it is ever wanted — the endpoint's bearer auth
+is not Vercel-specific.
+
+### Fixture mode and local storage cannot reach production
+
+Checked, no change needed. `scripts/browser-fixtures.mjs` throws when
+`NODE_ENV=production`, additionally requires an opt-in `BSCJ_TEST_FIXTURES=1`,
+and lives outside `src` where nothing can import it. The local document driver
+is refused by `storageStatus()` when `NODE_ENV=production`, and that check is
+at the chokepoint every read and write already passes through, not merely on a
+status screen.
+
+### `npm run preflight`
+
+New, and offline: it reports which configuration is **present**, never whether
+it works, and prints no value — not truncated, not masked. It also flags the
+cron plan limitation above. Turning "set" into "verified" is the runbook's job.
+
+### Still not done
+
+`0007` remains applied to **development only**. No migration was created this
+phase. Nothing was provisioned, purchased, pushed or deployed, and no live
+write or real email was made.
+
+---
+
 ## Outstanding before launch — the complete list
 
 Everything below is inherited from earlier phases as well as this one. It is the
@@ -552,6 +663,8 @@ full list, not the pilot subset.
     - `DATABASE_URL` — nothing works without it
     - `AUTH_SECRET` — **account credentials and import envelopes fail closed
       without it.** New hard dependency from V2.9
+    - `BSCJ_APP_ORIGIN` — **required on anything that is not production**, or
+      invitations point at production. New from this phase
     - `SCHEDULING_TOKEN_SECRET` — tenant links *(V2.3)*
     - `BLOB_READ_WRITE_TOKEN` — document storage *(V2.5)*
     - `CRON_SECRET` — the outbox schedule *(V2.6)*
@@ -601,8 +714,23 @@ full list, not the pilot subset.
 
 ## Known issues, V2
 
-- **The branch is unpushed.** No upstream is set. This is the highest-value
-  thing to fix and costs one command.
+- ~~**The branch is unpushed. No upstream is set.**~~ **Wrong, corrected
+  20 September 2026.** `origin` has been configured all along, at
+  `https://github.com/TegjotSingh08/bscj-gas-website.git`, and
+  `v2-compliance-platform` tracks `origin/v2-compliance-platform`. The real
+  position is narrower: **two local commits are unpushed** — `f1769d7` (V2.8
+  invoicing) and `0e03282` (V2.9 onboarding and import) — against
+  `origin/v2-compliance-platform` at `43ecd5b`. Ahead 2, behind 0, so a plain
+  fast-forward. Local `main` is likewise ahead 1 of `origin/main`, and that
+  commit is already contained in the V2 branch.
+
+  The claim was wrong twice over and both sources are worth naming: this
+  document asserted it at an earlier checkpoint and it was carried forward
+  unverified, and a later session ran `git remote -v | wc -l`, got `2` — which
+  is one remote, printed as a fetch line and a push line — and reported "no
+  remote configured" from a label typed into the command rather than from the
+  output. Verify remotes with `git remote -v` and `git branch -vv`, not with a
+  line count.
 - **Next 16 deprecates the `middleware` file convention** in favour of
   `proxy`. The build warns; it still works. Renaming touches several
   structural tests that read `src/middleware.ts` by path, so it stays queued
