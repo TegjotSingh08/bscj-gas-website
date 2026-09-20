@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "next typegen && tsc --noEmit",
     "test": "node --conditions=react-server --experimental-test-module-mocks --import ./scripts/test-resolver.mjs --test 'src/**/*.test.ts'",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",

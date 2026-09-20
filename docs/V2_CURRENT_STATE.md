@@ -613,6 +613,29 @@ write or real email was made.
 
 ---
 
+## Typecheck needs generated route types
+
+`npm run typecheck` is `next typegen && tsc --noEmit`, not bare `tsc`.
+
+`src/app/layout.tsx` uses `LayoutProps<"/">`, which Next **generates** into
+`.next/types/routes.d.ts`; `tsconfig.json` includes that path. So the type
+exists only after a build, a dev server, or `next typegen`. Locally it passed
+because `.next` was already populated from earlier builds — on a clean
+checkout, which is what Vercel's standalone TypeCheck runs, it failed with
+`TS2304: Cannot find name 'LayoutProps'`.
+
+Reproduced and fixed in a clean detached worktree with no `.next`, no
+incremental caches, no `node_modules` and no local environment files: bare
+`tsc --noEmit` reproduced the exact error, and `next typegen && tsc --noEmit`
+exited 0, after which the build compiled.
+
+`LayoutProps` and `strict` are unchanged — the error was never suppressed, only
+given the types it needed. `next typegen` reads no environment and touches no
+service, and `.next` stays ignored so nothing generated is committed. Any CI
+step running a bare `tsc` will need the same prefix.
+
+---
+
 ## Pilot database — brought up 20 September 2026
 
 **Owner-observed**, using the guarded commands. Reported terminal output:
