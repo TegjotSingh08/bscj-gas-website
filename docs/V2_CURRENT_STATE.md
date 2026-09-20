@@ -3,7 +3,7 @@
 **Read this first.** It exists so a new session does not have to re-audit the
 repository. Update it at the end of every piece of work.
 
-Last updated: 20 September 2026 (pilot checkpoint).
+Last updated: 20 September 2026 (pilot database live).
 
 ---
 
@@ -610,6 +610,75 @@ cron plan limitation above. Turning "set" into "verified" is the runbook's job.
 `0007` remains applied to **development only**. No migration was created this
 phase. Nothing was provisioned, purchased, pushed or deployed, and no live
 write or real email was made.
+
+---
+
+## Pilot database — brought up 20 September 2026
+
+**Owner-observed**, using the guarded commands. Reported terminal output:
+`Mode: pilot` with the confirmed endpoint matching; migrations `0000`–`0007`
+applied; **24 tables, 22 enums**; invoice sequence next number
+**`BSCJ-001000`**, none issued; administrator `admin@bscj-solutions.com`
+created with `role=admin`.
+
+That matches the expected post-migration state exactly. It is **not
+independently verified** — nothing on the development machine can reach the
+pilot database, and it holds no pilot credentials by design. The development
+database is unchanged and separate: still 8/8 applied, 24 tables, next invoice
+`BSCJ-001002`.
+
+**Do not re-run the migration or the bootstrap.** `db:migrate` is idempotent
+and would be a no-op, but `admin:create` against an existing address is a
+*reset*, not a create — it would change the password, sign out every session
+and revoke outstanding links. It now requires the address to be retyped first.
+
+### Still unverified
+
+`CRON_SECRET` remains absent, deliberately. So **scheduled processing has never
+run**, and with it: automatic delivery, automatic retry, and whether Vercel's
+cron invocation is accepted by the bearer check in production. Queued email
+moves only on a manual admin drain (`PILOT_RUNBOOK.md` § 2B).
+
+Live service delivery is equally unverified — no email has been sent, no
+calendar event written, no Blob object stored, and no Redis operation
+performed against the pilot's own services. Each becomes verified at the
+corresponding step of the § 3 walkthrough, not before.
+
+---
+
+## Pilot tooling — 20 September 2026
+
+Commands are mode-aware. **Development is unchanged**; pilot mode is opt-in by
+name (`BSCJ_PILOT=1`) and sealed: `.env.pilot` is the only source, inherited
+`DATABASE_URL*` are deleted before the file is applied, `.env.local` is not
+read, and a missing file, malformed line or missing value stops the command
+before any connection. `src/lib/ops/env-file.ts` and
+`src/lib/ops/db-target.ts` are pure and unit-tested; `scripts/load-env.mjs`
+does the file I/O and is shared by `db-status`, `create-admin` and
+`drizzle.config.ts`, so the three cannot disagree about which database they
+mean.
+
+**Correction to an earlier note in this document's runbook companion.** It
+claimed "exporting `DATABASE_URL` overrides `DATABASE_URL_UNPOOLED`". It does
+not — they are different variables and neither overrides the other. The real
+hazard was the *preference* `DATABASE_URL_UNPOOLED ?? DATABASE_URL`: a value
+loaded from `.env.local` was used ahead of an exported pilot one, which was
+never consulted. Conflicting targets now **stop** rather than warn.
+
+**`BSCJ_APP_ORIGIN` is owner-reported as saved** on the pilot project's
+Production environment (`https://bscj-v2-pilot.vercel.app`). Not independently
+verified — nothing here can read a Vercel project's variables. It becomes
+verified at the first invitation, by checking the link's host.
+
+Admin bootstrap now requires an interactive terminal, reads the password
+**without echoing it**, still demands the address be retyped before resetting
+an existing account, and no longer upserts: a fresh creation inserts with
+`ON CONFLICT DO NOTHING` and stops if the row was taken concurrently, so a
+create can never silently become a reset.
+
+Scheduling is **unchanged** (`* * * * *`, inert while `CRON_SECRET` is absent).
+The Neon Free compute figures in the runbook are a **model, not measured
+usage**.
 
 ---
 

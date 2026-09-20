@@ -10,6 +10,10 @@
  * all. Guessing from silence is how a migration gets applied twice, or gets
  * assumed to have been applied when it was not.
  *
+ * It prints the **target** it is talking to — host and database name, never
+ * a credential — because the first question before any migration is "which
+ * database is this?", and in a two-environment world that is not rhetorical.
+ *
  * Usage:
  *   npm run db:status
  *
@@ -21,22 +25,65 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { exit } from "node:process";
 
+const { loadEnvironment, scrub } = await import("./load-env.mjs");
+const { resolveTarget, assertConfirmedEndpoint, TargetError } = await import(
+  "../src/lib/ops/db-target.ts"
+);
+
+let mode;
 try {
-  process.loadEnvFile(".env.local");
-} catch {
-  // No such file. The environment is expected to be populated already.
-}
-
-/** Never let a connection string reach the terminal, even inside an error. */
-function scrub(value) {
-  return String(value).replace(/postgres(?:ql)?:\/\/\S+/gi, "<redacted>");
-}
-
-const url = process.env.DATABASE_URL_UNPOOLED ?? process.env.DATABASE_URL;
-if (!url) {
-  console.error("DATABASE_URL is not set. Add it to .env.local.");
+  ({ mode } = await loadEnvironment());
+} catch (error) {
+  console.error(scrub(error.message));
   exit(1);
 }
+
+/*
+  The target is resolved **before a connection is opened**, and a disagreement
+  between the pooled and direct URLs stops the command rather than warning it
+  onward. Warning and continuing means the operator has to catch a line of
+  output mid-run; refusing means they cannot miss it, and nothing has been
+  read from the wrong database in the meantime.
+*/
+let target;
+try {
+  target = resolveTarget(process.env);
+
+  /*
+    **Checked here too, before the first query.**
+
+    This command is read-only, so the instinct is that it needs no such guard.
+    It is the wrong instinct: `db:status` is what an operator reads to decide
+    the target is correct, and it was only *printing* the confirmed endpoint
+    rather than testing it against the connection. A reassuring screenful from
+    the wrong database is worse than no check at all, because the migration
+    that follows is run with confidence.
+
+    So in pilot mode the same assertion the writing commands use runs first,
+    and a mismatch refuses before a single request is made.
+  */
+  if (mode === "pilot") {
+    assertConfirmedEndpoint(target, process.env.BSCJ_PILOT_ENDPOINT);
+  }
+} catch (error) {
+  if (error instanceof TargetError) {
+    console.error(`\n${error.message}\n`);
+    exit(1);
+  }
+  console.error(scrub(error.message ?? error));
+  exit(1);
+}
+
+console.log(`Mode               : ${mode}`);
+console.log(`Target             : ${target.identity}`);
+console.log(`Using              : ${target.source}`);
+if (mode === "pilot") {
+  // Printed after the assertion above, so this line means "checked and agrees".
+  console.log(`Confirmed endpoint : ${process.env.BSCJ_PILOT_ENDPOINT} — matches`);
+}
+console.log("");
+
+const url = target.url;
 
 const { neon } = await import("@neondatabase/serverless");
 const sql = neon(url);
@@ -50,10 +97,39 @@ try {
     SELECT to_regclass('drizzle.__drizzle_migrations') AS present`;
 
   if (!journalTable[0].present) {
-    console.log("Migrations applied : none — this database is empty of V2.");
+    /*
+      No journal is **not** proof of an empty database.
+
+      A database can carry tables from a hand-run script, an older tool, a
+      restored dump or a half-finished attempt, and have no drizzle journal at
+      all. Reporting "empty" on that evidence is how a migration gets run
+      against something that already holds data — so what is actually there is
+      counted and shown, and the recommendation depends on the answer.
+    */
+    const existing = await sql`
+      SELECT count(*)::int AS n FROM information_schema.tables
+      WHERE table_schema = 'public'`;
+    const existingEnums = await sql`
+      SELECT count(*)::int AS n FROM pg_type t
+      JOIN pg_namespace n ON n.oid = t.typnamespace
+      WHERE n.nspname = 'public' AND t.typtype = 'e'`;
+
     console.log(`Migrations on disk : ${journal.entries.length}`);
-    console.log("\nNext: npm run db:migrate");
-    exit(0);
+    console.log("Migrations applied : none — no drizzle journal in this database");
+    console.log(`Tables in public   : ${existing[0].n}`);
+    console.log(`Enum types         : ${existingEnums[0].n}`);
+
+    if (existing[0].n === 0 && existingEnums[0].n === 0) {
+      console.log("\nPublic schema is empty. Next: npm run db:migrate");
+      exit(0);
+    }
+
+    console.log("");
+    console.log("  WARNING: this database already contains objects but has no");
+    console.log("  migration journal. It is NOT a fresh database. Find out what");
+    console.log("  created them before running db:migrate — a migration run here");
+    console.log("  may fail part-way or collide with what is already present.");
+    exit(1);
   }
 
   const applied = await sql`

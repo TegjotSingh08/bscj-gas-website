@@ -99,9 +99,38 @@ const checks = [
   },
 ];
 
+/**
+ * Which database this shell would talk to, safe to print.
+ *
+ * Host and database name only. Shown because "preflight passed" is otherwise
+ * ambiguous about *whose* configuration passed.
+ */
+function target(value) {
+  if (!value) return "not set";
+  try {
+    const parsed = new URL(value);
+    return `${parsed.hostname}/${parsed.pathname.replace(/^\//, "") || "?"}`;
+  } catch {
+    return "<unparseable>";
+  }
+}
+
 let missing = 0;
 console.log("\nBSCJ preflight — configuration presence only. No value is printed.");
-console.log("A tick means CONFIGURED, not WORKING. Liveness is the runbook's job.\n");
+console.log("A tick means CONFIGURED, not WORKING. Liveness is the runbook's job.");
+console.log("");
+/*
+  **This reads the current shell and `.env.local`, and nothing else.**
+
+  It cannot see a Vercel project's environment variables, so a clean run here
+  says nothing whatsoever about whether a deployment is configured. Stating
+  the target every run is what stops "preflight passed" being read as "the
+  pilot is ready".
+*/
+console.log("  Reading      : this shell + .env.local (NOT any Vercel project)");
+console.log(`  Database     : ${target(process.env.DATABASE_URL_UNPOOLED ?? process.env.DATABASE_URL)}`);
+console.log(`  Links        : ${appOriginStatus().origin ?? "unresolved"} (${appOriginStatus().deployment})`);
+console.log("");
 
 for (const { group, items } of checks) {
   console.log(`  ${group}`);
@@ -144,6 +173,34 @@ if (cron) {
   console.log("           Native cron invokes the PRODUCTION deployment of the");
   console.log("           project it is declared in, over GET, with CRON_SECRET as");
   console.log("           an Authorization: Bearer header.");
+
+  /*
+    The interaction that is easy to miss: the drain queries the database on
+    every run, and Neon's Free plan suspends a compute after five minutes idle
+    and cannot be told not to. So any interval under five minutes keeps the
+    compute awake continuously, and continuous is more than the Free plan's
+    monthly allowance covers.
+  */
+  const minuteField = cron.schedule.split(/\s+/)[0];
+  const everyN = /^\*\/(\d+)$/.exec(minuteField);
+  const minutes = minuteField === "*" ? 1 : everyN ? Number(everyN[1]) : null;
+
+  if (minutes !== null && minutes < 10) {
+    console.log("");
+    console.log(`    [NEON] Draining every ${minutes} min queries the database at least`);
+    console.log("           that often. Neon FREE suspends after 5 min idle and cannot");
+    console.log("           be configured otherwise, so this keeps the compute awake");
+    console.log("           ~continuously: roughly 180 CU-hours/month against a 100");
+    console.log("           CU-hour allowance, exhausting it in about 16 days — after");
+    console.log("           which the database is suspended until the next billing");
+    console.log("           period. Use */15 or slower on Free, or a paid Neon plan.");
+  }
+  if (!isCronConfigured()) {
+    console.log("");
+    console.log("    [NOTE] CRON_SECRET is absent, so scheduled runs return 401 and");
+    console.log("           never reach the database. Delivery and retries are NOT");
+    console.log("           active: queued email only moves on a manual admin drain.");
+  }
   console.log("");
 }
 

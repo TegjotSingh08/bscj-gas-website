@@ -25,48 +25,77 @@ import type { Config } from "drizzle-kit";
  * A missing file is not an error. On a deployment there is no `.env.local`,
  * and the environment is already populated.
  */
-try {
-  process.loadEnvFile(".env.local");
-} catch {
-  // No such file. The environment is expected to be populated already.
+import { readFileSync } from "node:fs";
+
+import { buildPilotEnv, PILOT_REQUIRED, pilotEnvPath, pilotRequested } from "./src/lib/ops/env-file";
+import { assertConfirmedEndpoint, resolveTarget } from "./src/lib/ops/db-target";
+
+/**
+ * Which environment this migration run belongs to.
+ *
+ * The same two modes the other commands use, from the same modules, because
+ * a migration and a bootstrap disagreeing about which database they mean is
+ * the one failure none of this can recover from.
+ *
+ * - **Pilot** (`BSCJ_PILOT=1`) — sealed. `.env.pilot` is the only source,
+ *   inherited `DATABASE_URL*` are cleared first so nothing can be quietly
+ *   supplied by the calling shell, and anything missing or malformed throws
+ *   before drizzle-kit opens a connection.
+ * - **Development** — unchanged: `.env.local` is loaded, the ambient
+ *   environment wins, a missing file is not an error.
+ */
+if (pilotRequested(process.env)) {
+  const path = pilotEnvPath(process.env);
+
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    throw new Error(
+      `Pilot mode is on (BSCJ_PILOT=1) but ${path} could not be read.`,
+    );
+  }
+
+  const { vars } = buildPilotEnv({ text, path, required: PILOT_REQUIRED });
+
+  for (const name of Object.keys(process.env)) {
+    if (name.startsWith("DATABASE_URL")) delete process.env[name];
+  }
+  for (const [name, value] of Object.entries(vars)) process.env[name] = value;
+} else {
+  try {
+    process.loadEnvFile(".env.local");
+  } catch {
+    // No such file. The environment is expected to be populated already.
+  }
 }
 
 /**
  * The connection migrations run over.
  *
  * Neon hands out two connection strings for the same database: a **pooled**
- * one, through PgBouncer, and a **direct** one. The application runtime wants
- * the pooled one — every request is a short-lived serverless function, where a
- * connection pool is something to leak rather than something to reuse.
+ * one through PgBouncer, and a **direct** one. The application runtime wants
+ * the pooled one — every request is a short-lived serverless function, where
+ * a pool is something to leak rather than reuse. Migrations are the opposite
+ * shape: one long-lived session running DDL, which wants the direct endpoint.
  *
- * Migrations are the opposite shape: one long-lived session running DDL. The
- * pooled endpoint works for this and is what has been used so far, but a
- * transaction pooler does not hold session state, so anything that depends on
- * it — an advisory lock, a session `SET` — can behave differently there.
- *
- * So the direct URL is used when one is configured and the pooled one
- * otherwise. Setting `DATABASE_URL_UNPOOLED` is optional; nothing breaks
- * without it, and Neon's own Vercel integration already emits a variable of
- * that name.
+ * `resolveTarget` applies that preference and **refuses outright** if the two
+ * name different databases, so migrations and the application cannot end up
+ * pointed at different places. In pilot mode the target is additionally
+ * checked against an endpoint confirmed outside this file, because two copies
+ * of the same wrong connection string agree perfectly.
  */
-const url = process.env.DATABASE_URL_UNPOOLED ?? process.env.DATABASE_URL ?? "";
+const target = resolveTarget(process.env);
 
-if (!url) {
-  /*
-    Fail with something a person can act on. drizzle-kit's own message for an
-    empty string names the parameter but not the reason, and the reason is
-    almost always that the file was not loaded.
-  */
-  throw new Error(
-    "DATABASE_URL is not set. Add it to .env.local, or export it before running drizzle-kit.",
-  );
+if (pilotRequested(process.env)) {
+  assertConfirmedEndpoint(target, process.env.BSCJ_PILOT_ENDPOINT);
 }
 
 export default {
   schema: "./src/lib/db/schema.ts",
   out: "./drizzle",
   dialect: "postgresql",
-  dbCredentials: { url },
+  dbCredentials: { url: target.url },
   strict: true,
   verbose: true,
 } satisfies Config;

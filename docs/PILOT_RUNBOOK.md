@@ -196,6 +196,366 @@ curl -fsS https://<pilot-host>/api/cron/outbox \
 
 ---
 
+## 1A. The configuration contract — reported, checked, verified
+
+Three different confidence levels, kept apart because conflating them is how a
+pilot is declared ready and then does not send anything.
+
+- **Reported** — stated by the owner. Not observable from this machine.
+- **Checked** — the code agrees the setting is the one it reads, with the
+  meaning claimed. A local `npm run preflight` is *this* row at most; it reads
+  this shell and `.env.local` and **cannot see a Vercel project's variables**.
+- **Verified** — a real call succeeded. Nothing below is verified.
+
+| Setting | Code path that consumes it | State |
+| --- | --- | --- |
+| Project `bscj-v2-pilot`, prod branch `v2-compliance-platform` | — | reported |
+| `BSCJ_APP_ORIGIN=https://bscj-v2-pilot.vercel.app`, Production | `lib/config/origin.ts` | **reported** — saved by the owner; not independently verified |
+| Functions London only | — | reported |
+| Neon Free `bscj-v2-pilot`, London, **not migrated** | `DATABASE_URL` / `DATABASE_URL_UNPOOLED` | reported |
+| Upstash `bscj-v2-pilot`, London | `UPSTASH_REDIS_REST_URL` / `_TOKEN` → `lib/kv/store.ts` | reported |
+| Blob `bscj-v2-pilot-documents`, private, **Production only** | `BLOB_READ_WRITE_TOKEN` → `lib/storage/documents.ts` | reported; **see below** |
+| `AUTH_SECRET`, `SCHEDULING_TOKEN_SECRET`, Google creds, calendar id — Production only | as named | reported |
+| Dedicated pilot Google calendar | `GOOGLE_CALENDAR_ID` | reported |
+| Resend sending-only key, verified `bscj-solutions.com` | `RESEND_API_KEY` | reported |
+| `BOOKING_EMAIL_FROM=BSCJ Pilot <pilot@bscj-solutions.com>` | `lib/email/send.ts` | reported; **see below** |
+| `BOOKING_EMAIL_REPLY_TO`, `BOOKING_NOTIFICATION_EMAIL` = `admin@…` | `lib/email/send.ts` | reported |
+| `CRON_SECRET` absent | `lib/ops/cron-auth.ts` | reported, and **intended** |
+
+### Three contract points worth checking against the code
+
+**`BSCJ_APP_ORIGIN` is reported as saved** in the pilot project's Production
+environment as `https://bscj-v2-pilot.vercel.app`. That is the right value, and
+it is **owner-reported, not independently verified** — nothing on this machine
+can read a Vercel project's variables, and a local `npm run preflight` reports
+on this shell only.
+
+Why it matters, so the check is worth doing: without it,
+`resolveAppOrigin()` sees `VERCEL_ENV=production` on that project — a
+project's production deployment is production regardless of which project it
+is — and falls back to the **canonical marketing origin**,
+`https://www.bscj-solutions.com`. Every invitation, reset and tenant link would
+then point at the live site, where the account does not exist.
+
+It becomes *verified* at the first send: §3.1 step 4 says to check the link's
+host before clicking it. If it is `www.bscj-solutions.com`, the variable is not
+in effect on that deployment.
+
+**Blob connected to Production only** is consistent with how the driver
+selects itself: `BLOB_READ_WRITE_TOKEN` present ⇒ `vercel-blob`. On a preview
+of that project the token is absent, so `storageStatus()` reports "no document
+store" and uploads are refused rather than silently writing somewhere. That is
+the correct failure, and it means **document features only work on the pilot's
+production deployment** — which is also the only deployment cron reaches.
+
+**`BOOKING_EMAIL_FROM` as `BSCJ Pilot <pilot@bscj-solutions.com>`** is passed
+straight through to Resend's `from` field, so a display-name form is fine.
+Worth noting that `pilot@` must be a deliverable address on the verified
+domain, and that `BOOKING_EMAIL_REPLY_TO` and `BOOKING_NOTIFICATION_EMAIL`
+both being `admin@bscj-solutions.com` means internal alerts and customer
+replies land in the same real inbox — intended for a pilot, and the thing to
+change before anything wider.
+
+### Not verifiable from here
+
+Region placement, plan tier, which Vercel environment each variable is scoped
+to, and whether the Neon/Upstash/Blob resources are the separate ones named.
+None of that is observable without the pilot credentials or the Vercel API.
+The first command in §2A.3 is what turns the database half of it into
+*verified*.
+
+---
+
+## 2A. Bringing up the pilot database — the exact procedure
+
+> **DONE — 20 September 2026, owner-observed.** The steps below were run by the
+> owner against the pilot database using the guarded commands. Reported
+> terminal output:
+>
+> - `Mode: pilot`, confirmed endpoint **matches**
+> - migrations `0000`–`0007` applied — **24 tables, 22 enums**
+> - invoice sequence: next number **`BSCJ-001000`**, none issued
+> - administrator `admin@bscj-solutions.com` created, `role=admin`
+>
+> That is exactly the expected post-migration state in §2A.6. **Do not re-run
+> §2A.5 or §2A.7.** `db:migrate` is safe to repeat (it applies only what is
+> outstanding), but `admin:create` against an existing address is a *reset* and
+> now requires the address to be retyped — see §2A.7.
+>
+> This is **owner-observed, not independently verified**: nothing on the
+> development machine can reach the pilot database, and it deliberately holds
+> no pilot credentials. The procedure is kept below as the record of what was
+> run, and for rebuilding the database if it is ever recreated.
+
+Nothing below has been run. Every command targets the **pilot** database and
+is written so it cannot silently reach development.
+
+### 2A.1 How these tools find a database
+
+All three commands — `db:status`, `db:migrate` and `admin:create` — now go
+through one loader (`scripts/load-env.mjs` / `src/lib/ops/env-file.ts`) and one
+target resolver (`src/lib/ops/db-target.ts`), so they cannot disagree about
+which database they mean.
+
+**Development (default).** Unchanged: `.env.local` is loaded, a variable
+already in the environment wins, a missing file is not an error.
+
+**Pilot (`BSCJ_PILOT=1`).** Sealed:
+
+- `.env.pilot` is the **only** source. `.env.local` is not read.
+- Inherited `DATABASE_URL*` variables are **deleted** from the process before
+  the file's values are applied, so nothing can be supplied by the calling
+  shell.
+- `DATABASE_URL`, `DATABASE_URL_UNPOOLED` and `BSCJ_PILOT_ENDPOINT` are all
+  **required, and checked against the file**. A value exported in the shell
+  does not satisfy one.
+- A missing file, a malformed line or a missing value **stops the command
+  before any connection is opened**.
+
+#### Correction: two variables, not one overriding the other
+
+An earlier draft of this runbook said "exporting `DATABASE_URL` overrides the
+`DATABASE_URL_UNPOOLED` value in `.env.local`". **That is wrong**, and the
+mistake is worth stating plainly because the correct shape is the whole
+hazard.
+
+They are *different variables*. Exporting one has no effect on the other. What
+actually happened is a **preference**: the tools read
+
+```
+DATABASE_URL_UNPOOLED ?? DATABASE_URL
+```
+
+so a `DATABASE_URL_UNPOOLED` present anywhere — including loaded from
+`.env.local`, where an exported value never touches it — was used **in
+preference to** an exported pilot `DATABASE_URL`. The pilot value was not
+overridden; it was never consulted.
+
+Two things now close it: pilot mode deletes inherited `DATABASE_URL*` and
+requires both from the file, and `resolveTarget` **refuses outright** when the
+two name different databases rather than warning and continuing.
+
+### 2A.2 Getting the pilot credentials in place — privately
+
+Do **not** put pilot credentials in `.env.local`; that file is development's
+and is loaded whenever pilot mode is off.
+
+Create a git-ignored `.env.pilot` (the existing `.env*` rule already covers it)
+containing exactly three lines:
+
+```
+DATABASE_URL="<pilot pooled connection string>"
+DATABASE_URL_UNPOOLED="<pilot direct connection string>"
+BSCJ_PILOT_ENDPOINT="<pilot endpoint host, read from the Neon console>"
+```
+
+**Quote the values.** A Neon URL carries `?`, `&`, `=` and often `#`, and an
+earlier draft told you to `source` this file in a shell — where every one of
+those is a metacharacter and an unquoted URL can be mangled, truncated at a
+`#`, or interpreted. It is no longer sourced: the commands parse the file
+themselves, with a parser that treats those characters as data and reports a
+line it cannot read instead of skipping it. The quotes are belt and braces, and
+also what lets a value contain a `#`.
+
+`BSCJ_PILOT_ENDPOINT` must come from the **Neon console**, not from the
+connection string you just pasted — its whole job is to be an independent
+second opinion.
+
+Then prefix each command with `BSCJ_PILOT=1`. The earlier
+`( set -a; . ./.env.pilot; set +a; … )` form is **withdrawn**: `set -a` does
+not fail the subshell if the file is missing or unreadable, so the command ran
+on with whatever the shell already had.
+
+### 2A.3 Target identity and existing-schema checks — before anything
+
+```bash
+BSCJ_PILOT=1 npm run db:status
+```
+
+Read-only. It prints `Mode`, `Target` (host/database, never a credential),
+which variable supplied it, and the confirmed endpoint. Then check:
+
+1. **`Target`** — compare the printed host and database against the pilot
+   project's endpoint in the Neon console. **If it is not the pilot, stop.**
+2. **It ran at all.** Conflicting pooled/direct URLs now *stop the command*
+   before connecting rather than warning, so reaching output at all means the
+   two agree.
+3. **What is already there.** A fresh database prints `Tables in public : 0`,
+   `Enum types : 0` and *"Public schema is empty"*.
+
+**An absent migration journal does not prove an empty database**, which is why
+the tool counts tables and enums on that path instead of announcing "empty". If
+it finds objects with no journal it exits non-zero: something else created
+them, and a migration may collide part-way.
+
+**A matching pair of connection strings does not establish which database this
+is.** Two copies of the same wrong string agree perfectly. That is what
+`BSCJ_PILOT_ENDPOINT` is for — a value read off the Neon console rather than
+out of the file that supplied the connection. It is required before anything
+**writes** (`db:migrate`, `admin:create`), and its purpose is to disagree when
+the connection string is wrong.
+
+### 2A.4 What will be applied
+
+All eight outstanding migrations, `0000`–`0007`, in journal order. Every tag
+has both an up and a down file. Across all eight there is exactly **one** data
+statement — the `password_set_at` backfill in `0007` — and it is a no-op on a
+fresh database because there are no rows to backfill. Everything else is DDL.
+
+`0001` creates `invoice_number_seq` with `START WITH 1000`, so the pilot's
+first invoice would be `BSCJ-001000`. That sequence is **independent of
+development's**, which is correct for a separate database; it only becomes a
+business question if this database were ever promoted to production.
+
+### 2A.5 Apply
+
+```bash
+BSCJ_PILOT=1 npm run db:migrate
+```
+
+`db:migrate` is **silent on success** — a run that applies everything prints a
+driver line, a websocket warning, then nothing, which looks identical to a run
+that did nothing. Do not read anything into the silence; use the next step.
+
+### 2A.6 Post-migration checks
+
+```bash
+BSCJ_PILOT=1 npm run db:status
+```
+
+Expect, against the pilot target:
+
+- `Migrations on disk : 8` and `Migrations applied : 8`
+- all eight tags `applied`, none `NOT APPLIED` or `DIFFERS FROM DISK`
+- `Tables in public : 24`
+- `Enum types : 22`
+- `Invoice sequence : starts at 1000, next number BSCJ-001000 (none issued yet)`
+
+A `DIFFERS FROM DISK` line means a migration file changed after being applied.
+Stop and understand it before anything else.
+
+### 2A.7 Bootstrap the first administrator
+
+`create-admin.mjs` does not load `.env.local`, so pass the environment in:
+
+```bash
+BSCJ_PILOT=1 npm run admin:create -- "<address>" "<Full Name>" admin
+```
+
+It now prints the **target database and the account** before prompting, so a
+wrong-database bootstrap is visible rather than silent.
+
+Three things to know about it:
+
+- **An existing address is not a no-op.** `ON CONFLICT DO UPDATE` resets the
+  password, reactivates a suspended account, increments `session_version` so
+  every session that account holds stops working, and revokes any outstanding
+  invitation or reset link. It now requires the address to be **typed again**
+  before doing any of that. A fresh address asks nothing extra.
+- **The role is applied on insert only**, so re-running never promotes an
+  engineer to an administrator.
+- **The password is typed at the terminal and is echoed.** That is a
+  deliberate existing choice — masking while the value sits in the scrollback
+  would be theatre — so run it in a private terminal and clear the scrollback
+  afterwards. It is never passed as an argument, so it does not reach shell
+  history or the process list.
+
+The prompts now **fail closed** on a non-interactive stdin: a piped or
+scripted invocation stops with "needs an interactive terminal" and writes
+nothing, rather than throwing part-way.
+
+### 2A.8 What this does not do
+
+It creates the schema and one administrator. It sends nothing, contacts
+nothing and writes no calendar event or Blob object.
+
+---
+
+## 2B. Email delivery during the supervised pilot
+
+**`CRON_SECRET` is intentionally absent, so there is no automatic delivery and
+no automatic retry.** Nothing queued moves on its own. Queued email is drained
+by hand, by a signed-in administrator, from the pilot origin:
+
+Sign in at `https://bscj-v2-pilot.vercel.app/admin/login`, then from that
+same origin issue the authenticated POST (the browser console on a page of the
+pilot site is sufficient):
+
+```js
+await fetch('/api/cron/outbox', { method: 'POST' }).then(r => r.json())
+```
+
+It answers with counts only — `considered`, `claimed`, `accepted`,
+`cancelled`, `stillQueued`, `failed`, `missingRecipient` — and never a
+recipient, a reference or a token.
+
+**What remains unverified while the secret is absent:** that Vercel invokes the
+job at all, that the bearer check accepts Vercel's header in production, and
+that failed rows are retried on a later run. Those are properties of the
+*scheduled* path, and the manual drain does not exercise them.
+
+The declared schedule still fires every minute against the deployment, but
+without the secret each run returns `401` **before touching the database**. So
+it costs Vercel invocations and fills the cron log with 401s — worth knowing,
+because that noise could mask a real failure later — but it does not keep the
+Neon compute awake.
+
+### 2B.1 The smallest sustainable schedule, before activation
+
+The drain queries the database on every run. Neon's **Free** plan suspends a
+compute after **5 minutes** idle, **cannot be configured otherwise**, and
+allows **100 CU-hours per project per month**; exhausting that suspends the
+database until the next billing period.
+
+**These are assumptions, not measured usage.** They model a 730-hour month at
+0.25 CU with the drain as the only activity, and Neon's published Free limits
+as of this writing. Real portal traffic, the pilot walkthrough itself and any
+other connection all add to the duty cycle. Treat every figure below as a
+floor, verify against the Neon console's own usage reporting once the pilot is
+running, and do not plan to the last CU-hour.
+
+| Interval | Compute awake | CU-hours/month | Verdict |
+| --- | --- | --- | --- |
+| every minute | ~100% | ~182 | **exhausts Free in ~16 days** |
+| every 5 min | ~100% | ~182 | **exhausts Free in ~16 days** |
+| every 10 min | ~50% | ~92 | works, no headroom |
+| **every 15 min** | ~34% | ~61 | **recommended on Free** |
+| every 30 min | ~17% | ~31 | ample headroom |
+| hourly | ~8% | ~15 | ample headroom |
+
+Anything under five minutes never lets the compute idle, so it is continuous
+regardless of how little work each run does.
+
+`vercel.json` currently declares `* * * * *`. **Left as declared** — it is
+inert while `CRON_SECRET` is absent, and the interval is a decision to take
+deliberately. Before setting the secret, either:
+
+- change it to `*/15 * * * *` and redeploy (a schedule change needs a
+  redeploy), or
+- move the pilot database to a paid Neon plan.
+
+**Cost assumptions:** Vercel Pro covers the invocations either way; the
+constraint is Neon Free's compute allowance, not Vercel. The arithmetic assumes
+0.25 CU, a 5-minute autosuspend that cannot be disabled, and no other traffic.
+None of that is measured here — it is a model, and the Neon console's usage
+page is the authority once the pilot runs.
+
+**Delivery delay:** an agency owner waits up to one interval for an invitation.
+At 15 minutes that is tolerable for a supervised pilot and poor for a live
+onboarding call. A password reset credential lives one hour, so a 15-minute
+delay consumes a quarter of it.
+
+**Retry implications:** a failed row waits one 120-second lease before it is
+eligible again, then retries on the next drain. At 15 minutes,
+`MAX_ATTEMPTS = 5` spans a little over an hour before a row is given up on and
+needs a person. Vercel does not retry a failed invocation, which is safe here
+because the drain reconciles outstanding work rather than processing a delta —
+a missed run is picked up by the next one.
+
+No new queue infrastructure is warranted for the pilot.
+
+---
+
 ## 3. The pilot walkthrough
 
 Fictional throughout. Suggested names: agency **Northgate Lettings (PILOT)**,
