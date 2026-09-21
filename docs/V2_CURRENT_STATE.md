@@ -655,12 +655,48 @@ and would be a no-op, but `admin:create` against an existing address is a
 *reset*, not a create — it would change the password, sign out every session
 and revoke outstanding links. It now requires the address to be retyped first.
 
+### Scheduled processing — being activated 21 September 2026
+
+A submitted agency job left "Invitation to book → tenant: Queued, not yet
+attempted" with no Resend send, because nothing drains the queue: `CRON_SECRET`
+was deliberately absent, so every cron invocation returned `401` before
+touching the database. Requiring a browser-console POST is not a delivery
+mechanism.
+
+The schedule is now **`*/15 * * * *`**, down from every minute. Any interval
+under five minutes never lets a Neon Free compute idle — it suspends after five
+minutes and cannot be told otherwise — so every-minute polling runs the compute
+continuously at roughly 182 CU-hours against a 100 CU-hour monthly allowance,
+exhausting it in about sixteen days. Fifteen minutes costs roughly 61, which is
+a model rather than measured usage. **Expected email delay: up to 15 minutes,
+around 7–8 on average**, for every queued message.
+
+**No other change was needed.** The route already takes the scheduler's GET
+with bearer auth and no session fallback, keeps POST for the administrator's
+manual drain, retries per row under a 120-second lease, and sends with a stable
+provider idempotency key. Function duration needs no configuration either:
+Vercel's default is 300 seconds and the drain's worst case is about 200.
+
+Activation is two owner steps — set `CRON_SECRET` on the pilot project
+(Production only) and redeploy, since both a schedule change and a new variable
+need one. `PILOT_RUNBOOK.md` § 2B.3.
+
 ### Still unverified
 
-`CRON_SECRET` remains absent, deliberately. So **scheduled processing has never
-run**, and with it: automatic delivery, automatic retry, and whether Vercel's
-cron invocation is accepted by the bearer check in production. Queued email
-moves only on a manual admin drain (`PILOT_RUNBOOK.md` § 2B).
+Scheduled processing has not yet been observed to run. Verification uses the
+**invitation already queued** — deliberately not a new one — and is complete
+only with three pieces of evidence: a `GET … 200` in the Vercel cron log with
+`claimed:1, accepted:1`, a matching send in Resend, and the admin job page no
+longer showing "Queued". § 2B.4.
+
+**Automatic retries stay unverified even after that succeeds.** A first-attempt
+success exercises none of the retry path, and claiming otherwise on that
+evidence would be wrong. They remain unproven until a row is actually seen to
+fail and be attempted again. Do not manufacture a failure against live services
+to close it.
+
+Live delivery through the pilot's own calendar, Blob and Redis services is
+likewise unverified, as is certificate and invoice delivery.
 
 Live service delivery is equally unverified — no email has been sent, no
 calendar event written, no Blob object stored, and no Redis operation

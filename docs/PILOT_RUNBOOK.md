@@ -471,88 +471,136 @@ nothing and writes no calendar event or Blob object.
 
 ---
 
-## 2B. Email delivery during the supervised pilot
+## 2B. Automatic email processing
 
-**`CRON_SECRET` is intentionally absent, so there is no automatic delivery and
-no automatic retry.** Nothing queued moves on its own. Queued email is drained
-by hand, by a signed-in administrator, from the pilot origin:
+Queued email used to move only on a manual admin POST from a browser console.
+That is unsuitable for a pilot: an agency job queues an invitation and nothing
+happens until somebody remembers. Scheduling is now the delivery mechanism, and
+the manual drain is the fallback.
 
-Sign in at `https://bscj-v2-pilot.vercel.app/admin/login`, then from that
-same origin issue the authenticated POST (the browser console on a page of the
-pilot site is sufficient):
+### 2B.1 The schedule, and why 15 minutes
 
-```js
-await fetch('/api/cron/outbox', { method: 'POST' }).then(r => r.json())
+`vercel.json` declares:
+
+```json
+{ "path": "/api/cron/outbox", "schedule": "*/15 * * * *" }
 ```
 
-It answers with counts only — `considered`, `claimed`, `accepted`,
-`cancelled`, `stillQueued`, `failed`, `missingRecipient` — and never a
-recipient, a reference or a token.
+The drain queries the database on **every** run, and Neon **Free** suspends a
+compute after 5 minutes idle, cannot be configured otherwise, and allows
+**100 CU-hours per project per month** — exhausting it suspends the database
+until the next billing period.
 
-**What remains unverified while the secret is absent:** that Vercel invokes the
-job at all, that the bearer check accepts Vercel's header in production, and
-that failed rows are retried on a later run. Those are properties of the
-*scheduled* path, and the manual drain does not exercise them.
+So any interval under five minutes never lets the compute idle, and runs
+continuously whatever it finds:
 
-The declared schedule still fires every minute against the deployment, but
-without the secret each run returns `401` **before touching the database**. So
-it costs Vercel invocations and fills the cron log with 401s — worth knowing,
-because that noise could mask a real failure later — but it does not keep the
-Neon compute awake.
-
-### 2B.1 The smallest sustainable schedule, before activation
-
-The drain queries the database on every run. Neon's **Free** plan suspends a
-compute after **5 minutes** idle, **cannot be configured otherwise**, and
-allows **100 CU-hours per project per month**; exhausting that suspends the
-database until the next billing period.
-
-**These are assumptions, not measured usage.** They model a 730-hour month at
-0.25 CU with the drain as the only activity, and Neon's published Free limits
-as of this writing. Real portal traffic, the pilot walkthrough itself and any
-other connection all add to the duty cycle. Treat every figure below as a
-floor, verify against the Neon console's own usage reporting once the pilot is
-running, and do not plan to the last CU-hour.
-
-| Interval | Compute awake | CU-hours/month | Verdict |
+| Interval | Compute awake | CU-hours/month | |
 | --- | --- | --- | --- |
-| every minute | ~100% | ~182 | **exhausts Free in ~16 days** |
-| every 5 min | ~100% | ~182 | **exhausts Free in ~16 days** |
-| every 10 min | ~50% | ~92 | works, no headroom |
-| **every 15 min** | ~34% | ~61 | **recommended on Free** |
-| every 30 min | ~17% | ~31 | ample headroom |
-| hourly | ~8% | ~15 | ample headroom |
+| every minute | ~100% | ~182 | exhausts Free in ~16 days |
+| every 5 min | ~100% | ~182 | exhausts Free in ~16 days |
+| every 10 min | ~50% | ~92 | no headroom |
+| **every 15 min** | ~34% | **~61** | **chosen** |
+| every 30 min | ~17% | ~31 | ample, slower |
 
-Anything under five minutes never lets the compute idle, so it is continuous
-regardless of how little work each run does.
+**A model, not measured usage** — 730 hours at 0.25 CU with the drain as the
+only activity. Portal traffic adds to it, so treat ~61 as a floor and check the
+Neon console's own usage page once the pilot runs.
 
-`vercel.json` currently declares `* * * * *`. **Left as declared** — it is
-inert while `CRON_SECRET` is absent, and the interval is a decision to take
-deliberately. Before setting the secret, either:
+**Expected email delay: up to 15 minutes, about 7–8 on average.** That applies
+to every queued message — agency invitations, password resets, tenant
+scheduling links, certificates, invoices. Two consequences worth stating:
 
-- change it to `*/15 * * * *` and redeploy (a schedule change needs a
-  redeploy), or
-- move the pilot database to a paid Neon plan.
+- A password reset credential lives one hour, so a 15-minute delay consumes up
+  to a quarter of it. Still workable; worth knowing before somebody reports it
+  as broken.
+- It is too slow for a live onboarding call. For the pilot that is acceptable;
+  before wider use, either move the pilot database off Neon Free or accept the
+  delay deliberately.
 
-**Cost assumptions:** Vercel Pro covers the invocations either way; the
-constraint is Neon Free's compute allowance, not Vercel. The arithmetic assumes
-0.25 CU, a 5-minute autosuspend that cannot be disabled, and no other traffic.
-None of that is measured here — it is a model, and the Neon console's usage
-page is the authority once the pilot runs.
+An alternative, if the delay proves annoying: `*/10 8-18 * * 1-5` gives a
+10-minute delay in business hours at roughly half the compute, at the cost of
+overnight messages waiting until morning. Not chosen — predictable beats
+clever for a supervised pilot.
 
-**Delivery delay:** an agency owner waits up to one interval for an invitation.
-At 15 minutes that is tolerable for a supervised pilot and poor for a live
-onboarding call. A password reset credential lives one hour, so a 15-minute
-delay consumes a quarter of it.
+### 2B.2 No code change was needed beyond the interval
 
-**Retry implications:** a failed row waits one 120-second lease before it is
-eligible again, then retries on the next drain. At 15 minutes,
-`MAX_ATTEMPTS = 5` spans a little over an hour before a row is given up on and
-needs a person. Vercel does not retry a failed invocation, which is safe here
-because the drain reconciles outstanding work rather than processing a delta —
-a missed run is picked up by the next one.
+The route already accepts the scheduler's **GET** with
+`Authorization: Bearer $CRON_SECRET` and no session fallback, keeps POST for
+the administrator's same-origin manual drain, retries per row with a bounded
+attempt count and a 120-second lease, and sends with a stable provider
+idempotency key so a retry cannot become a second email. None of that changed.
 
-No new queue infrastructure is warranted for the pilot.
+Function duration was checked and needs no configuration: Vercel's default is
+**300 seconds** on every plan, and the drain's worst case is 25 rows × an
+8-second send timeout ≈ 200 seconds.
+
+### 2B.3 Activating it — exact steps
+
+1. **Set `CRON_SECRET` on the pilot project**, Production environment only.
+   At least 24 characters; generate it in a password manager. Vercel sends it
+   automatically as `Authorization: Bearer <value>` on every cron invocation.
+   *Vercel → bscj-v2-pilot → Settings → Environment Variables → Add →
+   Production only.*
+2. **Redeploy.** A schedule change and a new environment variable both take
+   effect only on a new deployment. *Deployments → ⋯ → Redeploy*, or push a
+   commit. An Instant Rollback does **not** update active cron jobs.
+3. **Confirm the job is registered.** *Settings → Cron Jobs* should list
+   `/api/cron/outbox` at `*/15 * * * *`, enabled.
+
+Confirm `CRON_SECRET` **by presence only** — that the variable is listed and
+scoped to Production. Never reveal or paste its value.
+
+### 2B.4 Verifying with the invitation already queued
+
+There is already a queued tenant invitation — "Invitation to book → tenant:
+Queued, not yet attempted" — with no corresponding Resend send. **Use it. Do
+not create another**: a second one would make it ambiguous which drain sent
+what, and the existing row is the honest test of the path that was failing.
+
+After step 2B.3, wait for the next quarter-hour boundary, then collect three
+pieces of evidence:
+
+1. **The invocation happened and was accepted.** *Vercel → bscj-v2-pilot →
+   Settings → Cron Jobs → View Logs* (or Logs filtered to
+   `requestPath:/api/cron/outbox`). Expect **`GET … 200`**, not `401` and not
+   `405`. The response body is counts only:
+   `{"ok":true,"trigger":"schedule","report":{…}}` — look for
+   `"claimed":1` and `"accepted":1`.
+   - `401` → the secret is absent or differs between Vercel and the
+     deployment. Nothing was read from the database.
+   - `405` → the deployment predates GET support; redeploy the current commit.
+2. **The message was actually accepted by the provider.** Resend → Emails: one
+   new send to the tenant address, subject *"Choose a time for your gas safety
+   appointment"*. `accepted` in the report means Resend took it, which is not
+   a delivery receipt — Resend's own status is the next level of evidence.
+3. **The application agrees.** The admin job page's notification row should no
+   longer read "Queued"; it should show the sent state with a timestamp.
+
+Then open the link in that email and **check its host is
+`bscj-v2-pilot.vercel.app`**, not `www.bscj-solutions.com`. That is what turns
+`BSCJ_APP_ORIGIN` from owner-reported into verified.
+
+### 2B.5 What this does and does not prove
+
+Proves: Vercel invokes the job; the bearer check accepts Vercel's header in
+production; a scheduled GET drains the queue; an invitation reaches Resend; and
+the link is addressed to the pilot.
+
+**Does not prove retries.** A first-attempt success exercises none of the retry
+path. Claiming retries work on this evidence would be wrong. They remain
+unverified until a row actually fails and is seen to be attempted again —
+`attempts` incrementing on a `pending` row across two drains, with a
+`last_error`. Do not manufacture a failure against live services to get it;
+record it as unverified and let it be observed if it happens.
+
+Also unproven by this: certificate and invoice delivery, and the manual drain
+under the new schedule (unchanged, but not re-exercised).
+
+### 2B.6 The manual drain still exists
+
+A signed-in administrator can still POST to `/api/cron/outbox` from the pilot
+origin without the secret, so nobody is locked out of the queue if the schedule
+is misconfigured. It is the fallback now, not the mechanism.
 
 ---
 
