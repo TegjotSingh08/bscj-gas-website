@@ -1,7 +1,8 @@
 import "server-only";
 
-import { and, eq, inArray, lt, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, lt, notInArray, or, sql } from "drizzle-orm";
 
+import { recordAudit } from "@/lib/audit/record";
 import { getDb } from "@/lib/db/client";
 import {
   activities,
@@ -1578,5 +1579,170 @@ export async function readOutboxSummary(): Promise<{
     };
   } catch {
     return { pending: 0, failed: 0, missingRecipient: 0 };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The operator's view of the queue
+// ---------------------------------------------------------------------------
+
+/**
+ * One outstanding message, as an administrator needs to see it.
+ *
+ * **No address and no token.** The job reference identifies the work, the
+ * recipient is a role, and the reason is a code this module wrote. An
+ * operational screen does not need anybody's email address to be useful, and
+ * putting one there makes a page that must then be protected as personal data.
+ */
+export type OutstandingNotification = {
+  id: string;
+  kind: string;
+  recipient: string | null;
+  /** Null for a message about an account rather than a job. */
+  jobId: string | null;
+  jobReference: string | null;
+  state: string;
+  attempts: number;
+  lastError: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+/**
+ * Everything still owed, oldest first.
+ *
+ * `pending` and `failed` only: an accepted message needs nobody's attention and
+ * a cancelled one was stood down deliberately. Oldest first because the one
+ * that has been stuck longest is the one worth looking at, which is the
+ * opposite of what a newest-first list shows.
+ */
+export async function listOutstandingNotifications(
+  limit = 100,
+): Promise<OutstandingNotification[] | null> {
+  const db = getDb();
+  if (!db) return null;
+
+  try {
+    return await db
+      .select({
+        id: outboundEmails.id,
+        kind: outboundEmails.kind,
+        recipient: outboundEmails.recipient,
+        jobId: outboundEmails.jobId,
+        jobReference: jobs.reference,
+        state: outboundEmails.state,
+        attempts: outboundEmails.attempts,
+        lastError: outboundEmails.lastError,
+        createdAt: outboundEmails.createdAt,
+        updatedAt: outboundEmails.updatedAt,
+      })
+      .from(outboundEmails)
+      .leftJoin(jobs, eq(jobs.id, outboundEmails.jobId))
+      .where(inArray(outboundEmails.state, ["pending", "failed"]))
+      .orderBy(asc(outboundEmails.createdAt))
+      .limit(limit);
+  } catch {
+    return null;
+  }
+}
+
+export type RetryOutcome =
+  | { ok: true; message: string }
+  | { ok: false; error: string };
+
+/**
+ * Puts a failed message back in the queue for another bounded run.
+ *
+ * **Only a row that has genuinely given up.** The condition is in the `WHERE`
+ * rather than checked first and written second, so two administrators pressing
+ * it together produce one retry — the loser updates no rows and is told the
+ * state moved.
+ *
+ * Safe against the case that makes retries frightening: a provider that
+ * accepted the message and whose acceptance we failed to record. The send
+ * carries a stable provider idempotency key derived from the row, so a second
+ * attempt at the same row is deduplicated by the provider rather than becoming
+ * a second email.
+ *
+ * It resets the attempt count, which is the point — a bounded retry that has
+ * run out needs its bound reset or the button does nothing. The attempt history
+ * is not lost: every attempt is in the audit trail and the previous reason is
+ * carried into the audit entry before it is cleared.
+ */
+export async function retryFailedNotification(input: {
+  id: string;
+  actorUserId: string;
+}): Promise<RetryOutcome> {
+  const db = getDb();
+  if (!db) return { ok: false, error: "The database is not available." };
+
+  try {
+    const [before] = await db
+      .select({
+        id: outboundEmails.id,
+        kind: outboundEmails.kind,
+        state: outboundEmails.state,
+        lastError: outboundEmails.lastError,
+        attempts: outboundEmails.attempts,
+      })
+      .from(outboundEmails)
+      .where(eq(outboundEmails.id, input.id))
+      .limit(1);
+
+    if (!before) return { ok: false, error: "That message could not be found." };
+
+    /*
+      Refused rather than silently converted. A `needs_information` row is
+      pending, not failed, and would land in exactly the same place — offering
+      a retry for it is offering a control that cannot work.
+    */
+    if (before.state !== "failed") {
+      return {
+        ok: false,
+        error:
+          before.state === "sent"
+            ? "That message was already accepted by the provider. It cannot be sent again from here."
+            : "That message is not in a failed state — it is either queued already or was stood down.",
+      };
+    }
+
+    const updated = await db
+      .update(outboundEmails)
+      .set({
+        state: "pending",
+        attempts: 0,
+        lastError: null,
+        updatedAt: new Date(),
+      })
+      // Conditional, so two administrators produce one retry.
+      .where(
+        and(eq(outboundEmails.id, input.id), eq(outboundEmails.state, "failed")),
+      )
+      .returning({ id: outboundEmails.id });
+
+    if (updated.length === 0) {
+      return { ok: false, error: "That message moved while you were looking at it. Reload." };
+    }
+
+    await recordAudit({
+      actorUserId: input.actorUserId,
+      kind: "notification.retried",
+      subjectType: "outbound_email",
+      subjectId: input.id,
+      // The reason it had failed, kept before it was cleared.
+      detail: {
+        kind: before.kind,
+        previousError: before.lastError,
+        previousAttempts: before.attempts,
+      },
+    });
+
+    return {
+      ok: true,
+      message:
+        "Back in the queue. It will be attempted on the next scheduled run, and the provider will not send it twice if it already accepted it.",
+    };
+  } catch {
+    return { ok: false, error: "That could not be retried just now." };
   }
 }

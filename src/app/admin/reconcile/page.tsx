@@ -3,7 +3,13 @@ import Link from "next/link";
 
 import { requireAdmin } from "@/lib/auth/session";
 import { readReconcileQueue } from "@/lib/ops/reconcile";
+import {
+  LEASE_SECONDS,
+  listOutstandingNotifications,
+} from "@/lib/notifications/outbox";
+import { queueStateOf } from "@/lib/notifications/queue-state";
 import { ReconcileRunner } from "./ReconcileRunner";
+import { MessageQueue, type QueueRow } from "./MessageQueue";
 
 export const metadata: Metadata = {
   title: "Reconciliation",
@@ -28,6 +34,33 @@ export const dynamic = "force-dynamic";
 export default async function ReconcilePage() {
   await requireAdmin();
   const queue = await readReconcileQueue();
+
+  /*
+    Every message still owed, row by row. The counts above answer "is anything
+    wrong"; this answers "what, and what do I do about it" — which is what the
+    pilot's green dashboard over an undrained queue could not.
+  */
+  const now = new Date();
+  const outstanding = await listOutstandingNotifications();
+  const messageRows: QueueRow[] = (outstanding ?? []).map((row) => ({
+    id: row.id,
+    kind: row.kind,
+    recipient: row.recipient,
+    jobId: row.jobId,
+    jobReference: row.jobReference,
+    attempts: row.attempts,
+    lastError: row.lastError,
+    createdAt: row.createdAt.toISOString().slice(0, 16).replace("T", " "),
+    queueState: queueStateOf(
+      {
+        state: row.state as "pending" | "failed",
+        attempts: row.attempts,
+        lastError: row.lastError,
+        updatedAt: row.updatedAt,
+      },
+      { leaseSeconds: LEASE_SECONDS, now },
+    ),
+  }));
 
   const nothingOutstanding =
     queue.awaitingCalendarSync.length === 0 &&
@@ -72,6 +105,17 @@ export default async function ReconcilePage() {
         </p>
       )}
 
+      {outstanding === null && (
+        <p
+          role="alert"
+          className="mt-6 rounded-2xl border-2 border-flame-500 bg-flame-400/10 px-5 py-4 text-sm font-semibold text-navy-900"
+        >
+          The message queue could not be read. Messages still owed are{" "}
+          <strong>unknown</strong> rather than none — this page cannot tell you
+          the queue is empty.
+        </p>
+      )}
+
       {nothingOutstanding ? (
         <p className="mt-6 rounded-2xl border-2 border-navy-200 bg-white px-5 py-4 text-sm font-semibold text-navy-900">
           {queue.unpersistedListed
@@ -95,7 +139,7 @@ export default async function ReconcilePage() {
             note="The appointment exists in the calendar and the customer has their confirmation. Only our own record is missing."
             rows={queue.unpersistedBookings}
           />
-          <NotificationQueue notifications={queue.notifications} />
+          <MessageQueue rows={messageRows} />
         </div>
       )}
 
@@ -105,44 +149,6 @@ export default async function ReconcilePage() {
         </Link>
       </p>
     </main>
-  );
-}
-
-/**
- * The email outbox, by state.
- *
- * "Queued" and "given up" are separated because they need different actions,
- * and a missing address is called out by name: it is a deployment gap that
- * would otherwise read as an ordinary failure and be retried forever.
- */
-function NotificationQueue({
-  notifications,
-}: {
-  notifications: { pending: number; failed: number; missingRecipient: number };
-}) {
-  if (notifications.pending === 0 && notifications.failed === 0) return null;
-
-  return (
-    <section className="rounded-2xl border-2 border-navy-200 bg-white p-5">
-      <h2 className="text-sm font-extrabold text-navy-900">
-        Messages not yet sent ({notifications.pending + notifications.failed})
-      </h2>
-      <p className="mt-1 text-xs text-navy-600">
-        Tenant invitations, appointment confirmations and late-booking alerts.
-        A message is only ever described as <em>accepted by the provider</em> —
-        nothing here knows whether it arrived.
-      </p>
-      <ul className="mt-3 grid gap-1 text-sm text-navy-800">
-        <li>{notifications.pending} queued, waiting to be sent</li>
-        <li>{notifications.failed} given up on — these need a person</li>
-        {notifications.missingRecipient > 0 && (
-          <li className="font-bold text-flame-600">
-            {notifications.missingRecipient} cannot be sent: no address is
-            configured for that recipient
-          </li>
-        )}
-      </ul>
-    </section>
   );
 }
 
