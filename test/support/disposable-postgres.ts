@@ -100,7 +100,18 @@ export function assertDisposable(url: string): void {
   }
 }
 
-export type DisposableDatabase = ReturnType<typeof drizzle<typeof schema>> & {
+/**
+ * The Drizzle instance the application is handed.
+ *
+ * `drizzle(client)` is typed against a `Pool`; we deliberately pass a single
+ * `Client` (see `connect`), so the handle is described by what the tests and
+ * the application actually call rather than by the overload that assumes a
+ * pool.
+ */
+export type DisposableDatabase = Omit<
+  ReturnType<typeof drizzle<typeof schema>>,
+  "$client"
+> & {
   /**
    * The Neon HTTP driver's one-transaction batch, over `node-postgres`.
    *
@@ -233,7 +244,7 @@ export async function connect(): Promise<Connection> {
     }
   };
 
-  const db = Object.assign(base, { batch }) as DisposableDatabase;
+  const db = Object.assign(base, { batch }) as unknown as DisposableDatabase;
 
   return {
     db,
