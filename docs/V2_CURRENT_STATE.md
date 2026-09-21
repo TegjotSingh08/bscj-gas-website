@@ -3,7 +3,7 @@
 **Read this first.** It exists so a new session does not have to re-audit the
 repository. Update it at the end of every piece of work.
 
-Last updated: 20 September 2026 (pilot database live).
+Last updated: 21 September 2026 (first tenant journey observed).
 
 ---
 
@@ -791,6 +791,24 @@ said portal booking was "next", long after all three shipped. An agent reading
 it had no way to know the pages existed, which is much the same as not having
 built them. Jobs, Invoices and Landlords are now links; Compliance and Support,
 which genuinely have no page, still say coming soon.
+
+---
+
+## First tenant journey — 21 September 2026, owner-observed
+
+Invitation received **02:30**, tenant booked **02:39**, confirmation received
+**02:45**, and the appointment **visible in the dedicated pilot Google
+Calendar**. One pass exercising the scheduled drain, the link's host, the
+scheduling flow, the hold and confirm, the calendar write landing on the pilot
+calendar rather than the live diary, and the confirmation send.
+
+**Owner-observed, not independently verified.** Nothing on the development
+machine can reach the pilot's services.
+
+**Automatic retry remains unverified.** A first-attempt success exercises none
+of the retry path. It stays unproven until a row is actually seen to fail and
+be attempted again, and a failure must not be manufactured against live
+services to close it.
 
 ---
 

@@ -1,4 +1,14 @@
 import { escapeHtml } from "./escape";
+import {
+  button,
+  detailPanel,
+  divider,
+  fallbackLink,
+  heading,
+  note,
+  paragraph,
+  shell,
+} from "./theme";
 import type { RenderedEmail } from "./booking-confirmation";
 import { business } from "@/lib/business";
 import { formatLongDate } from "@/lib/booking/time";
@@ -32,32 +42,6 @@ export type InvitationFacts = {
   timeZone: string;
 };
 
-function shell(
-  preheader: string,
-  paragraphs: string[],
-  action: { label: string; href: string } | null,
-  footer: string[],
-): { html: string; text: string } {
-  const html = [
-    `<div style="display:none;max-height:0;overflow:hidden">${escapeHtml(preheader)}</div>`,
-    ...paragraphs.map((p) => `<p>${escapeHtml(p)}</p>`),
-    action
-      ? `<p><a href="${escapeHtml(action.href)}" style="display:inline-block;background:#e2680f;color:#ffffff;padding:14px 24px;border-radius:12px;font-weight:bold;text-decoration:none">${escapeHtml(action.label)}</a></p>` +
-        `<p style="font-size:12px;color:#55607a">If the button does not work, copy this into your browser:<br>${escapeHtml(action.href)}</p>`
-      : "",
-    ...footer.map((p) => `<p style="font-size:12px;color:#55607a">${escapeHtml(p)}</p>`),
-  ].join("");
-
-  const text = [
-    ...paragraphs,
-    ...(action ? ["", action.href] : []),
-    "",
-    ...footer,
-  ].join("\n");
-
-  return { html, text };
-}
-
 /**
  * "Choose a time for your gas safety appointment."
  *
@@ -74,32 +58,66 @@ export function renderTenantInvitationEmail(
     the wrong case has one more reason to think the message is not genuine.
   */
   const who = facts.organisationName
-    ? `${facts.organisationName} has arranged for us to carry out work at your home.`
+    ? `${escapeHtml(facts.organisationName)} has arranged for us to carry out work at your home.`
     : "We have been asked to carry out work at your home.";
 
   const subject = "Choose a time for your gas safety appointment";
   const preheader = `${facts.address} — pick a time that suits you.`;
 
-  const { html, text } = shell(
-    preheader,
-    [
-      who,
-      `Service: ${facts.productName}`,
-      `Property: ${facts.address}, ${facts.postcode}`,
-      "Choose a time that suits you. It takes about a minute, and there is nothing for you to pay.",
-      `The appointment takes about ${facts.appointmentMinutes} minutes, and someone over 18 needs to be home.`,
-    ],
-    { label: "Choose your appointment", href: facts.link },
-    [
-      `This link is just for you — please do not forward it. It stops working on ${formatLongDate(
-        facts.expiresAt.toISOString().slice(0, 10),
-        facts.timeZone,
+  /*
+    The detail panel carries what a tenant needs to recognise the message as
+    genuine — their address, the service, how long it takes — and nothing else.
+    **No price, no landlord, no agency contact.** They are not paying, and what
+    their landlord's agent is charged is nobody's business but the agency's.
+  */
+  const body = [
+    heading("Choose a time that suits you"),
+    paragraph(who),
+    detailPanel([
+      { label: "Property", value: `${escapeHtml(facts.address)}<br />${escapeHtml(facts.postcode)}` },
+      { label: "Service", value: escapeHtml(facts.productName) },
+      { label: "How long", value: `About ${facts.appointmentMinutes} minutes` },
+    ]),
+    paragraph(
+      "It takes about a minute to book, and there is nothing for you to pay. Someone over 18 needs to be home.",
+    ),
+    button("Choose your time", escapeHtml(facts.link)),
+    fallbackLink(escapeHtml(facts.link)),
+    divider(),
+    note(
+      `This link is just for you — please do not forward it. It stops working on ${escapeHtml(
+        formatLongDate(facts.expiresAt.toISOString().slice(0, 10), facts.timeZone),
       )}.`,
-      `Reference ${facts.reference}. If you would rather book by phone, call or WhatsApp ${business.phoneDisplay}.`,
-    ],
+    ),
+  ].join("");
+
+  const footer = note(
+    `Reference ${escapeHtml(facts.reference)}. Would rather book by phone? Call or WhatsApp ${business.phoneDisplay}.`,
   );
 
-  return { subject, preheader, html, text };
+  const text = [
+    "Choose a time that suits you",
+    "",
+    facts.organisationName
+      ? `${facts.organisationName} has arranged for us to carry out work at your home.`
+      : "We have been asked to carry out work at your home.",
+    "",
+    `Property: ${facts.address}, ${facts.postcode}`,
+    `Service:  ${facts.productName}`,
+    `How long: about ${facts.appointmentMinutes} minutes`,
+    "",
+    "There is nothing for you to pay. Someone over 18 needs to be home.",
+    "",
+    facts.link,
+    "",
+    `This link is just for you. It stops working on ${formatLongDate(
+      facts.expiresAt.toISOString().slice(0, 10),
+      facts.timeZone,
+    )}.`,
+    `Reference ${facts.reference}. To book by phone, call or WhatsApp ${business.phoneDisplay}.`,
+  ].join("\n");
+
+  return { subject, preheader, html: shell({ preheader, body, footer }), text };
 }
 
 export type TenantAppointmentFacts = {
@@ -133,20 +151,47 @@ export function renderTenantAppointmentEmail(
   const subject = `Your appointment is booked — ${when}`;
   const preheader = `${facts.productName} at ${facts.address}.`;
 
-  const { html, text } = shell(
-    preheader,
-    [
-      "Your appointment is booked.",
-      when,
-      `${facts.productName} at ${facts.address}, ${facts.postcode}.`,
-      `A Gas Safe registered engineer will call at that time. Please make sure someone over 18 is home and that the boiler and any other gas appliances can be reached. It takes about ${facts.appointmentMinutes} minutes.`,
-      "There is nothing for you to pay.",
-    ],
-    null,
-    [
-      `Reference ${facts.reference}. Need to change it? Call or WhatsApp ${business.phoneDisplay} and quote the reference.`,
-    ],
+  /*
+    The time is the message. It leads, it is in the panel, and it is in the
+    subject line — this is the one somebody re-opens the morning of the visit,
+    and it must answer "when" without being read.
+
+    **No change or cancel button.** Nothing in the product supports a tenant
+    doing either from a link, and a button that turns out not to work is worse
+    than a phone number that does.
+  */
+  const body = [
+    heading("Your appointment is booked"),
+    detailPanel([
+      { label: "When", value: escapeHtml(when) },
+      { label: "Property", value: `${escapeHtml(facts.address)}<br />${escapeHtml(facts.postcode)}` },
+      { label: "Service", value: escapeHtml(facts.productName) },
+      { label: "How long", value: `About ${facts.appointmentMinutes} minutes` },
+    ]),
+    paragraph(
+      "A Gas Safe registered engineer will call at that time. Please make sure someone over 18 is home and that the boiler and any other gas appliances can be reached.",
+    ),
+    paragraph("There is nothing for you to pay."),
+  ].join("");
+
+  const footer = note(
+    `Reference ${escapeHtml(facts.reference)}. Need to change it? Call or WhatsApp ${business.phoneDisplay} and quote the reference.`,
   );
 
-  return { subject, preheader, html, text };
+  const text = [
+    "Your appointment is booked",
+    "",
+    `When:     ${when}`,
+    `Property: ${facts.address}, ${facts.postcode}`,
+    `Service:  ${facts.productName}`,
+    `How long: about ${facts.appointmentMinutes} minutes`,
+    "",
+    "A Gas Safe registered engineer will call at that time. Please make sure someone over 18 is home and that the boiler and any other gas appliances can be reached.",
+    "",
+    "There is nothing for you to pay.",
+    "",
+    `Reference ${facts.reference}. Need to change it? Call or WhatsApp ${business.phoneDisplay} and quote the reference.`,
+  ].join("\n");
+
+  return { subject, preheader, html: shell({ preheader, body, footer }), text };
 }

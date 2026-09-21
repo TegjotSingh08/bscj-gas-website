@@ -31,16 +31,25 @@ export default function ScheduleLayout({
 }) {
   return (
     <div className="min-h-screen bg-navy-50">
-      <header className="border-b-2 border-navy-200 bg-white">
-        <div className="mx-auto max-w-2xl px-4 py-4">
+      {/*
+        A navy bar, matching the header on every email BSCJ sends. A tenant
+        arrives here from a link in one of those, and the two looking like the
+        same organisation is most of what stops the link feeling like phishing.
+
+        Compact on purpose: this sits above a date picker on a phone, and a
+        tall header is a screenful of scrolling before the thing they came to
+        do.
+      */}
+      <header className="bg-navy-900">
+        <div className="mx-auto max-w-2xl px-4 py-3">
           <Link
             href="/schedule"
-            className="inline-block rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-flame-500"
+            className="inline-block rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-flame-400"
           >
-            <span className="block text-lg font-extrabold text-navy-900">
-              BSCJ <span className="text-flame-600">Gas &amp; Heating</span>
+            <span className="block text-base font-extrabold leading-tight text-white">
+              BSCJ <span className="text-flame-400">Gas &amp; Heating</span>
             </span>
-            <span className="block text-xs text-navy-600">
+            <span className="block text-xs text-navy-200">
               Gas Safe registered engineer
             </span>
           </Link>

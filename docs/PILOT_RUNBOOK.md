@@ -604,6 +604,54 @@ is misconfigured. It is the fallback now, not the mechanism.
 
 ---
 
+## 2C. Sender name, and what a tenant sees
+
+`BOOKING_EMAIL_FROM` is currently `BSCJ Pilot <pilot@bscj-solutions.com>`,
+which is right for a supervised pilot: every message is visibly a test, and
+nobody mistakes one for live correspondence.
+
+**Before any message reaches a real tenant or landlord, that display name has
+to change.** A tenant who receives "BSCJ Pilot" about their own home has been
+told, accurately, that they are an experiment — and a link from an unfamiliar
+sender is a link most people do not click.
+
+To change it, set the variable on the pilot project to:
+
+```
+BSCJ Gas & Heating <pilot@bscj-solutions.com>
+```
+
+or, once a customer-facing mailbox exists, to that address instead. It is an
+environment variable on the Vercel project — **not changed here**, and not
+something the code decides. `lib/email/send.ts` passes it straight through to
+Resend's `from` field, so the display-name form works as written and the
+address must stay on the verified domain.
+
+Nothing else needs changing: the header inside every message already reads
+"BSCJ Gas & Heating", so only the sender line differs today.
+
+## 2D. First tenant journey — owner-observed, 21 September 2026
+
+| Time | Event |
+| --- | --- |
+| 02:30 | Tenant invitation **received** |
+| 02:39 | Tenant **booked** an appointment |
+| 02:45 | Booking confirmation **received** |
+| — | Appointment **visible in the dedicated pilot Google Calendar** |
+
+One pass exercising the scheduled drain, the link's host, the scheduling flow,
+the hold and confirm, the calendar write landing on the **pilot** calendar
+rather than the live diary, and the confirmation send.
+
+**Owner-observed, not independently verified** — nothing on the development
+machine can reach the pilot's services, and it holds no pilot credentials.
+
+**Automatic retry is still unverified.** A first-attempt success exercises none
+of the retry path, and a failure must not be manufactured against live services
+to close it.
+
+---
+
 ## 3. The pilot walkthrough
 
 Fictional throughout. Suggested names: agency **Northgate Lettings (PILOT)**,

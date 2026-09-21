@@ -14,7 +14,8 @@
     "db:status": "node --experimental-strip-types --import ./scripts/test-resolver.mjs scripts/db-status.mjs",
     "db:studio": "drizzle-kit studio",
     "admin:create": "node --experimental-strip-types --import ./scripts/test-resolver.mjs scripts/create-admin.mjs",
-    "preflight": "node --conditions=react-server --experimental-strip-types --import ./scripts/test-resolver.mjs scripts/preflight.mjs"
+    "preflight": "node --conditions=react-server --experimental-strip-types --import ./scripts/test-resolver.mjs scripts/preflight.mjs",
+    "previews": "node --conditions=react-server --experimental-strip-types --import ./scripts/test-resolver.mjs scripts/render-previews.mjs"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
