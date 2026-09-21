@@ -39,12 +39,42 @@ const PROPERTY = {
 };
 
 describe("landlords", () => {
-  test("name, email and a number are required", () => {
+  test("only the name is required — contact details may not be known yet", () => {
+    /*
+      An agency's portfolio export names the owner of every property and
+      frequently carries no address or number for them. Refusing to record the
+      property until somebody finds one is how the portfolio stays in a
+      spreadsheet; inventing one puts a fiction in front of a landlord and
+      eventually onto an invoice. The requirement moves to the operation that
+      actually needs to reach them.
+    */
     assert.equal(parseLandlord(form(LANDLORD)).ok, true);
 
-    const empty = parseLandlord(form({ name: "", email: "", phone: "" }));
-    assert.equal(empty.ok, false);
-    assert.ok(!empty.ok && empty.errors.name && empty.errors.email && empty.errors.phone);
+    const nameOnly = parseLandlord(form({ name: "A Landlord", email: "", phone: "" }));
+    assert.ok(nameOnly.ok);
+    assert.equal(nameOnly.value.email, null);
+    assert.equal(nameOnly.value.phone, null);
+
+    const nameless = parseLandlord(form({ name: "", email: "", phone: "" }));
+    assert.equal(nameless.ok, false);
+    assert.ok(!nameless.ok && nameless.errors.name);
+  });
+
+  test("blank becomes null, never an empty string", () => {
+    // An empty string in an email column is a value that looks like a contact
+    // and is not one — and two of them would compare equal.
+    const parsed = parseLandlord(form({ name: "A Landlord", email: "   ", phone: "  " }));
+    assert.ok(parsed.ok);
+    assert.equal(parsed.value.email, null);
+    assert.equal(parsed.value.phone, null);
+  });
+
+  test("absent is fine; present and malformed is still refused", () => {
+    // "Not known" and "wrong" are different answers. Accepting a malformed
+    // address would produce a contact that silently never works.
+    const bad = parseLandlord(form({ name: "A Landlord", email: "not-an-address" }));
+    assert.equal(bad.ok, false);
+    assert.ok(!bad.ok && bad.errors.email);
   });
 
   test("contact details are normalised the way the rest of the system stores them", () => {

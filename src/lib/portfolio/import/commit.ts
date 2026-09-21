@@ -161,11 +161,19 @@ async function applyRow(
       and different particulars. Matched by email within the organisation —
       never by an id from the file, which carries none — so a landlord in
       another agency cannot be reached however the row is written.
+
+      **A row with no email updates no landlord.** There is nothing to match
+      on, and matching on anything weaker would edit whichever landlord
+      happened to be there. The property's own details still apply; only the
+      landlord record is left alone.
     */
-    const landlords = await lookupLandlordsByEmail(organisationId, [
-      record.landlord.email,
-    ]);
-    const landlord = landlords?.get(record.landlord.email.toLowerCase());
+    const landlordEmail = record.landlord.email;
+    const landlords = landlordEmail
+      ? await lookupLandlordsByEmail(organisationId, [landlordEmail])
+      : null;
+    const landlord = landlordEmail
+      ? landlords?.get(landlordEmail.toLowerCase())
+      : undefined;
     if (landlord) {
       const updated = await updateLandlord(
         organisationId,
@@ -225,14 +233,28 @@ async function applyRow(
         };
   }
 
+  /*
+    A landlord the preview matched by name is attached by **id**, not
+    re-matched here. `createProperty` checks the id belongs to this agency, so
+    an id from anywhere else matches nothing; and re-running the name match at
+    write time could resolve differently from what the agent reviewed if a
+    second landlord of that name appeared in between.
+  */
   const created = await createProperty(
     organisationId,
-    {
-      newLandlord: record.landlord,
-      property: record.property,
-      tenancy: record.tenancy,
-      compliance: record.compliance,
-    },
+    write.matchedLandlordId
+      ? {
+          landlordId: write.matchedLandlordId,
+          property: record.property,
+          tenancy: record.tenancy,
+          compliance: record.compliance,
+        }
+      : {
+          newLandlord: record.landlord,
+          property: record.property,
+          tenancy: record.tenancy,
+          compliance: record.compliance,
+        },
     actorUserId,
   );
 

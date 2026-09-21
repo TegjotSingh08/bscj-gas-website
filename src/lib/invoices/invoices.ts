@@ -447,7 +447,18 @@ export type EligiblePayer = {
   id: string;
   name: string;
   company: string | null;
-  email: string;
+  /**
+   * Null when this payer has no address on file.
+   *
+   * **They remain eligible.** Who pays is a question about the commercial
+   * relationship, not about whether we happen to hold an email — an invoice
+   * raised against a landlord we cannot yet email is still correctly
+   * addressed, and the number, the PDF and the payer identity are all valid.
+   * What the missing address blocks is *delivery by email*, and it blocks it
+   * at the point of delivery, by name, rather than by quietly removing the
+   * right payer from the list and inviting somebody to pick the wrong one.
+   */
+  email: string | null;
   /** Why this customer is on the list at all. */
   relationship: string;
   hasBillingAddress: boolean;

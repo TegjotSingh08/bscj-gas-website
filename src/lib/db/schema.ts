@@ -542,9 +542,18 @@ export const customers = pgTable(
     name: text("name").notNull(),
     /** Agency or company name, where the customer trades as one. */
     company: text("company"),
-    email: text("email").notNull(),
+    /**
+     * Null when the landlord is identified but their contact details are not
+     * yet known — the ordinary state of a property imported from an agency's
+     * portfolio. **Never a placeholder**: a blank contact is the absence of
+     * information, and two landlords with no email are two landlords.
+     *
+     * A consumer booking still collects and validates both before a job
+     * exists; nothing here relaxes that path.
+     */
+    email: text("email"),
     /** Canonical +447XXXXXXXXX, normalised by `lib/booking/contact.ts`. */
-    phone: text("phone").notNull(),
+    phone: text("phone"),
     /*
       Where the bills go, which is not where the work happens.
 

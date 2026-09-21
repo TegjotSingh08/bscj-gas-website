@@ -22,8 +22,8 @@ export function NewLandlordForm() {
       <div className="grid gap-4 sm:grid-cols-2">
         <Field name="name" label="Name" required error={state.errors?.name} />
         <Field name="company" label="Company" error={state.errors?.company} />
-        <Field name="email" label="Email" type="email" required error={state.errors?.email} />
-        <Field name="phone" label="Phone" required error={state.errors?.phone} />
+        <Field name="email" label="Email" type="email" error={state.errors?.email} />
+        <Field name="phone" label="Phone" error={state.errors?.phone} />
       </div>
       <button type="submit" disabled={pending} className={`mt-4 ${primaryClass}`}>
         {pending ? "Saving…" : "Add landlord"}
@@ -37,7 +37,12 @@ export function EditLandlordForm({
   landlord,
 }: {
   landlordId: string;
-  landlord: { name: string; company: string | null; email: string; phone: string };
+  landlord: {
+    name: string;
+    company: string | null;
+    email: string | null;
+    phone: string | null;
+  };
 }) {
   const [state, action, pending] = useActionState<ActionState, FormData>(
     updateLandlordAction,
@@ -65,8 +70,8 @@ export function EditLandlordForm({
       <div className="grid gap-4 sm:grid-cols-2">
         <Field name="name" label="Name" required defaultValue={landlord.name} error={state.errors?.name} />
         <Field name="company" label="Company" defaultValue={landlord.company ?? ""} error={state.errors?.company} />
-        <Field name="email" label="Email" type="email" required defaultValue={landlord.email} error={state.errors?.email} />
-        <Field name="phone" label="Phone" required defaultValue={landlord.phone} error={state.errors?.phone} />
+        <Field name="email" label="Email" type="email" defaultValue={landlord.email ?? ""} error={state.errors?.email} />
+        <Field name="phone" label="Phone" defaultValue={landlord.phone ?? ""} error={state.errors?.phone} />
       </div>
       <div className="mt-4 flex gap-3">
         <button type="submit" disabled={pending} className={primaryClass}>

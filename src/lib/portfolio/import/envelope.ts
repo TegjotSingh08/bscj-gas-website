@@ -65,6 +65,13 @@ export type PlannedWrite = {
   /** Set for `conflict`: the property already held. */
   existingPropertyId?: string;
   /**
+   * Set for `create` when a contactless landlord was resolved by name.
+   *
+   * Inside the signature, so the browser cannot claim a match that the preview
+   * did not make — attaching a property to a landlord is who gets billed.
+   */
+  matchedLandlordId?: string;
+  /**
    * Set for `conflict`: whether an import may apply this row at all.
    *
    * Carried **inside the signature** rather than recomputed at write time, so
@@ -126,7 +133,12 @@ export function envelopeFor(input: {
   for (const row of input.rows) {
     if (!row.record) continue;
     if (row.action === "create") {
-      writes.push({ line: row.line, action: "create", record: row.record });
+      writes.push({
+        line: row.line,
+        action: "create",
+        record: row.record,
+        matchedLandlordId: row.matchedLandlordId,
+      });
     } else if (row.action === "conflict") {
       writes.push({
         line: row.line,

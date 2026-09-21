@@ -49,8 +49,30 @@ export default async function LandlordPage({
 
         <section className="mt-6 rounded-2xl border-2 border-navy-200 bg-white p-5">
           <h2 className="text-sm font-extrabold text-navy-900">Contact</h2>
-          <p className="mt-2 text-sm text-navy-900">{landlord.email}</p>
-          <p className="text-sm text-navy-900">{landlord.phone}</p>
+          {/*
+            Said plainly rather than shown as a blank line. A landlord imported
+            from a portfolio is often identified before they are contactable,
+            and "not on file yet" is the honest reading — a blank looks like a
+            rendering fault and invites somebody to assume we hold a detail we
+            do not.
+          */}
+          <p className="mt-2 text-sm text-navy-900">
+            {landlord.email ?? (
+              <span className="text-navy-600">No email on file yet</span>
+            )}
+          </p>
+          <p className="text-sm text-navy-900">
+            {landlord.phone ?? (
+              <span className="text-navy-600">No phone number on file yet</span>
+            )}
+          </p>
+          {(!landlord.email || !landlord.phone) && (
+            <p className="mt-2 rounded-lg bg-navy-50 px-3 py-2 text-xs text-navy-700">
+              Their properties are recorded and can be booked. We will need an
+              email address before a certificate or an invoice can be sent to
+              them.
+            </p>
+          )}
           <div className="mt-4">
             <EditLandlordForm landlordId={landlord.id} landlord={landlord} />
           </div>

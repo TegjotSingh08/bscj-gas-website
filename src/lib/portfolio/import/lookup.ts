@@ -47,8 +47,8 @@ export type ExistingProperty = {
   postcode: string;
   landlordId: string;
   landlordName: string;
-  landlordEmail: string;
-  landlordPhone: string;
+  landlordEmail: string | null;
+  landlordPhone: string | null;
   landlordCompany: string | null;
   tenancyId: string | null;
   tenantName: string | null;
@@ -137,6 +137,12 @@ export async function lookupLandlordsByEmail(
   organisationId: string,
   emails: readonly string[],
 ): Promise<Map<string, { id: string; name: string; email: string }> | null> {
+  /*
+    Only non-empty addresses are ever looked up. A blank is the absence of a
+    contact, not a value to match on — matching on it would make every
+    contactless landlord in a portfolio resolve to whichever one happened to be
+    created first, taking their properties with them.
+  */
   const db = getDb();
   if (!db) return null;
 
@@ -160,7 +166,11 @@ export async function lookupLandlordsByEmail(
         ),
       );
 
-    return new Map(rows.map((row) => [row.email.toLowerCase(), row]));
+    return new Map(
+      rows
+        .filter((row): row is typeof row & { email: string } => Boolean(row.email))
+        .map((row) => [row.email.toLowerCase(), row]),
+    );
   } catch {
     return null;
   }
@@ -242,4 +252,75 @@ export async function listUnfinishedImports(
     // A notice that cannot be read is not worth failing the page for.
     return [];
   }
+}
+
+// ---------------------------------------------------------------------------
+// Matching a landlord we have no contact details for
+// ---------------------------------------------------------------------------
+
+export type NameMatch =
+  /** Exactly one landlord of that name. Safe to attach to. */
+  | { outcome: "one"; id: string; name: string }
+  /** More than one. A person has to choose; nothing is guessed. */
+  | { outcome: "ambiguous"; count: number }
+  | { outcome: "none" };
+
+/**
+ * Finds a landlord by name, for an export that carries no contact details.
+ *
+ * **Only used when the agency's profile says their names are reliable**, and
+ * even then it resolves rather than guesses: two landlords of one name is
+ * reported as ambiguous and the row is held, never attached to whichever came
+ * first. Silently picking one puts a property — and eventually an invoice — in
+ * front of the wrong person, and nothing downstream would notice.
+ *
+ * Compared on a tidied, case-folded name within the organisation. It never
+ * *creates* a landlord and never invents a contact; it only recognises one the
+ * agency already has.
+ */
+export async function matchLandlordsByName(
+  organisationId: string,
+  names: readonly string[],
+): Promise<Map<string, NameMatch> | null> {
+  const db = getDb();
+  if (!db) return null;
+
+  const wanted = [...new Set(names.map(normaliseName))].filter(Boolean);
+  if (wanted.length === 0) return new Map();
+
+  try {
+    const rows = await db
+      .select({ id: customers.id, name: customers.name })
+      .from(customers)
+      .where(eq(customers.agentOrganisationId, organisationId));
+
+    const byName = new Map<string, { id: string; name: string }[]>();
+    for (const row of rows) {
+      const key = normaliseName(row.name);
+      if (!key) continue;
+      const bucket = byName.get(key);
+      if (bucket) bucket.push(row);
+      else byName.set(key, [row]);
+    }
+
+    const out = new Map<string, NameMatch>();
+    for (const name of wanted) {
+      const found = byName.get(name) ?? [];
+      if (found.length === 1) {
+        out.set(name, { outcome: "one", id: found[0].id, name: found[0].name });
+      } else if (found.length > 1) {
+        out.set(name, { outcome: "ambiguous", count: found.length });
+      } else {
+        out.set(name, { outcome: "none" });
+      }
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+/** The comparison key for a name. Exported so the planner uses the same one. */
+export function normaliseName(value: string): string {
+  return value.replace(/\s+/g, " ").trim().toLowerCase();
 }

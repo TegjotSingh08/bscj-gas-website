@@ -28,6 +28,7 @@ import {
 import {
   lookupExistingByPostcode,
   lookupLandlordsByEmail,
+  matchLandlordsByName,
 } from "@/lib/portfolio/import/lookup";
 import { commitImport, type RowOutcome } from "@/lib/portfolio/import/commit";
 import type { RowValues } from "@/lib/portfolio/import/rows";
@@ -244,10 +245,26 @@ export async function previewImportAction(
   const emails = valued.map((row) => row.values.landlordEmail ?? "");
   const landlords = await lookupLandlordsByEmail(session.organisationId, emails);
 
+  /*
+    Only when the profile says this agency's names are reliable, and only for
+    rows that carry no email — a name match is weaker evidence than an address
+    and is never used where an address exists.
+  */
+  const landlordsByName =
+    profile.landlordMatch === "match_existing_by_name"
+      ? ((await matchLandlordsByName(
+          session.organisationId,
+          valued
+            .filter((row) => !(row.values.landlordEmail ?? "").trim())
+            .map((row) => row.values.landlordName ?? ""),
+        )) ?? undefined)
+      : undefined;
+
   const plan = buildImportPlan({
     rows: valued,
     existing,
     existingLandlordEmails: new Set(landlords ? [...landlords.keys()] : []),
+    landlordsByName,
     profile,
   });
 

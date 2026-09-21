@@ -29,7 +29,7 @@
  */
 
 import { formatParsedDate } from "./dates";
-import type { ExistingProperty } from "./lookup";
+import type { ExistingProperty, NameMatch } from "./lookup";
 import { parseImportRow, type ImportRecord, type RowError, type RowValues } from "./rows";
 import { DEFAULT_PROFILE, type ImportProfile } from "./profile";
 
@@ -112,6 +112,14 @@ export type PlannedRow = {
   observed?: string;
   /** For `create`: whether the landlord is one the agency already has. */
   landlordExisting?: boolean;
+  /**
+   * How a contactless landlord was resolved, when the profile allows matching
+   * by name. `ambiguous` holds the row: two landlords of one name must be
+   * chosen between by a person, never by whichever came first.
+   */
+  landlordMatch?: NameMatch["outcome"];
+  /** For `landlordMatch: "one"`: the landlord this row will attach to. */
+  matchedLandlordId?: string;
   /** Dates, written out long, so a misread ordering is visible. */
   dueDateLong?: string;
   tenancyStartedLong?: string;
@@ -337,6 +345,13 @@ export function buildImportPlan(input: {
   existing: Map<string, ExistingProperty>;
   /** Landlord emails the agency already holds, lower-cased. */
   existingLandlordEmails: Set<string>;
+  /**
+   * Landlords the agency already holds, by normalised name.
+   *
+   * Only consulted when the profile says this agency's names are reliable, and
+   * even then an ambiguous name holds the row rather than picking.
+   */
+  landlordsByName?: Map<string, NameMatch>;
   /** BSCJ's reading of this agency's export. Defaults to the cautious one. */
   profile?: ImportProfile;
 }): ImportPlan {
@@ -380,6 +395,44 @@ export function buildImportPlan(input: {
     }
     seen.set(record.key, line);
 
+    /*
+      **A landlord with no contact details, where the profile says names are
+      reliable.**
+
+      Resolved explicitly, and an ambiguous name holds the row. Silently
+      attaching a property to whichever J. Smith came first puts it — and
+      eventually an invoice — in front of the wrong person, and nothing
+      downstream would notice. A name that matches nothing is not an error: a
+      new landlord is created from it, with no contact, which is exactly what
+      the file says.
+    */
+    let landlordMatch: NameMatch["outcome"] | undefined;
+    let matchedLandlordId: string | undefined;
+
+    if (!record.landlord.email && profile.landlordMatch === "match_existing_by_name") {
+      const found = input.landlordsByName?.get(
+        record.landlord.name.replace(/\s+/g, " ").trim().toLowerCase(),
+      );
+      landlordMatch = found?.outcome ?? "none";
+      if (found?.outcome === "one") matchedLandlordId = found.id;
+
+      if (landlordMatch === "ambiguous") {
+        counts.error += 1;
+        rows.push({
+          line,
+          action: "error",
+          address,
+          errors: [
+            {
+              column: "landlord_name",
+              message: `More than one landlord of this name is already on file, and this row has no email to tell them apart. Add an email to the row, or merge the duplicates first.`,
+            },
+          ],
+        });
+        continue;
+      }
+    }
+
     const existing = input.existing.get(record.key);
     if (!existing) {
       counts.create += 1;
@@ -388,9 +441,17 @@ export function buildImportPlan(input: {
         action: "create",
         record,
         address,
-        landlordExisting: input.existingLandlordEmails.has(
-          record.landlord.email.toLowerCase(),
-        ),
+        /*
+          Only a real address can identify an existing landlord. A blank is the
+          absence of a contact, so a contactless row is never reported as
+          "already on file" — that claim would be about whichever landlord was
+          created first, not about this one.
+        */
+        landlordExisting: record.landlord.email
+          ? input.existingLandlordEmails.has(record.landlord.email.toLowerCase())
+          : landlordMatch === "one",
+        landlordMatch,
+        matchedLandlordId,
         dueDateLong,
         tenancyStartedLong,
       });

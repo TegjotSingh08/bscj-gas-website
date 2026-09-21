@@ -86,21 +86,35 @@ export async function createLandlord(
       A landlord an agency already has is reused rather than added again. Two
       rows for one person split their properties across two records, and every
       later question — what do they owe, what is due — then has two answers.
-      Matched on email within the organisation, which is what an agency
-      actually identifies them by.
-    */
-    const [existing] = await db
-      .select({ id: customers.id })
-      .from(customers)
-      .where(
-        and(
-          eq(customers.agentOrganisationId, organisationId),
-          eq(customers.email, input.email),
-        ),
-      )
-      .limit(1);
 
-    if (existing) return { status: "duplicate", existingId: existing.id };
+      **Matched on a non-empty email, within the organisation, and on nothing
+      else.** Two landlords with no email on file are two landlords, not one:
+      an absent contact is the absence of information, and treating it as a
+      value would collapse every contactless landlord in a portfolio into a
+      single record the first import created. That is not a duplicate; it is a
+      merge, and it takes their properties with it.
+
+      Matching on **name** is deliberately not done here either. Names repeat,
+      and quietly attaching a property to a different J. Smith is worse than
+      creating a second record that a person can merge later. Where an agency's
+      profile says their names are reliable, the *importer* resolves it
+      explicitly and reports an ambiguous name rather than picking — see
+      `matchLandlordByName`.
+    */
+    if (input.email) {
+      const [existing] = await db
+        .select({ id: customers.id })
+        .from(customers)
+        .where(
+          and(
+            eq(customers.agentOrganisationId, organisationId),
+            eq(customers.email, input.email),
+          ),
+        )
+        .limit(1);
+
+      if (existing) return { status: "duplicate", existingId: existing.id };
+    }
 
     const id = randomUUID();
     await db.batch([

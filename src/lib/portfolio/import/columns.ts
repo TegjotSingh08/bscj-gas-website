@@ -108,7 +108,7 @@ export const COLUMNS: readonly ColumnSpec[] = [
     key: "landlordName",
     header: "landlord_name",
     required: true,
-    help: "The landlord or owner. Required — a property with no owner cannot be billed or told anything.",
+    help: "The landlord or owner. Required — a property has to belong to somebody, even when we do not yet have their contact details.",
     example: "A Landlord",
   },
   {
@@ -121,15 +121,15 @@ export const COLUMNS: readonly ColumnSpec[] = [
   {
     key: "landlordEmail",
     header: "landlord_email",
-    required: true,
-    help: "Required. Landlords with the same address are treated as the same person, so their properties stay together.",
+    required: false,
+    help: "Optional, and the best way to identify a landlord: two rows with the same address are treated as the same person, so their properties stay together. Leave blank if you do not have it — we will need one before we can send them a certificate or an invoice.",
     example: "landlord@example.invalid",
   },
   {
     key: "landlordPhone",
     header: "landlord_phone",
-    required: true,
-    help: "Required. A mobile or a landline — both are accepted.",
+    required: false,
+    help: "Optional. A mobile or a landline — both are accepted.",
     example: "01902 000000",
   },
   {

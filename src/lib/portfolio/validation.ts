@@ -48,8 +48,10 @@ export function tidy(value: string): string {
 export type LandlordInput = {
   name: string;
   company: string | null;
-  email: string;
-  phone: string;
+  /** Null when not yet known. Never a placeholder. */
+  email: string | null;
+  /** Null when not yet known. Never a placeholder. */
+  phone: string | null;
 };
 
 export type ParsedLandlord =
@@ -59,14 +61,26 @@ export type ParsedLandlord =
 /**
  * A landlord, as an agency knows one.
  *
- * Email and phone are both required, because a landlord who cannot be reached
- * cannot approve a remedial or be sent a certificate — and the schema requires
- * them on `customer` for exactly that reason.
+ * **The name identifies them; the contact details are how we reach them, and
+ * an agency often has the first without the second.** A portfolio export names
+ * the owner of every property and frequently carries no address or number for
+ * them. Refusing to record the property until somebody finds one is how the
+ * portfolio stays in a spreadsheet, and inventing one puts a fiction in front
+ * of a landlord and eventually onto an invoice.
+ *
+ * So both are optional here and the requirement moves to the operation that
+ * actually needs it: emailing a certificate needs an address for the recipient
+ * it chose, and says so by name when there is none. Recording a property does
+ * not.
+ *
+ * A supplied value is still validated — "not known" and "wrong" are different
+ * answers, and accepting a malformed address would produce a contact that
+ * silently never works.
  *
  * The phone is normalised with the same helper the booking form uses, but a
  * value it refuses is kept rather than rejected: a landlord's number is often
  * a landline, and refusing a real one to satisfy a mobile rule written for
- * customers would stop an agency recording their own client.
+ * consumers would stop an agency recording their own client.
  */
 export function parseLandlord(form: FormData): ParsedLandlord {
   const errors: FieldErrors = {};
@@ -78,14 +92,22 @@ export function parseLandlord(form: FormData): ParsedLandlord {
   const company = tidy(text(form, "company"));
   if (company.length > LIMITS.name) errors.company = "That name is too long.";
 
-  const email = normaliseEmail(text(form, "email"));
-  if (!email.ok) errors.email = "Enter a valid email address.";
+  /*
+    Absent is fine; present and malformed is not. Blank means "not known yet"
+    and stays null — it never becomes an empty string, because an empty string
+    in an email column is a value that looks like a contact and is not one.
+  */
+  const emailRaw = text(form, "email");
+  let email: string | null = null;
+  if (emailRaw) {
+    const parsed = normaliseEmail(emailRaw);
+    if (!parsed.ok) errors.email = "Enter a valid email address, or leave it blank.";
+    else email = parsed.email;
+  }
 
   const phoneRaw = text(form, "phone");
-  let phone = "";
-  if (!phoneRaw) {
-    errors.phone = "Enter a contact number.";
-  } else {
+  let phone: string | null = null;
+  if (phoneRaw) {
     const parsed = normaliseUkMobile(phoneRaw);
     phone = parsed.ok ? parsed.e164 : phoneRaw;
   }
@@ -94,12 +116,7 @@ export function parseLandlord(form: FormData): ParsedLandlord {
 
   return {
     ok: true,
-    value: {
-      name,
-      company: company || null,
-      email: email.ok ? email.email : "",
-      phone,
-    },
+    value: { name, company: company || null, email, phone },
   };
 }
 
