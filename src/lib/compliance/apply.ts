@@ -3,7 +3,7 @@ import "server-only";
 import { and, eq, isNull } from "drizzle-orm";
 
 import { getDb } from "@/lib/db/client";
-import { activities, complianceCycles } from "@/lib/db/schema";
+import { activities, certificates, complianceCycles } from "@/lib/db/schema";
 import { productFor } from "@/lib/booking/products";
 import {
   certifiedProductsFor,
@@ -38,6 +38,12 @@ export type ComplianceApplication =
   /** The job's service produces no certificate position — a boiler service. */
   | { status: "not_applicable" }
   | { status: "not_configured" }
+  /**
+   * This certificate has been corrected since, so it is not the one that
+   * governs. Nothing was written, and that is the correct outcome rather than
+   * a failure to retry.
+   */
+  | { status: "superseded_certificate" }
   /** Written nothing. The certificate stands; the renewal did not move. */
   | { status: "failed" };
 
@@ -68,6 +74,39 @@ export async function applyCertificateToCompliance(input: {
   const productIds = certifiedProductsFor(input.jobProductId);
   if (productIds.length === 0) return { status: "not_applicable" };
 
+  /*
+    **Is this certificate still the one that governs?**
+
+    The write that created it and the write that moves the renewal cannot be one
+    statement — the cycle has to point at the certificate's id, which does not
+    exist until the certificate is inserted. So there is a gap, and in that gap
+    somebody can release a correction. When they do, this document is marked
+    `superseded`, and applying its dates afterwards would put the property back
+    on a date that has already been corrected.
+
+    Re-read rather than trusted from the caller: the caller's copy was true when
+    it was fetched, which is exactly the thing in question.
+  */
+  let releasingVersion: number;
+  try {
+    const [current] = await db
+      .select({
+        status: certificates.status,
+        version: certificates.version,
+      })
+      .from(certificates)
+      .where(eq(certificates.id, input.certificate.id))
+      .limit(1);
+
+    if (!current) return { status: "failed" };
+    if (current.status !== "issued") return { status: "superseded_certificate" };
+    releasingVersion = current.version;
+  } catch {
+    return { status: "failed" };
+  }
+
+  const releasing = { ...input.certificate, version: releasingVersion };
+
   const ownership = input.organisationId
     ? eq(complianceCycles.agentOrganisationId, input.organisationId)
     : isNull(complianceCycles.agentOrganisationId);
@@ -84,8 +123,14 @@ export async function applyCertificateToCompliance(input: {
           dueDate: complianceCycles.dueDate,
           establishedByJobId: complianceCycles.establishedByJobId,
           certificateId: complianceCycles.certificateId,
+          /*
+            Which version put it there. Left-joined, because a position
+            imported from a spreadsheet has no certificate at all.
+          */
+          certificateVersion: certificates.version,
         })
         .from(complianceCycles)
+        .leftJoin(certificates, eq(certificates.id, complianceCycles.certificateId))
         .where(
           and(
             eq(complianceCycles.propertyId, input.propertyId),
@@ -103,33 +148,46 @@ export async function applyCertificateToCompliance(input: {
             dueDate: current.dueDate,
             establishedByJobId: current.establishedByJobId,
             certificateId: current.certificateId,
+            certificateVersion: current.certificateVersion ?? null,
           }
         : null;
 
-      const decision = decidePosition(active, input.certificate);
+      const decision = decidePosition(active, releasing);
       decisions.push({ productId, decision });
 
       const note = describeDecision(decision, productFor(productId).subjectName);
       if (note) messages.push(note);
 
-      if (decision.kind === "already_current" || decision.kind === "keep_newer") {
+      if (
+        decision.kind === "already_current" ||
+        decision.kind === "keep_newer" ||
+        decision.kind === "superseded_by_correction"
+      ) {
         /*
           Recorded even though nothing changed, because "we looked at this and
           deliberately left it" is the answer to a question somebody will ask
           when they notice the due date did not move.
         */
-        if (decision.kind === "keep_newer") {
+        if (decision.kind !== "already_current") {
           await db.insert(activities).values({
             jobId: input.jobId,
             propertyId: input.propertyId,
             agentOrganisationId: input.organisationId,
             kind: "compliance.position_kept",
             actor: `user:${input.actorUserId}`,
-            detail: {
-              productId,
-              heldDueDate: decision.heldDueDate,
-              certificateId: input.certificate.id,
-            },
+            detail:
+              decision.kind === "keep_newer"
+                ? {
+                    productId,
+                    heldDueDate: decision.heldDueDate,
+                    certificateId: input.certificate.id,
+                  }
+                : {
+                    productId,
+                    heldVersion: decision.heldVersion,
+                    certificateId: input.certificate.id,
+                    reason: "superseded_by_correction",
+                  },
           });
         }
         continue;
@@ -164,9 +222,9 @@ export async function applyCertificateToCompliance(input: {
           agentOrganisationId: input.organisationId,
           productId,
           establishedByJobId: input.jobId,
-          certificateId: input.certificate.id,
-          inspectionDate: input.certificate.inspectionDate,
-          dueDate: input.certificate.nextDueDate,
+          certificateId: releasing.id,
+          inspectionDate: releasing.inspectionDate,
+          dueDate: releasing.nextDueDate,
           /*
             `manual`: a person read this date off the certificate and typed it.
             The renewal rule in `renewal.ts` is not applied — the date on the
@@ -183,9 +241,10 @@ export async function applyCertificateToCompliance(input: {
           actor: `user:${input.actorUserId}`,
           detail: {
             productId,
-            dueDate: input.certificate.nextDueDate,
-            inspectionDate: input.certificate.inspectionDate,
-            certificateId: input.certificate.id,
+            dueDate: releasing.nextDueDate,
+            inspectionDate: releasing.inspectionDate,
+            certificateId: releasing.id,
+            version: releasing.version,
             superseded: decision.kind === "supersede" ? decision.supersedes : null,
           },
         }),

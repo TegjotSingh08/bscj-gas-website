@@ -30,7 +30,7 @@
  */
 
 import EmbeddedPostgres from "embedded-postgres";
-import { Client } from "pg";
+import { Client, types } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -38,6 +38,18 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import * as schema from "../../src/lib/db/schema";
+
+/**
+ * `date` columns come back as the string they are.
+ *
+ * `node-postgres` parses `date` into a JavaScript `Date` by default, which
+ * immediately drags a renewal across a timezone boundary — `2027-09-19` read in
+ * London becomes `2027-09-18T23:00:00Z`. Drizzle already returns these columns
+ * as strings, so without this a raw assertion in a test would disagree with
+ * what the application sees and the test would be checking the parser rather
+ * than the behaviour. 1082 is `DATE`.
+ */
+types.setTypeParser(1082, (value) => value);
 
 /** Fictional throughout. Not a secret, and it reaches nothing but this server. */
 const TEST_USER = "bscj_disposable";

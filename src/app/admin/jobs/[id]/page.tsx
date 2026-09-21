@@ -36,6 +36,7 @@ import {
   listJobCertificates,
   listPendingDocuments,
 } from "@/lib/documents/certificates";
+import { renewalIsOutstanding } from "@/lib/compliance/outstanding";
 import { storageStatus } from "@/lib/storage/documents";
 import { listJobInvoices } from "@/lib/invoices/invoices";
 import { formatPence } from "@/lib/invoices/model";
@@ -141,6 +142,18 @@ export default async function AdminJobPage({
   const currentCertificate =
     allCertificates.find((c) => c.status === "issued") ?? null;
   const storage = storageStatus();
+
+  /*
+    **Was this certificate released without its renewal moving?**
+
+    Read from the records rather than remembered from the release's response.
+    A response is transient — refresh the page, or come back tomorrow, and the
+    only trace that something was left undone would be gone. An issued
+    certificate with no active position pointing at it *is* the state.
+  */
+  const renewalOutstanding = currentCertificate
+    ? await renewalIsOutstanding(currentCertificate.id)
+    : false;
 
   /*
     What the outbox says about each recipient, **per certificate version**.
@@ -410,6 +423,18 @@ export default async function AdminJobPage({
 
                     {cert.status === "issued" && (
                       <>
+                        {renewalOutstanding && (
+                          <p
+                            role="alert"
+                            className="mt-3 rounded-lg border-2 border-flame-500 bg-flame-400/10 px-3 py-2 text-xs font-semibold text-navy-900"
+                          >
+                            This certificate is released, but the
+                            property&rsquo;s next-due date has not moved. The
+                            renewal write did not land. Press the button below —
+                            it is safe, and it does nothing if the renewal
+                            already matches.
+                          </p>
+                        )}
                         <UpdateRenewal
                           jobId={job.id}
                           certificateId={cert.id}

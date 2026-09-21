@@ -6,7 +6,7 @@ import {
   decidePosition,
   describeDecision,
   type ActivePosition,
-  type ReleasedCertificate,
+  type GoverningCertificate,
 } from "./position";
 
 /**
@@ -16,11 +16,12 @@ import {
  * certificate for, and newer evidence is never quietly overwritten by older.
  */
 
-const CERT: ReleasedCertificate = {
+const CERT: GoverningCertificate = {
   id: "cert-new",
   jobId: "job-2",
   inspectionDate: "2026-09-20",
   nextDueDate: "2027-09-19",
+  version: 2,
 };
 
 const active = (overrides: Partial<ActivePosition> = {}): ActivePosition => ({
@@ -29,6 +30,7 @@ const active = (overrides: Partial<ActivePosition> = {}): ActivePosition => ({
   dueDate: "2026-09-19",
   establishedByJobId: "job-1",
   certificateId: "cert-old",
+  certificateVersion: 1,
   ...overrides,
 });
 
@@ -72,7 +74,12 @@ describe("a property whose position is older", () => {
   });
 
   test("an imported position, which has no inspection date, is compared on the due date", () => {
-    const imported = active({ inspectionDate: null, certificateId: null, establishedByJobId: null });
+    const imported = active({
+      inspectionDate: null,
+      certificateId: null,
+      certificateVersion: null,
+      establishedByJobId: null,
+    });
     assert.deepEqual(decidePosition(imported, CERT), {
       kind: "supersede",
       supersedes: "cycle-1",
@@ -84,6 +91,7 @@ describe("a property whose position is older", () => {
       inspectionDate: null,
       dueDate: "2028-01-01",
       certificateId: null,
+      certificateVersion: null,
       establishedByJobId: null,
     });
     assert.deepEqual(decidePosition(imported, CERT), {
@@ -105,6 +113,7 @@ describe("a property whose position is newer", () => {
       dueDate: "2028-01-09",
       establishedByJobId: "job-3",
       certificateId: "cert-newer",
+      certificateVersion: 1,
     });
 
     assert.deepEqual(decidePosition(newer, CERT), {
@@ -130,7 +139,11 @@ describe("a property whose position is newer", () => {
 
 describe("corrections", () => {
   test("correcting the certificate that established the position replaces it", () => {
-    const ours = active({ establishedByJobId: CERT.jobId, certificateId: "cert-v1" });
+    const ours = active({
+      establishedByJobId: CERT.jobId,
+      certificateId: "cert-v1",
+      certificateVersion: 1,
+    });
     assert.deepEqual(decidePosition(ours, CERT), {
       kind: "supersede",
       supersedes: "cycle-1",
@@ -144,6 +157,7 @@ describe("corrections", () => {
     */
     const mistyped = active({
       establishedByJobId: CERT.jobId,
+      certificateVersion: 1,
       inspectionDate: "2036-09-20",
       dueDate: "2037-09-19",
     });
@@ -151,14 +165,75 @@ describe("corrections", () => {
   });
 });
 
+describe("a certificate that has been corrected since", () => {
+  test("version 1 arriving late does not displace version 2", () => {
+    /*
+      **The race.** A releases v1 and pauses before applying its position; B
+      releases the correction, v2, and applies it; A resumes. "The same job
+      established this" was the whole of the same-job test, so v1 looked exactly
+      like v2 correcting v1 — and the superseded document displaced the one that
+      corrected it.
+    */
+    const heldByCorrection = active({
+      establishedByJobId: CERT.jobId,
+      certificateId: "cert-v2",
+      certificateVersion: 2,
+    });
+    const late = { ...CERT, id: "cert-v1", version: 1 };
+
+    assert.deepEqual(decidePosition(heldByCorrection, late), {
+      kind: "superseded_by_correction",
+      heldVersion: 2,
+    });
+  });
+
+  test("and is told so in a sentence that names the version", () => {
+    const heldByCorrection = active({
+      establishedByJobId: CERT.jobId,
+      certificateVersion: 3,
+    });
+    const message =
+      describeDecision(
+        decidePosition(heldByCorrection, { ...CERT, version: 1 }),
+        "CP12",
+      ) ?? "";
+
+    assert.match(message, /version 3/);
+    assert.match(message, /nothing was overwritten/i);
+  });
+
+  test("an equal version still supersedes — that is a retry, not a regression", () => {
+    const ours = active({
+      establishedByJobId: CERT.jobId,
+      certificateId: "cert-other",
+      certificateVersion: CERT.version,
+    });
+    assert.equal(decidePosition(ours, CERT).kind, "supersede");
+  });
+
+  test("a position with no certificate at all is still correctable", () => {
+    // Imported, then a certificate released against the same job.
+    const imported = active({
+      establishedByJobId: CERT.jobId,
+      certificateId: null,
+      certificateVersion: null,
+    });
+    assert.equal(decidePosition(imported, CERT).kind, "supersede");
+  });
+});
+
 describe("repeated and concurrent submissions", () => {
   test("a position already established from this certificate is left alone", () => {
-    const ours = active({ certificateId: CERT.id, establishedByJobId: CERT.jobId });
+    const ours = active({
+      certificateId: CERT.id,
+      establishedByJobId: CERT.jobId,
+      certificateVersion: CERT.version,
+    });
     assert.deepEqual(decidePosition(ours, CERT), { kind: "already_current" });
   });
 
   test("so retrying after a partial failure is a no-op rather than a second cycle", () => {
-    const ours = active({ certificateId: CERT.id });
+    const ours = active({ certificateId: CERT.id, certificateVersion: CERT.version });
     const first = decidePosition(ours, CERT);
     const second = decidePosition(ours, CERT);
     assert.deepEqual(first, second);

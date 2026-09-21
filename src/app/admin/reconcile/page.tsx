@@ -8,6 +8,7 @@ import {
   listOutstandingNotifications,
 } from "@/lib/notifications/outbox";
 import { queueStateOf } from "@/lib/notifications/queue-state";
+import { listOutstandingRenewals } from "@/lib/compliance/outstanding";
 import { ReconcileRunner } from "./ReconcileRunner";
 import { MessageQueue, type QueueRow } from "./MessageQueue";
 
@@ -40,6 +41,14 @@ export default async function ReconcilePage() {
     wrong"; this answers "what, and what do I do about it" — which is what the
     pilot's green dashboard over an undrained queue could not.
   */
+  /*
+    Certificates released whose renewal did not land. Derived from the records —
+    an issued certificate with no active position pointing at it — so it
+    survives a refresh, a closed tab and a different administrator tomorrow.
+    The release's own response could not.
+  */
+  const outstandingRenewals = await listOutstandingRenewals();
+
   const now = new Date();
   const outstanding = await listOutstandingNotifications();
   const messageRows: QueueRow[] = (outstanding ?? []).map((row) => ({
@@ -63,6 +72,7 @@ export default async function ReconcilePage() {
   }));
 
   const nothingOutstanding =
+    (outstandingRenewals?.length ?? 0) === 0 &&
     queue.awaitingCalendarSync.length === 0 &&
     queue.awaitingCalendarCleanup.length === 0 &&
     queue.unpersistedBookings.length === 0 &&
@@ -139,6 +149,7 @@ export default async function ReconcilePage() {
             note="The appointment exists in the calendar and the customer has their confirmation. Only our own record is missing."
             rows={queue.unpersistedBookings}
           />
+          <OutstandingRenewals rows={outstandingRenewals ?? []} />
           <MessageQueue rows={messageRows} />
         </div>
       )}
@@ -149,6 +160,64 @@ export default async function ReconcilePage() {
         </Link>
       </p>
     </main>
+  );
+}
+
+/**
+ * Certificates released whose renewal did not move.
+ *
+ * The release and the compliance write cannot be one statement — the cycle has
+ * to point at the certificate's id, which does not exist until the certificate
+ * is inserted — so this state is genuinely reachable. It is derived from the
+ * rows rather than remembered, which is what makes it still here after a
+ * refresh, and the fix is on the job: one idempotent button.
+ */
+function OutstandingRenewals({
+  rows,
+}: {
+  rows: {
+    certificateId: string;
+    version: number;
+    certificateNumber: string;
+    jobId: string;
+    jobReference: string;
+    houseOrName: string;
+    postcode: string;
+    nextDueDate: string;
+  }[];
+}) {
+  if (rows.length === 0) return null;
+
+  return (
+    <section className="rounded-2xl border-2 border-flame-500 bg-flame-400/5 p-5">
+      <h2 className="text-sm font-extrabold text-navy-900">
+        Certificates released without their renewal ({rows.length})
+      </h2>
+      <p className="mt-1 text-xs leading-relaxed text-navy-700">
+        Each of these is a released certificate whose property&rsquo;s next-due
+        date did not move — the second write did not land. The document is
+        genuinely released; only the renewal is missing. Open the job and press
+        <span className="font-bold"> Update the renewal from this certificate</span>,
+        which is safe to press at any time.
+      </p>
+      <ul className="mt-3 space-y-2">
+        {rows.map((row) => (
+          <li key={row.certificateId} className="text-sm">
+            <Link
+              href={`/admin/jobs/${row.jobId}`}
+              className="font-bold text-navy-900 underline"
+            >
+              {row.jobReference}
+            </Link>
+            <span className="text-navy-700">
+              {" "}
+              — {row.houseOrName}, {row.postcode} · certificate{" "}
+              {row.certificateNumber} v{row.version}, due {row.nextDueDate}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

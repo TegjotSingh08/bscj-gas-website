@@ -71,15 +71,33 @@ export type ActivePosition = {
   establishedByJobId: string | null;
   /** The certificate that established it, when one did. */
   certificateId: string | null;
+  /**
+   * That certificate's version.
+   *
+   * **This is what tells two documents of one job apart.** Without it, "the
+   * same job established this" was the whole of the same-job test, so version 1
+   * arriving late looked exactly like version 2 correcting itself.
+   */
+  certificateVersion: number | null;
 };
 
-/** The certificate asking to establish a position. */
+/** The certificate asking to establish a position, as a caller names it. */
 export type ReleasedCertificate = {
   id: string;
   jobId: string;
   inspectionDate: string;
   nextDueDate: string;
 };
+
+/**
+ * The same certificate, with the version **as the database currently reports
+ * it**.
+ *
+ * Deliberately a separate type. A caller passes the certificate it just wrote
+ * or just read; which version is current is exactly the fact in question when a
+ * correction may have landed in between, so it is re-read rather than accepted.
+ */
+export type GoverningCertificate = ReleasedCertificate & { version: number };
 
 export type PositionDecision =
   /** Nothing holds this service's position yet. */
@@ -89,7 +107,16 @@ export type PositionDecision =
   /** Already recorded from exactly this certificate. Nothing to do. */
   | { kind: "already_current" }
   /** A newer position holds, and older evidence does not displace it. */
-  | { kind: "keep_newer"; heldDueDate: string };
+  | { kind: "keep_newer"; heldDueDate: string }
+  /**
+   * The position was established by a **later version of this job's own
+   * certificate**, and this one has been corrected since.
+   *
+   * Reported apart from `keep_newer` because it is a different sentence: not
+   * "another visit is more recent" but "this document has been superseded, and
+   * the thing that superseded it is what holds the position".
+   */
+  | { kind: "superseded_by_correction"; heldVersion: number };
 
 /**
  * Whether the certificate being released should take the position.
@@ -106,7 +133,7 @@ export type PositionDecision =
  */
 export function decidePosition(
   active: ActivePosition | null,
-  releasing: ReleasedCertificate,
+  releasing: GoverningCertificate,
 ): PositionDecision {
   if (!active) return { kind: "establish" };
 
@@ -115,11 +142,29 @@ export function decidePosition(
   if (active.certificateId === releasing.id) return { kind: "already_current" };
 
   /*
-    Our own job's position. A correction supersedes it whichever way the dates
-    move — including backwards, which is exactly what correcting a mistyped
-    date means.
+    **Our own job's position, and which of its certificates put it there.**
+
+    A correction supersedes whichever way the dates move — including backwards,
+    which is exactly what correcting a mistyped date means. But "the same job"
+    is not enough on its own, and that was the bug: version 1 arriving late,
+    after version 2 had already corrected it, looked identical to version 2
+    correcting version 1. The superseded document displaced the one that
+    corrected it, and the property was left showing a date somebody had already
+    decided was wrong.
+
+    The version is the tie-break. A certificate may only take the position from
+    an earlier version of itself, never from a later one.
   */
   if (active.establishedByJobId === releasing.jobId) {
+    if (
+      active.certificateVersion !== null &&
+      active.certificateVersion > releasing.version
+    ) {
+      return {
+        kind: "superseded_by_correction",
+        heldVersion: active.certificateVersion,
+      };
+    }
     return { kind: "supersede", supersedes: active.id };
   }
 
@@ -147,5 +192,7 @@ export function describeDecision(
       return null;
     case "keep_newer":
       return `The ${productName} renewal was left as it is: this property already holds a more recent position, due ${decision.heldDueDate}. Nothing was overwritten.`;
+    case "superseded_by_correction":
+      return `The ${productName} renewal was left as it is: version ${decision.heldVersion} of this certificate has already been released and holds the position. Nothing was overwritten.`;
   }
 }
