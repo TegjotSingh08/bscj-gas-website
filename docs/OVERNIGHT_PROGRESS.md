@@ -52,7 +52,7 @@ is never described as one.
 | 2 | Work journey | jobs, scheduling, documents, invoices | Not exercised as one path; defects unknown. | Service-level pass with defects fixed. | not started |
 | 3 | Certificate → renewal | `releaseCertificate`, `setCompliancePosition` | `releaseCertificate` **never writes `compliance_cycle`**; `setCompliancePosition` hardcodes `cp12` and supersedes every product. | Release updates the right service's position, preserving history. | **done** |
 | 3b | Due-work view | admin list patterns | No overdue/due-soon/unknown view. | Admin can see and act without developer help. | **done** |
-| 4 | Failure visibility | outbox, `admin/reconcile` | States exist; surfacing and recovery need checking. | Operator-visible states and a safe recovery action. | not started |
+| 4 | Failure visibility | outbox, `admin/reconcile` | States exist; surfacing and recovery need checking. | Operator-visible states and a safe recovery action. | **done** |
 | 5 | Polish + acceptance pack | site components, email theme | — | Morning pack exists and is honest. | not started |
 | 6 | Agency page | public site | Absent. | Local-only, no unsupported claims. | not started |
 
@@ -65,6 +65,7 @@ is never described as one.
 | `d4d3c82` | *(session start)* |
 | `5725d2e` | Make the import's hold policy actually hold |
 | `f3aee35` | Let a released certificate move the renewal it proves |
+| `338d268` | Show BSCJ what the queue is actually doing |
 
 Working tree: clean.
 
@@ -81,6 +82,9 @@ Working tree: clean.
 | P3 | `npm test` | 2213 pass, 0 fail |
 | P3 | `npx tsc --noEmit` | clean |
 | P3 | `npm run build` | clean; `/admin/due` present |
+| P4 | `npm test` | 2243 pass, 0 fail |
+| P4 | `npm run typecheck` | clean |
+| P4 | `npm run build` | clean |
 
 ---
 
@@ -92,9 +96,11 @@ None.
 
 ## Next action after interruption
 
-Begin **Priority 4**: outbox failure visibility and recovery. Start by reading
-`src/lib/notifications/outbox.ts` and `src/app/admin/reconcile/page.tsx`, then
-check what states the admin job page already shows for a queued message.
+Begin **Priority 5**: browser-inspect the public pages and the tenant booking
+flow at desktop and mobile widths (admin/agency screens cannot be inspected —
+they need a database), recheck the later-date wording, then write the morning
+acceptance pack under `docs/acceptance/`. The fictional CSVs are already there.
+Then the lower-priority agency page.
 
 *(Superseded note — Priority 3 is done.)* `releaseCertificate` in
 `src/lib/documents/certificates.ts` writes a `certificates` row but never
