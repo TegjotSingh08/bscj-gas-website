@@ -40,6 +40,7 @@ import {
 import { getDocument } from "@/lib/storage/documents";
 import { createSchedulingToken } from "@/lib/scheduling/token";
 import { resolveAppOrigin } from "@/lib/config/origin";
+import { retryOutlook } from "./queue-state";
 import { issueCredential } from "@/lib/auth/credentials";
 import { CREDENTIAL_LIFETIME_HOURS } from "@/lib/auth/credential-token";
 import {
@@ -626,9 +627,22 @@ async function deliverAccountAccess(
         about, and it keeps the provider key free of anybody's email.
       */
       reference: found.id,
-      // Each attempt carries a different link, so the provider must not
-      // collapse it into the previous one.
-      idempotencySuffix: `${path}-${row.attempts}`,
+      /*
+        **Keyed on the credential, not on the attempt number.**
+
+        Each attempt mints a new link, so each attempt is a genuinely different
+        payload — and Resend refuses a key it has seen with a different payload
+        (409 `invalid_idempotent_request`, for 24 hours). Deriving the key from
+        the attempt looked equivalent and was not: an administrator pressing
+        "try again" resets the attempt count, so attempt 1 came round a second
+        time carrying a *new* link under the *old* key, and the provider
+        rejected it. The message never went, and nothing said why.
+
+        The credential id moves forward with the payload by construction, so
+        the key and the content can never disagree again. It is an opaque row
+        id, not the token, so nothing secret goes into a header.
+      */
+      idempotencySuffix: `${path}-${issued.credentialId}`,
     }),
   );
 }
@@ -704,9 +718,13 @@ async function deliverInvitation(
       to,
       email,
       reference: job.reference,
-      // Each attempt is its own message: it carries a different link, so the
-      // provider must not collapse it into the previous one.
-      idempotencySuffix: `invite-${row.attempts}`,
+      /*
+        Keyed on the minted token's hash rather than the attempt, for the
+        reason above: each attempt carries a different link, and a key reused
+        with different content is refused by the provider for 24 hours. The
+        hash is what we store anyway — the token itself never leaves the body.
+      */
+      idempotencySuffix: `invite-${minted.tokenHash.slice(0, 32)}`,
     }),
   );
 }
@@ -1355,16 +1373,46 @@ async function finish(
       ? "transport_not_configured"
       : (result.reason ?? "unknown");
 
+  /*
+    **Another request with this key is still in flight at the provider.**
+
+    Not a failure, and not evidence that anything went wrong: the request
+    already running may be about to succeed. So the attempt is given back —
+    waiting is not trying — and the row is left pending for the next pass.
+    Spending an attempt here would let a slow provider exhaust the allowance of
+    a message that was never actually refused.
+  */
+  if (reason === "in_flight") {
+    await db
+      .update(outboundEmails)
+      .set({
+        lastError: reason,
+        state: "pending",
+        attempts: Math.max(0, row.attempts - 1),
+        updatedAt: new Date(),
+      })
+      .where(eq(outboundEmails.id, row.id));
+    return "stillQueued";
+  }
+
+  /*
+    **The provider has this key against different content**, and keeps it for
+    24 hours. Four more identical attempts would each be refused identically,
+    so this stops now and asks for a person. It is the one failure that says
+    something is wrong with *us* rather than with the provider or the address.
+  */
+  const terminal = reason === "idempotency_conflict" || row.attempts >= MAX_ATTEMPTS;
+
   await db
     .update(outboundEmails)
     .set({
       lastError: reason,
-      state: row.attempts >= MAX_ATTEMPTS ? "failed" : "pending",
+      state: terminal ? "failed" : "pending",
       updatedAt: new Date(),
     })
     .where(eq(outboundEmails.id, row.id));
 
-  return row.attempts >= MAX_ATTEMPTS ? "failed" : "stillQueued";
+  return terminal ? "failed" : "stillQueued";
 }
 
 /**
@@ -1658,16 +1706,36 @@ export type RetryOutcome =
  * it together produce one retry — the loser updates no rows and is told the
  * state moved.
  *
- * Safe against the case that makes retries frightening: a provider that
- * accepted the message and whose acceptance we failed to record. The send
- * carries a stable provider idempotency key derived from the row, so a second
- * attempt at the same row is deduplicated by the provider rather than becoming
- * a second email.
+ * **What this can and cannot promise**, because the earlier version promised
+ * more than the provider does.
+ *
+ * Resend keeps an idempotency key for **24 hours**. Inside that window, the
+ * same key with the same content returns the original response and sends
+ * nothing further; the same key with *different* content is refused; and once
+ * the window passes the key is forgotten entirely. So:
+ *
+ * - **A message whose content has not changed, retried within 24 hours** — the
+ *   provider recognises it. If it had already accepted the message, a second
+ *   copy is not produced. This is the case the button is really for.
+ * - **The same message retried after 24 hours** — the provider no longer
+ *   remembers it. If the earlier attempt had in fact been accepted, the retry
+ *   produces a **second copy**.
+ * - **An invitation or a password reset** — each attempt mints a new link, so
+ *   the retry is a genuinely different message and is keyed differently. If an
+ *   earlier attempt did reach somebody they will now have two, and only the
+ *   newer link works.
+ *
+ * None of that is exactly-once delivery and none of it is described as such.
+ * `retryOutlook` returns which case applies so the screen can say the true one
+ * rather than a comfortable one.
  *
  * It resets the attempt count, which is the point — a bounded retry that has
- * run out needs its bound reset or the button does nothing. The attempt history
- * is not lost: every attempt is in the audit trail and the previous reason is
- * carried into the audit entry before it is cleared.
+ * run out needs its bound reset or the button does nothing. That is only safe
+ * because **no idempotency key is derived from the attempt number** any more:
+ * they are derived from the content, so rewinding the counter cannot produce
+ * an old key against new content. The attempt history is not lost — the
+ * previous reason and count are carried into the audit entry before they are
+ * cleared.
  */
 export async function retryFailedNotification(input: {
   id: string;
@@ -1684,6 +1752,8 @@ export async function retryFailedNotification(input: {
         state: outboundEmails.state,
         lastError: outboundEmails.lastError,
         attempts: outboundEmails.attempts,
+        // How long ago the last attempt was, for the duplication outlook.
+        updatedAt: outboundEmails.updatedAt,
       })
       .from(outboundEmails)
       .where(eq(outboundEmails.id, input.id))
@@ -1739,8 +1809,9 @@ export async function retryFailedNotification(input: {
 
     return {
       ok: true,
-      message:
-        "Back in the queue. It will be attempted on the next scheduled run, and the provider will not send it twice if it already accepted it.",
+      message: `Back in the queue; it will be attempted on the next scheduled run. ${retryOutlook(
+        { kind: before.kind, updatedAt: before.updatedAt, now: new Date() },
+      )}`,
     };
   } catch {
     return { ok: false, error: "That could not be retried just now." };

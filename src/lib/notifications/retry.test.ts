@@ -60,10 +60,11 @@ const { retryFailedNotification } = await import("./outbox");
 
 const FAILED = {
   id: "row-1",
-  kind: "tenant.invitation",
+  kind: "tenant-scheduling-invitation",
   state: "failed",
   lastError: "unknown",
   attempts: 5,
+  updatedAt: new Date(),
 };
 
 beforeEach(() => {
@@ -92,18 +93,64 @@ describe("retrying a message that gave up", () => {
     assert.equal(updates[0].values.lastError, null);
   });
 
-  test("it says the provider will not send it twice", async () => {
+  test("it states the duplication risk that actually applies", async () => {
     /*
-      The case that makes retries frightening — a provider that accepted the
-      message and whose acceptance we failed to record — is covered by the
-      stable provider idempotency key, and the operator is told so rather than
-      left to worry.
+      **The promise this replaces was false.** It said "the provider will not
+      send it twice if it already accepted it" — true only for a message whose
+      content has not changed, retried inside the provider's 24-hour window.
+      This fixture is a tenant invitation, which mints a new link every attempt,
+      so the honest answer is the opposite one.
     */
     const result = await retryFailedNotification({
       id: "row-1",
       actorUserId: "u-1",
     });
-    assert.match(result.ok ? result.message : "", /not send it twice/i);
+
+    assert.match(result.ok ? result.message : "", /new one/i);
+    assert.match(result.ok ? result.message : "", /two messages/i);
+    assert.equal(/not send it twice/i.test(result.ok ? result.message : ""), false);
+  });
+
+  test("a message with unchanging content, retried soon, is described as deduplicated", async () => {
+    rows = [
+      {
+        ...FAILED,
+        kind: "tenant-appointment-confirmation",
+        updatedAt: new Date(Date.now() - 60 * 60 * 1000),
+      },
+    ];
+    const result = await retryFailedNotification({
+      id: "row-1",
+      actorUserId: "u-1",
+    });
+
+    assert.match(result.ok ? result.message : "", /will not get a second copy/i);
+  });
+
+  test("the same message retried after the window is described as possibly duplicating", async () => {
+    rows = [
+      {
+        ...FAILED,
+        kind: "tenant-appointment-confirmation",
+        updatedAt: new Date(Date.now() - 30 * 60 * 60 * 1000),
+      },
+    ];
+    const result = await retryFailedNotification({
+      id: "row-1",
+      actorUserId: "u-1",
+    });
+
+    assert.match(result.ok ? result.message : "", /second copy/i);
+    assert.match(result.ok ? result.message : "", /no longer recognises/i);
+  });
+
+  test("no message anywhere claims exactly-once delivery", async () => {
+    for (const kind of ["tenant-scheduling-invitation", "tenant-appointment-confirmation", "invoice-issue"]) {
+      rows = [{ ...FAILED, kind, updatedAt: new Date() }];
+      const result = await retryFailedNotification({ id: "row-1", actorUserId: "u-1" });
+      const message = result.ok ? result.message : "";
+      assert.equal(/exactly once|guaranteed|never duplicate/i.test(message), false, kind);
+    }
   });
 
   test("who did it, and what it had failed with, are recorded", async () => {
@@ -113,7 +160,7 @@ describe("retrying a message that gave up", () => {
     assert.equal(entry.kind, "notification.retried");
     // The reason is kept before it is cleared, or the history loses it.
     assert.deepEqual(entry.detail, {
-      kind: "tenant.invitation",
+      kind: "tenant-scheduling-invitation",
       previousError: "unknown",
       previousAttempts: 5,
     });

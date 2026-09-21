@@ -199,3 +199,77 @@ export function describeError(lastError: string | null): string | null {
       return `Not sent (${code}). Search the logs for that code.`;
   }
 }
+
+// ---------------------------------------------------------------------------
+// What a retry can actually promise
+// ---------------------------------------------------------------------------
+
+/**
+ * How long the provider remembers an idempotency key.
+ *
+ * Resend's published retention. Inside it, the same key with the same content
+ * returns the original response instead of sending again; outside it, the key
+ * is forgotten and a retry is simply a new request.
+ */
+export const PROVIDER_IDEMPOTENCY_HOURS = 24;
+
+/**
+ * Message kinds that mint a **new credential on every attempt**.
+ *
+ * Their content therefore changes each time, so they are keyed on the
+ * credential rather than on the row, and no de-duplication is possible or
+ * wanted: a retry is a genuinely different message carrying a working link,
+ * where the previous one may already be spent or expired.
+ */
+const REGENERATES_CREDENTIAL = new Set([
+  "tenant-scheduling-invitation",
+  "account-invitation",
+  "account-password-reset",
+]);
+
+export type RetryDuplicationRisk =
+  /** Within the window, same content: the provider will not send it twice. */
+  | "deduplicated"
+  /** Outside the window: if the first attempt was accepted, this makes a second copy. */
+  | "may_duplicate"
+  /** New link each time: a genuinely different message, by design. */
+  | "new_credential";
+
+/**
+ * Which of the three cases a retry of this row falls into.
+ *
+ * Deliberately a function of the row and the clock rather than a constant
+ * sentence, because the honest answer differs and the previous wording —
+ * "the provider will not send it twice" — was only true in one of them.
+ */
+export function retryDuplicationRisk(input: {
+  kind: string;
+  /** When the last attempt was made. */
+  updatedAt: Date;
+  now: Date;
+}): RetryDuplicationRisk {
+  if (REGENERATES_CREDENTIAL.has(input.kind)) return "new_credential";
+
+  const elapsedHours =
+    (input.now.getTime() - input.updatedAt.getTime()) / (60 * 60 * 1000);
+
+  return elapsedHours < PROVIDER_IDEMPOTENCY_HOURS
+    ? "deduplicated"
+    : "may_duplicate";
+}
+
+/** The same answer, in a sentence for the person pressing the button. */
+export function retryOutlook(input: {
+  kind: string;
+  updatedAt: Date;
+  now: Date;
+}): string {
+  switch (retryDuplicationRisk(input)) {
+    case "deduplicated":
+      return `The last attempt was under ${PROVIDER_IDEMPOTENCY_HOURS} hours ago and the content has not changed, so if the provider had already accepted it you will not get a second copy.`;
+    case "may_duplicate":
+      return `The last attempt was over ${PROVIDER_IDEMPOTENCY_HOURS} hours ago, so the provider no longer recognises it. If that attempt was in fact accepted, this will produce a second copy.`;
+    case "new_credential":
+      return "This message carries a sign-in or booking link, and a retry mints a new one. If an earlier attempt did arrive, the recipient will have two messages and only the newer link will work.";
+  }
+}

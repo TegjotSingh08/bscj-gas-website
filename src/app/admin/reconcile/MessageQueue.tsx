@@ -39,13 +39,13 @@ export type QueueRow = {
 };
 
 const KIND_LABELS: Record<string, string> = {
-  "tenant.invitation": "Invitation to book",
-  "tenant.confirmation": "Appointment confirmation",
-  "job.late_booking": "Late-booking alert",
-  "certificate.release": "Certificate",
-  "invoice.issued": "Invoice",
-  "account.invitation": "Account invitation",
-  "account.password_reset": "Password reset",
+  "tenant-scheduling-invitation": "Invitation to book",
+  "tenant-appointment-confirmation": "Appointment confirmation",
+  "late-booking-exception": "Late-booking alert",
+  "certificate-release": "Certificate",
+  "invoice-issue": "Invoice",
+  "account-invitation": "Account invitation",
+  "account-password-reset": "Password reset",
 };
 
 const STATE_TONE: Record<QueueState, string> = {

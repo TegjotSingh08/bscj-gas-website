@@ -36,7 +36,24 @@ export type EmailFailureReason =
   | "unauthorised"
   | "rate_limited"
   | "malformed_response"
-  | "network";
+  | "network"
+  /**
+   * The provider has seen this idempotency key with **different content**.
+   *
+   * Resend keeps a key for 24 hours and refuses to reuse it on a changed
+   * payload. Retrying changes nothing — the key or the content has to move —
+   * so this is terminal by nature and must not be spent on four more
+   * identical attempts.
+   */
+  | "idempotency_conflict"
+  /**
+   * Another request with this key is still in flight at the provider.
+   *
+   * Transient and, importantly, **not evidence that anything failed**: the
+   * request already running may be about to succeed. Worth another attempt
+   * later; not worth alarming anybody about.
+   */
+  | "in_flight";
 
 type Credentials = { apiKey: string; from: string };
 
@@ -71,6 +88,21 @@ function reportFailure(
   reference: string,
 ): void {
   console.warn(`[${kind}] send failed (${reason}) for reference ${reference}`);
+}
+
+/**
+ * The provider's own name for an error, when it gives one.
+ *
+ * Only the `name` field is read, and only against a closed set of values we
+ * act on. The message text can carry request detail and never reaches a screen.
+ */
+async function errorName(response: Response): Promise<string | null> {
+  try {
+    const body = (await response.json()) as { name?: unknown };
+    return typeof body?.name === "string" ? body.name : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Which email a send belongs to, for logs and provider idempotency keys. */
@@ -137,9 +169,21 @@ async function deliver({
       headers: {
         Authorization: `Bearer ${credentials.apiKey}`,
         "Content-Type": "application/json",
-        // Resend de-duplicates on this, so a retry of the same booking cannot
-        // produce a second email even if our first attempt timed out after
-        // the provider had already accepted it.
+        /*
+          **What this actually buys, precisely.**
+
+          Resend keeps an idempotency key for **24 hours**. Within that window,
+          the same key with the *same* payload returns the original response
+          without sending again — which is what makes a retry after a timeout
+          safe. The same key with a *different* payload is refused (409), and
+          after 24 hours the key is forgotten, so a retry then can produce a
+          second copy.
+
+          So this is "not twice within a day, for a message whose content has
+          not changed" — not exactly-once delivery, and it is never described
+          as such. Callers whose content changes per attempt must vary the key
+          with the content; see the credential emails in `notifications/outbox`.
+        */
         "Idempotency-Key": `${kind}-${reference}`,
       },
       body: JSON.stringify({
@@ -170,6 +214,20 @@ async function deliver({
       reportFailure(kind, "rate_limited", reference);
       return { status: "failed", reason: "rate_limited" };
     }
+
+    /*
+      Resend answers 409 for two different things, and treating them alike is
+      how a message either spins for four more attempts against a wall or gets
+      reported as broken when it was merely still going out.
+    */
+    if (response.status === 409) {
+      const name = await errorName(response);
+      const reason: EmailFailureReason =
+        name === "concurrent_idempotent_requests" ? "in_flight" : "idempotency_conflict";
+      reportFailure(kind, reason, reference);
+      return { status: "failed", reason };
+    }
+
     if (!response.ok) {
       reportFailure(kind, "rejected", reference);
       return { status: "failed", reason: "rejected" };
