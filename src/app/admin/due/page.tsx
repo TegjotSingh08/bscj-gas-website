@@ -4,6 +4,7 @@ import Link from "next/link";
 import { requireAdmin } from "@/lib/auth/session";
 import { AdminNav } from "../AdminNav";
 import {
+  DEFAULT_PAGE_SIZE,
   listDueWork,
   resolveRange,
   type DueBucket,
@@ -12,6 +13,7 @@ import {
 import { isoDateInZone } from "@/lib/booking/time";
 import { bookingConfig } from "@/lib/booking/config";
 import { STATUS_LABELS } from "@/components/jobs/JobLabels";
+import { productFor } from "@/lib/booking/products";
 
 export const metadata: Metadata = {
   title: "Renewals due",
@@ -62,7 +64,12 @@ function longDate(iso: string): string {
 export default async function DueWorkPage({
   searchParams,
 }: {
-  searchParams: Promise<{ from?: string; to?: string; show?: string }>;
+  searchParams: Promise<{
+    from?: string;
+    to?: string;
+    show?: string;
+    page?: string;
+  }>;
 }) {
   const session = await requireAdmin();
   const params = await searchParams;
@@ -71,16 +78,32 @@ export default async function DueWorkPage({
   const today = isoDateInZone(new Date(), bookingConfig.timeZone);
   const range = resolveRange(params.from, params.to, today);
 
-  const result = await listDueWork({ range, today });
-
   const show = params.show === "all" ? "all" : "action";
+  const requestedPage = Number.parseInt(params.page ?? "0", 10);
+  const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 0;
+
   /*
-    The default hides `later`, which is most of a healthy portfolio and none of
-    this week's work. It is a filter on the screen, not on the query — the
-    counts underneath have to be the real ones.
+    The filter is the **query's**, not the screen's. Filtering a page of rows
+    after the fact was how the first version lost properties with no date on
+    file: they sort last, the limit cut them off, and widening the range could
+    not bring back what had already been discarded.
   */
-  const visible =
-    result?.rows.filter((row) => show === "all" || row.bucket !== "later") ?? [];
+  const result = await listDueWork({
+    range,
+    today,
+    includeLater: show === "all",
+    page,
+    pageSize: DEFAULT_PAGE_SIZE,
+  });
+
+  const visible = result?.rows ?? [];
+
+  const linkTo = (target: number) => {
+    const query = new URLSearchParams({ from: range.from, to: range.to });
+    if (show === "all") query.set("show", "all");
+    if (target > 0) query.set("page", String(target));
+    return `/admin/due?${query.toString()}`;
+  };
 
   return (
     <>
@@ -90,9 +113,9 @@ export default async function DueWorkPage({
           Renewals due
         </h1>
         <p className="mt-2 max-w-2xl text-sm leading-relaxed text-navy-700">
-          Every property BSCJ tracks, ordered by how soon it is due. Nothing on
-          this page contacts anybody — it shows what needs arranging and what is
-          already in hand.
+          Renewals BSCJ tracks, one row per property and service, soonest first.
+          Nothing on this page contacts anybody — it shows what needs arranging
+          and what is already in hand.
         </p>
 
         {result === null ? (
@@ -165,31 +188,79 @@ export default async function DueWorkPage({
               {longDate(today)}.
             </p>
 
-            <dl className="mt-4 grid grid-cols-3 gap-3">
+            {/*
+              Totals over **everything that matches**, from their own query.
+              Counting the page would report the page, which is the number an
+              operator is least interested in.
+            */}
+            <dl className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
               <Count label="Overdue" value={result.summary.overdue} emphasis />
               <Count label="Due in range" value={result.summary.inRange} />
               <Count label="No date on file" value={result.summary.unknown} />
+              <Count label="Due later" value={result.summary.later} />
             </dl>
 
             {visible.length === 0 ? (
               <p className="mt-6 rounded-xl border-2 border-navy-200 bg-white px-4 py-4 text-sm text-navy-700">
-                Nothing is overdue, nothing falls in that range, and every
-                property has a date on file. Widen the range, or tick
-                &ldquo;include everything due later&rdquo; to see the rest.
+                {result.summary.later > 0
+                  ? `Nothing is overdue, nothing falls in that range, and every property has a date on file. ${result.summary.later} renewal${result.summary.later === 1 ? " is" : "s are"} due later — tick “include everything due later” to see them.`
+                  : "Nothing is overdue, nothing falls in that range, and every property has a date on file."}
               </p>
             ) : (
-              <ul className="mt-6 space-y-3">
-                {visible.map((row) => (
-                  <DueRow key={row.propertyId} row={row} />
-                ))}
-              </ul>
+              <>
+                <p className="mt-6 text-xs text-navy-600">
+                  {result.summary.matching} renewal
+                  {result.summary.matching === 1 ? "" : "s"} match. Showing{" "}
+                  {page * result.pageSize + 1}–
+                  {page * result.pageSize + visible.length}.
+                </p>
+                <ul className="mt-2 space-y-3">
+                  {visible.map((row) => (
+                    <DueRow key={row.key} row={row} />
+                  ))}
+                </ul>
+
+                {result.totalPages > 1 && (
+                  <nav
+                    aria-label="Pages"
+                    className="mt-5 flex items-center justify-between gap-3"
+                  >
+                    {page > 0 ? (
+                      <Link
+                        href={linkTo(page - 1)}
+                        className="rounded-xl border-2 border-navy-300 bg-white px-4 py-2 text-sm font-bold text-navy-900 hover:border-navy-600"
+                      >
+                        ← Previous
+                      </Link>
+                    ) : (
+                      <span />
+                    )}
+                    <span className="text-xs font-bold text-navy-700">
+                      Page {page + 1} of {result.totalPages}
+                    </span>
+                    {page + 1 < result.totalPages ? (
+                      <Link
+                        href={linkTo(page + 1)}
+                        className="rounded-xl border-2 border-navy-300 bg-white px-4 py-2 text-sm font-bold text-navy-900 hover:border-navy-600"
+                      >
+                        Next →
+                      </Link>
+                    ) : (
+                      <span />
+                    )}
+                  </nav>
+                )}
+              </>
             )}
 
             <p className="mt-6 text-xs leading-relaxed text-navy-600">
-              Work is requested by the agency from their own portal, against the
-              property. BSCJ does not raise it on their behalf from here — if
-              something on this list needs arranging, the agency is the route,
-              and their page is linked on each row.
+              One row per property <span className="font-bold">and service</span>
+              : a house can owe a CP12 and a boiler service on different dates,
+              and collapsing them would have to hide one. Work is requested by
+              the agency from their own portal, against the property — BSCJ does
+              not raise it on their behalf from here, so if something here needs
+              arranging, the agency is the route and their page is linked on each
+              row.
             </p>
           </>
         )}
@@ -233,31 +304,49 @@ function DueRow({ row }: { row: DueWorkRow }) {
           <p className="mt-1 text-sm font-bold text-navy-900">
             {row.dueDate ? longDate(row.dueDate) : "Not known"}
           </p>
+          {/* Which service this row is about. The unit is property + service. */}
+          <p className="text-xs text-navy-600">
+            {row.productId ? productFor(row.productId).subjectName : "No position on file"}
+          </p>
         </div>
       </div>
 
       {/*
         The whole reason this is on the row rather than a click away: chasing an
-        agency for work that is already booked is the way a list like this
-        loses trust in a fortnight.
+        agency for work already booked is how a list like this loses trust in a
+        fortnight. Only jobs covering **this** service are here — a boiler
+        service says nothing about an outstanding CP12.
       */}
-      {row.openJobId ? (
-        <p className="mt-3 rounded-lg border-2 border-navy-200 bg-white px-3 py-2 text-xs text-navy-800">
-          Already in hand —{" "}
-          <Link
-            href={`/admin/jobs/${row.openJobId}`}
-            className="font-bold text-navy-900 underline"
-          >
-            {row.openJobReference}
-          </Link>
-          {row.openJobStatus ? `, ${STATUS_LABELS[row.openJobStatus]}` : null}.
-          No need to ask for it again.
-        </p>
+      {row.jobs.length > 0 ? (
+        <div className="mt-3 rounded-lg border-2 border-navy-200 bg-white px-3 py-2 text-xs text-navy-800">
+          <p className="font-bold">
+            {row.jobs.length === 1
+              ? "Already in hand"
+              : `${row.jobs.length} open jobs cover this`}
+          </p>
+          <ul className="mt-1 space-y-0.5">
+            {row.jobs.map((job) => (
+              <li key={job.id}>
+                <Link
+                  href={`/admin/jobs/${job.id}`}
+                  className="font-bold text-navy-900 underline"
+                >
+                  {job.reference}
+                </Link>
+                {" — "}
+                {STATUS_LABELS[job.status]}
+                {job.productId !== row.productId
+                  ? ` (${productFor(job.productId).subjectName})`
+                  : null}
+              </li>
+            ))}
+          </ul>
+        </div>
       ) : (
         <p className="mt-3 text-xs text-navy-700">
           {row.bucket === "unknown"
             ? "No certificate date is on file for this property — usually an import with no expiry column. Ask the agency for the current certificate, or record it on the property."
-            : "No open job on this property."}
+            : `No open job covering ${productFor(row.productId).subjectName} on this property.`}
         </p>
       )}
     </li>
