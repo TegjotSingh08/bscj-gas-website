@@ -256,7 +256,24 @@ export async function listOutstandingRenewals(
     return candidates
       .filter((candidate) => needsApplying(candidate, positions))
       .slice(0, limit)
-      .map(({ jobProductId: _jobProductId, inspectionDate: _inspectionDate, ...row }) => row);
+      /*
+        The candidate carries two fields only the decision needed — the job's
+        product and the inspection date. They are dropped explicitly rather
+        than by destructuring, so what the caller receives is written down.
+      */
+      .map((candidate) => ({
+        certificateId: candidate.certificateId,
+        version: candidate.version,
+        certificateNumber: candidate.certificateNumber,
+        jobId: candidate.jobId,
+        jobReference: candidate.jobReference,
+        propertyId: candidate.propertyId,
+        houseOrName: candidate.houseOrName,
+        postcode: candidate.postcode,
+        organisationId: candidate.organisationId,
+        nextDueDate: candidate.nextDueDate,
+        issuedAt: candidate.issuedAt,
+      }));
   } catch {
     return null;
   }

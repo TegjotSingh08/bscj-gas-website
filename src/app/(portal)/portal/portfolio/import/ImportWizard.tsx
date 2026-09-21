@@ -293,7 +293,24 @@ function Review({
     each gets the instruction that actually applies to it.
   */
   const allErrors = plan.rows.filter((row) => row.action === "error");
-  const held = allErrors.filter((row) => row.landlordContactMissing === true);
+  /*
+    A row held because the agency's policy says not to record a landlord it
+    cannot contact, and a row held because **two landlords share that name**,
+    are different problems with different fixes. They were grouped together
+    under the policy's explanation, which told an agent their settings said
+    something they did not: `match_existing_by_name` records contactless
+    landlords, and holds this row only because the name is ambiguous.
+  */
+  const heldByPolicy = allErrors.filter(
+    (row) =>
+      row.landlordContactMissing === true &&
+      row.errors?.[0]?.column === "landlord_email",
+  );
+  const heldByAmbiguity = allErrors.filter(
+    (row) =>
+      row.landlordContactMissing === true &&
+      row.errors?.[0]?.column === "landlord_name",
+  );
   const errors = allErrors.filter((row) => row.landlordContactMissing !== true);
   /** Rows that will be written with a landlord we have no way of contacting. */
   const contactless = plan.rows.filter(
@@ -350,11 +367,12 @@ function Review({
           <Count label="Not imported" value={counts.error} />
         </dl>
 
-        {held.length > 0 && (
+        {heldByPolicy.length > 0 && (
           <div className="mt-5 rounded-xl border-2 border-navy-300 bg-navy-50 p-4">
             <h3 className="text-sm font-extrabold text-navy-900">
-              {held.length} row{held.length === 1 ? " was" : "s were"} held —
-              no landlord email address
+              {heldByPolicy.length} row
+              {heldByPolicy.length === 1 ? " was" : "s were"} held — no landlord
+              email address
             </h3>
             <p className="mt-1 text-xs text-navy-700">
               Your agency&rsquo;s import settings say to hold these rather than
@@ -364,16 +382,51 @@ function Review({
               landlords, ask BSCJ to change the setting for your agency.
             </p>
             <ul className="mt-3 space-y-1">
-              {held.slice(0, 50).map((row) => (
+              {heldByPolicy.slice(0, 50).map((row) => (
                 <li key={row.line} className="text-sm">
                   <span className="font-bold text-navy-900">Row {row.line}</span>{" "}
                   <span className="text-navy-700">{row.address}</span>
                 </li>
               ))}
             </ul>
-            {held.length > 50 && (
+            {heldByPolicy.length > 50 && (
               <p className="mt-2 text-xs text-navy-600">
-                …and {held.length - 50} more.
+                …and {heldByPolicy.length - 50} more.
+              </p>
+            )}
+          </div>
+        )}
+
+        {/*
+          A different problem entirely: the name is on file more than once, so
+          there is nothing sensible to suggest. Saying "your settings say to
+          hold these" here would be describing a setting that says the opposite.
+        */}
+        {heldByAmbiguity.length > 0 && (
+          <div className="mt-5 rounded-xl border-2 border-navy-300 bg-navy-50 p-4">
+            <h3 className="text-sm font-extrabold text-navy-900">
+              {heldByAmbiguity.length} row
+              {heldByAmbiguity.length === 1 ? " was" : "s were"} held — more than
+              one landlord of that name
+            </h3>
+            <p className="mt-1 text-xs text-navy-700">
+              These rows carry no landlord email, and you already have more than
+              one landlord with that name — so there is no way to tell which is
+              meant, and guessing would attach the property to the wrong person.
+              Add an email address to those rows and upload again. They may
+              genuinely be two different people, so nothing is merged.
+            </p>
+            <ul className="mt-3 space-y-1">
+              {heldByAmbiguity.slice(0, 50).map((row) => (
+                <li key={row.line} className="text-sm">
+                  <span className="font-bold text-navy-900">Row {row.line}</span>{" "}
+                  <span className="text-navy-700">{row.address}</span>
+                </li>
+              ))}
+            </ul>
+            {heldByAmbiguity.length > 50 && (
+              <p className="mt-2 text-xs text-navy-600">
+                …and {heldByAmbiguity.length - 50} more.
               </p>
             )}
           </div>

@@ -3,6 +3,7 @@ import "server-only";
 import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
 
+import { disposableDb } from "./disposable";
 import * as schema from "./schema";
 
 /**
@@ -39,6 +40,18 @@ export function getDb(): Database | null {
 
   const url = process.env.DATABASE_URL;
   if (!url) return null;
+
+  /*
+    The integration harness's throwaway server, when — and only when — this
+    process was started by it and the connection string is recognisably its
+    own. Null in every other case, including every real deployment, so the line
+    below is what production runs. See `disposable.ts` for the two conditions.
+  */
+  const disposable = disposableDb(url);
+  if (disposable) {
+    cached = disposable as Database;
+    return cached;
+  }
 
   cached = drizzle(neon(url), { schema });
   return cached;

@@ -16,7 +16,8 @@
     "admin:create": "node --experimental-strip-types --import ./scripts/test-resolver.mjs scripts/create-admin.mjs",
     "preflight": "node --conditions=react-server --experimental-strip-types --import ./scripts/test-resolver.mjs scripts/preflight.mjs",
     "previews": "node --conditions=react-server --experimental-strip-types --import ./scripts/test-resolver.mjs scripts/render-previews.mjs",
-    "test:integration": "node --conditions=react-server --experimental-test-module-mocks --import ./scripts/test-resolver.mjs --test-concurrency=1 --test 'test/integration/**/*.test.ts'"
+    "test:integration": "node --conditions=react-server --experimental-test-module-mocks --import ./scripts/test-resolver.mjs --test-concurrency=1 --test 'test/integration/**/*.test.ts'",
+    "browser:session": "node --experimental-strip-types --import ./scripts/test-resolver.mjs test/support/browser-session.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
