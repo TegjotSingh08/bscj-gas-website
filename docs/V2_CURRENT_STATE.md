@@ -3,7 +3,7 @@
 **Read this first.** It exists so a new session does not have to re-audit the
 repository. Update it at the end of every piece of work.
 
-Last updated: 22 September 2026 (overnight pass; migration 0009 outstanding).
+Last updated: 22 September 2026 (release-readiness correction pass; migration 0009 outstanding).
 
 ---
 
@@ -924,6 +924,73 @@ migration count and which are applied, and the "branch is unpushed" claim.
 - **The import identity flow against a real database.** It is proved against
   the planning code and against recording fakes of the mutations, which is
   what `identity.test.ts` is. Nothing on this machine can reach the pilot.
+
+---
+
+## Release-readiness correction pass — 22 September 2026
+
+Four corrections and one new capability. No feature expansion.
+
+### False outstanding-renewal alerts — fixed
+
+`outstanding.ts` asked "is there an active cycle pointing at this certificate"
+and called everything else an unresolved repair. That is true of a genuine
+failure, and equally true of a certificate a **later visit legitimately
+replaced** and of one the rules **correctly declined** to apply (`keep_newer`).
+Both would have sat on the reconciliation page for ever advertising work no
+retry could do, until everyone learned to ignore the list.
+
+The test is now "would applying this certificate *now* establish or supersede a
+position" — `decidePosition`, the same rule the retry uses, so the list can only
+contain repairs the button can make. Nothing is deleted and nothing unrelated is
+marked superseded. `renewalIsOutstanding` also returns **`unavailable`** rather
+than a confident `resolved` when the database cannot be read, and the job page
+says so.
+
+### Retry assurances — corrected to what the evidence supports
+
+`retryDuplicationRisk` read the provider's window off `updatedAt`, which moves
+on every claim and on the retry itself — so a fortnight-old message reported as
+freshly attempted, and each retry made the sentence *more* confident. It now
+uses `createdAt`, the only sound lower bound, and says **unlikely** rather than
+*will not*: Resend de-duplicates on the key **and a matching payload**, and
+nothing stored records whether the content changed.
+
+The credential wording was also wrong about our own code. It claimed only the
+newest link works; `credentials.ts` deliberately keeps earlier credentials alive
+until one is redeemed, and `access.ts` accepts any unexpired scheduling token.
+Both now describe their actual behaviour. **Token validity policy is unchanged.**
+
+### Signed-in browser acceptance — done, with one path blocked
+
+The real Next server now runs against the disposable PostgreSQL. Every key in
+`.env.example` is fixed by the harness before Next starts, so no `.env` file can
+supply one; the first sign-in is as a fixture administrator who exists only in
+the throwaway database, which is the proof rather than a claim. Accounts carry
+real password hashes and sign in through the ordinary form — **no bypass**.
+
+`db/disposable.ts` lets the server build a handle for that database behind two
+conditions no deployment satisfies: `BSCJ_DISPOSABLE_DB=1` **and** a whitelist
+of exact loopback/port/database/user values.
+
+Clicked and verified: profile save, import preview, held rows, the
+contactless-landlord consequence, the identity question and its outcome, repeat
+import, renewals filtering and pagination, service-correct job matching, agency
+isolation, failed-message retry persisting across a refresh, a validation error,
+and 375px layout.
+
+**Blocked, exactly:** certificate release in a browser. The local document store
+refuses under `NODE_ENV=production`, `next start` forces production, `next dev`
+could not run because another process held the directory, and Blob is a live
+service. The control is correctly disabled in that state; the path is covered
+against real PostgreSQL instead.
+
+### Two defects the browser found
+
+The batch shim deadlocked on its own pool connection — an import claimed its
+run, wrote nothing and hung. And a row held for **ambiguous identity** was shown
+under the hold-policy heading, telling an agent their settings said something
+they did not.
 
 ---
 

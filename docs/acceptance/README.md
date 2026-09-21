@@ -24,22 +24,52 @@ last, which asked you to test fixes that were not on the pilot yet. Corrected:
 
 ---
 
-## 0. How this was verified
+## 0. How this was verified — four separate kinds of evidence
 
-| Level | What it means |
-| --- | --- |
-| **unit** | A pure function, called directly. |
-| **postgres** | Production code against a **real PostgreSQL 18.4**, started by the test run from `node_modules`, with the real migration chain `0000`–`0009` applied and real constraints, transactions and independent connections. |
-| **captured services** | Calendar, Redis holds, document storage and the email transport replaced at their own boundary with recorders. Nothing leaves the process. |
-| **browser** | A real page rendered and driven. Public pages and email previews only. |
-| **live** | Nothing. Every live result in this repository is the owner's observation, recorded as theirs. |
+Kept apart deliberately. Conflating them is how a pilot is declared ready and
+then does not work.
 
-`npm test` runs the unit suite. `npm run test:integration` runs the PostgreSQL
-one. **Neither touches the development or pilot database** — the harness deletes
-any inherited `DATABASE_URL` from its process and refuses any connection string
+### Automated, against a real database
+
+`npm run test:integration` — **122 tests** against a real **PostgreSQL 18.4**
+started by the test run from `node_modules`, with the real migration chain
+`0000`–`0009` applied and real constraints, transactions and independent
+connections. `npm test` — **2242** unit tests.
+
+**Neither touches the development or pilot database.** The harness deletes any
+inherited `DATABASE_URL` from its process and refuses any connection string
 that is not the throwaway server it started itself.
 
-§6 lists what remains unverified.
+### Browser, signed in, on that same throwaway database
+
+The real application, driven by clicking. Verified this way:
+
+| | |
+| --- | --- |
+| Admin saves an agency import profile | persists across a reload |
+| Agency uploads a CSV | preview shows held rows, the contactless-landlord consequence, and the identity question |
+| Identity answered "same person" | property attaches to the **existing** landlord; two same-name landlords stay unmerged |
+| Repeat upload of the same file | 0 to add, already-matching reported |
+| Missing-contact policy | "hold the row" holds them; "record without contact" records them with no invented address |
+| Renewals due | filters in the query, pages correctly, one row per property **and service** |
+| A boiler-service job against a CP12 renewal | correctly **not** shown as covering it |
+| Rival agency's portfolio | zero properties; none of the other agency's data |
+| Failed message | reason shown, retry pressed, still queued **after a refresh** |
+| Mistyped spreadsheet | validation error naming what to fix |
+| Renewals at 375px | no horizontal overflow |
+
+### Owner-observed, live — **preserved from earlier, still the only live evidence**
+
+On the pilot, 21 September 2026: a tenant **invitation received at 02:30**, the
+tenant **booked at 02:39**, the **confirmation received at 02:45**, and the
+appointment **visible in the dedicated pilot Google Calendar**. Agency
+invitation and password setup also completed. These are the owner's
+observations, not mine, and nothing since has re-verified them.
+
+### Not verified by anybody
+
+See §6. In particular **automatic email retries have never run against a real
+provider**, and **no real mail client has rendered these templates**.
 
 ---
 
@@ -358,28 +388,32 @@ is being served, which is the right state for a soft launch.
 
 ## 6. What is still unverified, and by whom
 
-Mine to say:
+**Now verified automatically against a real database:** the renewals query at
+520 properties, the certificate release and correction path including the
+version race, the outstanding-renewal rules, the outbox failure-and-recovery
+cycle, and the connected workflow from job request to recorded payment.
 
-**Now verified against a real database**, which the previous pack could not
-claim: the renewals query at 520 properties, the certificate release and
-correction path including the race, the outbox's failure-and-recovery cycle, and
-the connected workflow from job request to recorded payment. All of it ran
-against a real PostgreSQL 18.4 with the real migration chain and real
-constraints.
+**Now verified in a browser, signed in:** everything in §0's browser table.
 
 **Still not verified, by me or by anybody:**
 
-- **The pilot's own database.** The integration suite runs against a throwaway
-  server; it cannot and must not touch the pilot. Migration `0009` in particular
-  has been applied only there.
-- **The deployed CSV identity/review/commit journey**, in a browser, by you.
-  Every step of it is covered at the service level; none of it has been clicked.
-- **Real email delivery.** The transport is captured in every test. Resend has
-  never been called.
-- **Actual Outlook, or any real mail client.**
+- **The pilot's own database.** The suites run against a throwaway server and
+  must not touch the pilot. Migration `0009` has been applied only there.
+- **Certificate release in a browser.** The local document store refuses under
+  `NODE_ENV=production`; `next start` forces production; `next dev` could not
+  run because another process held the directory; and Blob is a live service.
+  The release control is *correctly* disabled in that state. The path is
+  covered against real PostgreSQL instead — release, correction, the version
+  race, the genuine outstanding state and its recovery — so it is
+  integration-verified, not browser-verified.
+- **Real email delivery.** The transport is captured in every test; Resend has
+  never been called from here.
+- **Automatic retries against a real provider failure.** A first-attempt
+  success exercises none of the retry path, and a failure must not be
+  manufactured against live services to close it. **Not claimed.**
+- **Outlook, or any real mail client.** The templates were rendered in a
+  browser only. **Not claimed.**
 - **Live calendar, Blob and Redis behaviour.**
-- **The admin and agency screens in a browser.** They need a database and a
-  signed-in session; only the public pages and the email previews were rendered.
 
 ## 7. Owner decisions that actually block real agency use
 

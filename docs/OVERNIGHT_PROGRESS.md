@@ -92,6 +92,9 @@ is never described as one.
 | `bf11241` | Promise only what the email provider actually guarantees |
 | `c41e4da` | Drive the connected workflow through the application, against PostgreSQL |
 | `c19b27d` | Make the acceptance pack's claims and its order true |
+| `582d6ea` | Report a renewal repair only where one is actually possible |
+| `f95887a` | Say only what the stored evidence supports about a retry |
+| `b86bc35` | Drive the signed-in application in a browser, on a throwaway database |
 
 Working tree: clean.
 
@@ -119,7 +122,10 @@ Working tree: clean.
 | final | `npm run lint` | 1 pre-existing warning (`invitationRow`, unrelated) |
 | final | `npm run build` | clean |
 | final | diff scan | no secrets, no real addresses, migrations additive and paired |
-| **22 Sep, final** | `npm run test:integration` | **101 pass, 30 suites, 0 fail** against real PostgreSQL 18.4 |
+| **22 Sep, correction pass** | `npm run test:integration` | **122 pass, 0 fail** against real PostgreSQL 18.4 |
+| 22 Sep, correction pass | `npm test` | 2242 pass, 0 fail |
+| 22 Sep, correction pass | browser, signed in | admin + agency journeys on the throwaway database |
+| *(earlier)* | `npm run test:integration` | 101 pass, 30 suites, 0 fail |
 | 22 Sep, final | `npm test` | 2231 pass, 448 suites, 0 fail |
 | 22 Sep, final | `npm run typecheck` | clean |
 | 22 Sep, final | `npm run lint` | 1 pre-existing warning (`invitationRow`) |
