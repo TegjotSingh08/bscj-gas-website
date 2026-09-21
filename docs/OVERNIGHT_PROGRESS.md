@@ -89,6 +89,7 @@ is never described as one.
 | `16fc473` | Type the disposable handle by what it is, not by the pool overload |
 | `ff1b3e7` | Count renewals once, and only against the service they are for |
 | `e2c4841` | Stop a superseded certificate displacing its own correction |
+| `bf11241` | Promise only what the email provider actually guarantees |
 
 Working tree: clean.
 
@@ -116,7 +117,7 @@ Working tree: clean.
 | final | `npm run lint` | 1 pre-existing warning (`invitationRow`, unrelated) |
 | final | `npm run build` | clean |
 | final | diff scan | no secrets, no real addresses, migrations additive and paired |
-| **22 Sep** | `npm run test:integration` | **70 pass, 0 fail** against real PostgreSQL 18.4 |
+| **22 Sep** | `npm run test:integration` | **81 pass, 0 fail** against real PostgreSQL 18.4 |
 | 22 Sep | `npm test` | 2228 pass, 0 fail |
 | 22 Sep | `npm run typecheck` | clean |
 | 22 Sep | `npm run lint` | 1 pre-existing warning |
@@ -138,14 +139,12 @@ disturbed) and has been stopped. It used no external service.
 Done: disposable PostgreSQL (objective 1), renewals query (finding 2),
 certificate correction race and durable recovery (finding 3).
 
-Next: **finding 4** — email retry guarantees. `retryFailedNotification`
-currently promises the provider will not send twice, and `retry.test.ts`
-asserts that promise. Verify Resend's actual idempotency guarantee (24-hour
-retention, matching payload), trace each message kind for attempt-derived keys
-and regenerated credentials, then fix behaviour and wording together.
-
-Then finding 5 (connected journey against PostgreSQL) and finding 6 (acceptance
-pack corrections).
+Next: **finding 5** — the connected workflow against PostgreSQL. Agency import
+→ CP12 requested → tenant schedules → engineer assigned → work completed →
+certificate uploaded, reviewed and released → compliance updated → delivery
+intent processed → invoice drafted, issued, delivered → payment recorded. Use
+`test/support/fixtures.ts` for starting accounts only; every transition must go
+through the application. Then **finding 6** (acceptance-pack corrections).
 
 If resuming, the most valuable remaining work, in order:
 
