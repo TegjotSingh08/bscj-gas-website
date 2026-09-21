@@ -205,11 +205,12 @@ export function describeError(lastError: string | null): string | null {
 // ---------------------------------------------------------------------------
 
 /**
- * How long the provider remembers an idempotency key.
+ * How long Resend retains an idempotency key: **24 hours** from first use.
  *
- * Resend's published retention. Inside it, the same key with the same content
- * returns the original response instead of sending again; outside it, the key
- * is forgotten and a retry is simply a new request.
+ * Inside that window, the same key with the *same* payload returns the original
+ * response instead of sending again, and the same key with a *different*
+ * payload is refused (409 `invalid_idempotent_request`). Outside it the key is
+ * forgotten and a retry is simply a new request.
  */
 export const PROVIDER_IDEMPOTENCY_HOURS = 24;
 
@@ -217,9 +218,9 @@ export const PROVIDER_IDEMPOTENCY_HOURS = 24;
  * Message kinds that mint a **new credential on every attempt**.
  *
  * Their content therefore changes each time, so they are keyed on the
- * credential rather than on the row, and no de-duplication is possible or
- * wanted: a retry is a genuinely different message carrying a working link,
- * where the previous one may already be spent or expired.
+ * credential rather than on the row and no de-duplication is possible — which
+ * is the one thing about this we can state with certainty, because it is a
+ * property of our own code rather than of the provider's memory.
  */
 const REGENERATES_CREDENTIAL = new Set([
   "tenant-scheduling-invitation",
@@ -227,49 +228,95 @@ const REGENERATES_CREDENTIAL = new Set([
   "account-password-reset",
 ]);
 
+/** Kinds whose link is an account credential rather than a scheduling link. */
+const ACCOUNT_CREDENTIAL = new Set([
+  "account-invitation",
+  "account-password-reset",
+]);
+
 export type RetryDuplicationRisk =
-  /** Within the window, same content: the provider will not send it twice. */
-  | "deduplicated"
-  /** Outside the window: if the first attempt was accepted, this makes a second copy. */
-  | "may_duplicate"
-  /** New link each time: a genuinely different message, by design. */
-  | "new_credential";
+  /**
+   * A new link is minted, so this is a genuinely different message.
+   *
+   * Certain, because it follows from how the message is built.
+   */
+  | "new_credential"
+  /**
+   * The provider's window **cannot yet have closed**, so de-duplication may
+   * apply — if the content is unchanged, which is not something the stored row
+   * can establish.
+   */
+  | "window_open_content_unknown"
+  /**
+   * The window **may** have closed. The first attempt could have been long
+   * enough ago that the provider has forgotten the key.
+   */
+  | "window_may_have_passed";
 
 /**
- * Which of the three cases a retry of this row falls into.
+ * Which case a retry of this row falls into.
  *
- * Deliberately a function of the row and the clock rather than a constant
- * sentence, because the honest answer differs and the previous wording —
- * "the provider will not send it twice" — was only true in one of them.
+ * **What the stored evidence can and cannot support.** An earlier version read
+ * `updatedAt` as "when the provider first saw this key". It is not: it moves on
+ * every claim, every failed attempt and the retry itself, so a message whose
+ * first attempt was a fortnight ago reports as freshly attempted. Worse, it
+ * moved the wrong way — the more a message had been retried, the more recent it
+ * looked, and the more confident the sentence became.
+ *
+ * `createdAt` is the only sound bound available. The first attempt cannot have
+ * happened before the intent was recorded, so:
+ *
+ * - **recorded less than 24 hours ago** → whenever the provider first saw the
+ *   key, it still remembers it. De-duplication *may* apply.
+ * - **recorded longer ago** → the first attempt might have been at any point
+ *   since, including outside the window. Nothing can be promised.
+ *
+ * Even in the first case the answer is "may": Resend de-duplicates on the key
+ * **and a matching payload**, and whether the content is byte-identical to the
+ * earlier attempt is not something an outbox row records. An address, an
+ * appointment time or an invoice line could have changed underneath it. So the
+ * strongest honest word is *unlikely*, never *will not*.
+ *
+ * Nothing here is exactly-once delivery and nothing describes it as such.
  */
 export function retryDuplicationRisk(input: {
   kind: string;
-  /** When the last attempt was made. */
-  updatedAt: Date;
+  /** When the intent was recorded. A lower bound on the first attempt. */
+  createdAt: Date;
   now: Date;
 }): RetryDuplicationRisk {
   if (REGENERATES_CREDENTIAL.has(input.kind)) return "new_credential";
 
   const elapsedHours =
-    (input.now.getTime() - input.updatedAt.getTime()) / (60 * 60 * 1000);
+    (input.now.getTime() - input.createdAt.getTime()) / (60 * 60 * 1000);
 
   return elapsedHours < PROVIDER_IDEMPOTENCY_HOURS
-    ? "deduplicated"
-    : "may_duplicate";
+    ? "window_open_content_unknown"
+    : "window_may_have_passed";
 }
 
-/** The same answer, in a sentence for the person pressing the button. */
+/**
+ * The same answer, in a sentence for the person pressing the button.
+ *
+ * The credential sentences describe what the recipient will actually find,
+ * which is **not** "only the newest link works". Both token systems
+ * deliberately keep earlier links alive — a first attempt that reported a
+ * timeout may well have arrived, and invalidating its link would break
+ * something somebody is already holding.
+ */
 export function retryOutlook(input: {
   kind: string;
-  updatedAt: Date;
+  createdAt: Date;
   now: Date;
 }): string {
   switch (retryDuplicationRisk(input)) {
-    case "deduplicated":
-      return `The last attempt was under ${PROVIDER_IDEMPOTENCY_HOURS} hours ago and the content has not changed, so if the provider had already accepted it you will not get a second copy.`;
-    case "may_duplicate":
-      return `The last attempt was over ${PROVIDER_IDEMPOTENCY_HOURS} hours ago, so the provider no longer recognises it. If that attempt was in fact accepted, this will produce a second copy.`;
     case "new_credential":
-      return "This message carries a sign-in or booking link, and a retry mints a new one. If an earlier attempt did arrive, the recipient will have two messages and only the newer link will work.";
+      return ACCOUNT_CREDENTIAL.has(input.kind)
+        ? "This message carries a sign-in link, and a retry mints a new one. If an earlier attempt did arrive, the recipient will have more than one message — every link still works until one of them is used, and using any one retires the rest."
+        : "This message carries a booking link, and a retry mints a new one. If an earlier attempt did arrive, the recipient will have more than one message — every link still works until it expires, and they all lead to the same appointment.";
+    case "window_open_content_unknown":
+      return `This was queued less than ${PROVIDER_IDEMPOTENCY_HOURS} hours ago, so the provider should still recognise it. A second copy is unlikely, though not impossible: the provider only ignores a repeat whose content is identical, and nothing here records whether it is.`;
+    case "window_may_have_passed":
+      return `This was queued more than ${PROVIDER_IDEMPOTENCY_HOURS} hours ago, so the provider may no longer recognise it. If an earlier attempt was in fact accepted, this may produce a second copy.`;
   }
 }

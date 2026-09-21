@@ -2,11 +2,14 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  PROVIDER_IDEMPOTENCY_HOURS,
   QUEUE_STATE_LABELS,
   canRetry,
   describeError,
   isMissingRecipient,
   queueStateOf,
+  retryDuplicationRisk,
+  retryOutlook,
   type QueueRowInput,
 } from "./queue-state";
 import { LEASE_SECONDS } from "./outbox";
@@ -179,5 +182,160 @@ describe("the reason, in words that name an action", () => {
   test("no reason at all is no sentence at all", () => {
     assert.equal(describeError(null), null);
     assert.equal(describeError(""), null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// What a retry may promise
+// ---------------------------------------------------------------------------
+
+const HOUR = 60 * 60 * 1000;
+const NOW_RETRY = new Date("2026-09-22T12:00:00.000Z");
+const hoursAgo = (hours: number) => new Date(NOW_RETRY.getTime() - hours * HOUR);
+
+describe("the evidence a retry's promise can rest on", () => {
+  test("a message queued within the window may be deduplicated, but only may", () => {
+    const risk = retryDuplicationRisk({
+      kind: "tenant-appointment-confirmation",
+      createdAt: hoursAgo(2),
+      now: NOW_RETRY,
+    });
+    assert.equal(risk, "window_open_content_unknown");
+  });
+
+  test("a message queued beyond the window promises nothing", () => {
+    const risk = retryDuplicationRisk({
+      kind: "tenant-appointment-confirmation",
+      createdAt: hoursAgo(PROVIDER_IDEMPOTENCY_HOURS + 1),
+      now: NOW_RETRY,
+    });
+    assert.equal(risk, "window_may_have_passed");
+  });
+
+  test("an OLD original with a RECENT local update is still old", () => {
+    /*
+      **The defect.** The risk was read off `updatedAt`, which moves on every
+      claim, every failed attempt and the retry itself — so a message whose
+      first attempt was a fortnight ago reported as freshly attempted, and the
+      more it had been retried the more confident the sentence became. The bound
+      is `createdAt`: the first attempt cannot have preceded the intent.
+    */
+    const risk = retryDuplicationRisk({
+      kind: "tenant-appointment-confirmation",
+      createdAt: hoursAgo(14 * 24),
+      now: NOW_RETRY,
+    });
+    assert.equal(risk, "window_may_have_passed");
+  });
+
+  test("repeated manual retries do not make the promise stronger", () => {
+    // Whatever has happened locally since, the queueing time is fixed.
+    const old = { kind: "invoice-issue", createdAt: hoursAgo(72) };
+    const first = retryDuplicationRisk({ ...old, now: NOW_RETRY });
+    const second = retryDuplicationRisk({
+      ...old,
+      now: new Date(NOW_RETRY.getTime() + HOUR),
+    });
+    const third = retryDuplicationRisk({
+      ...old,
+      now: new Date(NOW_RETRY.getTime() + 5 * HOUR),
+    });
+
+    assert.equal(first, "window_may_have_passed");
+    assert.equal(second, "window_may_have_passed");
+    assert.equal(third, "window_may_have_passed");
+  });
+
+  test("the boundary itself is treated as possibly passed", () => {
+    // Exactly 24 hours is not inside the window.
+    assert.equal(
+      retryDuplicationRisk({
+        kind: "invoice-issue",
+        createdAt: hoursAgo(PROVIDER_IDEMPOTENCY_HOURS),
+        now: NOW_RETRY,
+      }),
+      "window_may_have_passed",
+    );
+  });
+});
+
+describe("the sentence a retry shows", () => {
+  test("never promises that a second copy will not happen", () => {
+    for (const kind of [
+      "tenant-appointment-confirmation",
+      "invoice-issue",
+      "certificate-release",
+      "tenant-scheduling-invitation",
+      "account-invitation",
+      "account-password-reset",
+    ]) {
+      for (const hours of [1, 12, 25, 400]) {
+        const sentence = retryOutlook({
+          kind,
+          createdAt: hoursAgo(hours),
+          now: NOW_RETRY,
+        });
+        assert.equal(
+          /will not (be sent|send|get|produce)|never (be sent|duplicate)|exactly once|guaranteed/i.test(
+            sentence,
+          ),
+          false,
+          `${kind} at ${hours}h: ${sentence}`,
+        );
+      }
+    }
+  });
+
+  test("an uncertain payload is said to be uncertain", () => {
+    const sentence = retryOutlook({
+      kind: "tenant-appointment-confirmation",
+      createdAt: hoursAgo(2),
+      now: NOW_RETRY,
+    });
+    assert.match(sentence, /unlikely/i);
+    assert.match(sentence, /not impossible|identical/i);
+  });
+
+  test("a scheduling link says every link still works until it expires", () => {
+    /*
+      `access.ts` accepts any unexpired, unrevoked token and using one does not
+      revoke the others. The old sentence said only the newest link worked,
+      which would have had somebody tell a tenant to ignore a link that works.
+    */
+    const sentence = retryOutlook({
+      kind: "tenant-scheduling-invitation",
+      createdAt: hoursAgo(1),
+      now: NOW_RETRY,
+    });
+    assert.match(sentence, /every link still works/i);
+    assert.match(sentence, /expires/i);
+    assert.equal(/only the newer|only the newest/i.test(sentence), false);
+  });
+
+  test("an account link says the others retire when one is used", () => {
+    /*
+      `credentials.ts` deliberately does not revoke earlier credentials on
+      minting; redeeming any one revokes the rest in the same statement.
+    */
+    for (const kind of ["account-invitation", "account-password-reset"]) {
+      const sentence = retryOutlook({
+        kind,
+        createdAt: hoursAgo(1),
+        now: NOW_RETRY,
+      });
+      assert.match(sentence, /every link still works/i);
+      assert.match(sentence, /until one of them is used/i);
+      assert.equal(/only the newer|only the newest/i.test(sentence), false);
+    }
+  });
+
+  test("a credential message is never described as deduplicated", () => {
+    // Its key differs by construction, so the provider has nothing to match.
+    const sentence = retryOutlook({
+      kind: "account-invitation",
+      createdAt: hoursAgo(1),
+      now: NOW_RETRY,
+    });
+    assert.equal(/provider should still recognise/i.test(sentence), false);
   });
 });

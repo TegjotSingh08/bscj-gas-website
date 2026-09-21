@@ -64,7 +64,7 @@ const FAILED = {
   state: "failed",
   lastError: "unknown",
   attempts: 5,
-  updatedAt: new Date(),
+  createdAt: new Date(),
 };
 
 beforeEach(() => {
@@ -106,17 +106,18 @@ describe("retrying a message that gave up", () => {
       actorUserId: "u-1",
     });
 
-    assert.match(result.ok ? result.message : "", /new one/i);
-    assert.match(result.ok ? result.message : "", /two messages/i);
+    assert.match(result.ok ? result.message : "", /mints a new one/i);
+    // Earlier links stay valid — `access.ts` accepts any unexpired token.
+    assert.match(result.ok ? result.message : "", /every link still works/i);
     assert.equal(/not send it twice/i.test(result.ok ? result.message : ""), false);
   });
 
-  test("a message with unchanging content, retried soon, is described as deduplicated", async () => {
+  test("a message queued recently is described as unlikely to duplicate, not certain", async () => {
     rows = [
       {
         ...FAILED,
         kind: "tenant-appointment-confirmation",
-        updatedAt: new Date(Date.now() - 60 * 60 * 1000),
+        createdAt: new Date(Date.now() - 60 * 60 * 1000),
       },
     ];
     const result = await retryFailedNotification({
@@ -124,15 +125,16 @@ describe("retrying a message that gave up", () => {
       actorUserId: "u-1",
     });
 
-    assert.match(result.ok ? result.message : "", /will not get a second copy/i);
+    assert.match(result.ok ? result.message : "", /unlikely/i);
+    assert.match(result.ok ? result.message : "", /not impossible/i);
   });
 
-  test("the same message retried after the window is described as possibly duplicating", async () => {
+  test("a message queued beyond the window is described as possibly duplicating", async () => {
     rows = [
       {
         ...FAILED,
         kind: "tenant-appointment-confirmation",
-        updatedAt: new Date(Date.now() - 30 * 60 * 60 * 1000),
+        createdAt: new Date(Date.now() - 30 * 60 * 60 * 1000),
       },
     ];
     const result = await retryFailedNotification({
@@ -141,12 +143,34 @@ describe("retrying a message that gave up", () => {
     });
 
     assert.match(result.ok ? result.message : "", /second copy/i);
-    assert.match(result.ok ? result.message : "", /no longer recognises/i);
+    assert.match(result.ok ? result.message : "", /may no longer recognise/i);
+  });
+
+  test("a long-queued message that was retried a minute ago is still described as old", async () => {
+    /*
+      The regression that matters: reading the risk off `updatedAt` made a
+      fortnight-old message look freshly attempted, and each retry made the
+      sentence more confident.
+    */
+    rows = [
+      {
+        ...FAILED,
+        kind: "tenant-appointment-confirmation",
+        createdAt: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000),
+        updatedAt: new Date(),
+      },
+    ];
+    const result = await retryFailedNotification({
+      id: "row-1",
+      actorUserId: "u-1",
+    });
+
+    assert.match(result.ok ? result.message : "", /may no longer recognise/i);
   });
 
   test("no message anywhere claims exactly-once delivery", async () => {
     for (const kind of ["tenant-scheduling-invitation", "tenant-appointment-confirmation", "invoice-issue"]) {
-      rows = [{ ...FAILED, kind, updatedAt: new Date() }];
+      rows = [{ ...FAILED, kind, createdAt: new Date() }];
       const result = await retryFailedNotification({ id: "row-1", actorUserId: "u-1" });
       const message = result.ok ? result.message : "";
       assert.equal(/exactly once|guaranteed|never duplicate/i.test(message), false, kind);

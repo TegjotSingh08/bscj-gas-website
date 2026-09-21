@@ -1714,16 +1714,17 @@ export type RetryOutcome =
  * nothing further; the same key with *different* content is refused; and once
  * the window passes the key is forgotten entirely. So:
  *
- * - **A message whose content has not changed, retried within 24 hours** — the
- *   provider recognises it. If it had already accepted the message, a second
- *   copy is not produced. This is the case the button is really for.
- * - **The same message retried after 24 hours** — the provider no longer
- *   remembers it. If the earlier attempt had in fact been accepted, the retry
- *   produces a **second copy**.
+ * - **Queued less than 24 hours ago** — whenever the provider first saw the
+ *   key, it still remembers it, so a second copy is *unlikely*. Not impossible:
+ *   the provider ignores a repeat only when the payload matches too, and
+ *   nothing stored here records whether the content has changed since.
+ * - **Queued longer ago** — the first attempt might have fallen outside the
+ *   window, so the provider may no longer recognise it and a second copy is
+ *   possible.
  * - **An invitation or a password reset** — each attempt mints a new link, so
- *   the retry is a genuinely different message and is keyed differently. If an
- *   earlier attempt did reach somebody they will now have two, and only the
- *   newer link works.
+ *   the retry is a genuinely different message, keyed differently, and no
+ *   de-duplication applies at all. Earlier links are deliberately left working;
+ *   see `retryOutlook` for what the recipient actually finds.
  *
  * None of that is exactly-once delivery and none of it is described as such.
  * `retryOutlook` returns which case applies so the screen can say the true one
@@ -1752,8 +1753,14 @@ export async function retryFailedNotification(input: {
         state: outboundEmails.state,
         lastError: outboundEmails.lastError,
         attempts: outboundEmails.attempts,
-        // How long ago the last attempt was, for the duplication outlook.
-        updatedAt: outboundEmails.updatedAt,
+        /*
+          When the intent was recorded — the only sound lower bound on when the
+          provider could first have seen this key. `updatedAt` is not: it moves
+          on every claim and on the retry itself, so the more a message had been
+          retried the fresher it looked, and the more confident the sentence
+          became.
+        */
+        createdAt: outboundEmails.createdAt,
       })
       .from(outboundEmails)
       .where(eq(outboundEmails.id, input.id))
@@ -1810,7 +1817,7 @@ export async function retryFailedNotification(input: {
     return {
       ok: true,
       message: `Back in the queue; it will be attempted on the next scheduled run. ${retryOutlook(
-        { kind: before.kind, updatedAt: before.updatedAt, now: new Date() },
+        { kind: before.kind, createdAt: before.createdAt, now: new Date() },
       )}`,
     };
   } catch {
