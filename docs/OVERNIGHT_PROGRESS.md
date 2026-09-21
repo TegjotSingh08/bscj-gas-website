@@ -45,10 +45,10 @@ is never described as one.
 
 | # | Priority | Existing implementation | Actual gap | Acceptance | State |
 | --- | --- | --- | --- | --- | --- |
-| 1a | Import policy truth | `import/profile.ts`, `plan.ts`, `rows.ts` | `landlordMatch: reject_row` is labelled "Hold the row for review — nothing is written" but is **never consulted**; since 0008 made contact nullable, such rows are silently created. | The chosen policy is the behaviour. | not started |
-| 1b | Policy explanation | `PROFILE_CHOICES`, `ImportWizard` | "Never creates a landlord" is false for a policy that records a contactless one; nothing says what is still owed later. | Each option states what is recorded and what later refuses. | not started |
-| 1c | Profile compatibility | `parseProfile`, `profileDigest` | A third policy value must not misread saved v2 profiles. | Saved profiles keep working; digest still invalidates stale previews. | not started |
-| 1d | End-to-end exercise | `previewImportAction` / `confirmImportAction` | Never run as one path outside the deployed app. | A harness drives the real actions over fictional CSVs. | not started |
+| 1a | Import policy truth | `import/profile.ts`, `plan.ts`, `rows.ts` | `landlordMatch: reject_row` is labelled "Hold the row for review — nothing is written" but is **never consulted**; since 0008 made contact nullable, such rows are silently created. | The chosen policy is the behaviour. | **done** |
+| 1b | Policy explanation | `PROFILE_CHOICES`, `ImportWizard` | "Never creates a landlord" is false for a policy that records a contactless one; nothing says what is still owed later. | Each option states what is recorded and what later refuses. | **done** |
+| 1c | Profile compatibility | `parseProfile`, `profileDigest` | A third policy value must not misread saved v2 profiles. | Saved profiles keep working; digest still invalidates stale previews. | **done** |
+| 1d | End-to-end exercise | `previewImportAction` / `confirmImportAction` | Never run as one path outside the deployed app. | A harness drives the real actions over fictional CSVs. | **done** |
 | 2 | Work journey | jobs, scheduling, documents, invoices | Not exercised as one path; defects unknown. | Service-level pass with defects fixed. | not started |
 | 3 | Certificate → renewal | `releaseCertificate`, `setCompliancePosition` | `releaseCertificate` **never writes `compliance_cycle`**; `setCompliancePosition` hardcodes `cp12` and supersedes every product. | Release updates the right service's position, preserving history. | not started |
 | 3b | Due-work view | admin list patterns | No overdue/due-soon/unknown view. | Admin can see and act without developer help. | not started |
@@ -60,7 +60,10 @@ is never described as one.
 
 ## Commits
 
-None yet this session. Starting HEAD `d4d3c82`.
+| HEAD | Subject |
+| --- | --- |
+| `d4d3c82` | *(session start)* |
+| `5725d2e` | Make the import's hold policy actually hold |
 
 Working tree: clean.
 
@@ -71,6 +74,9 @@ Working tree: clean.
 | When | Command | Result |
 | --- | --- | --- |
 | start | `git status` / `git rev-list` | HEAD `d4d3c82`, clean, 0 ahead 0 behind |
+| P1 | `npm test` | 2165 pass, 0 fail (was 2125) |
+| P1 | `npx tsc --noEmit` | clean |
+| P1 | `walkthrough.test.ts` | 33 scenarios through the real server actions, all pass |
 
 ---
 
@@ -82,9 +88,14 @@ None.
 
 ## Next action after interruption
 
-Begin checklist item **1a**: make `landlordMatch` a policy the importer
-actually consults, in `src/lib/portfolio/import/plan.ts` and
-`src/lib/portfolio/import/profile.ts`.
+Begin **Priority 3** (checklist item 3): `releaseCertificate` in
+`src/lib/documents/certificates.ts` writes a `certificates` row but never
+touches `compliance_cycle`, so a released certificate does not move the
+property's due date. `setCompliancePosition` in `src/lib/portfolio/mutations.ts`
+also hardcodes `productId: "cp12"` and supersedes every product's active cycle.
+
+Priority 2 is folded into the same work: the journey is exercised at service
+level as each slice lands, since no disposable database exists.
 
 ---
 
