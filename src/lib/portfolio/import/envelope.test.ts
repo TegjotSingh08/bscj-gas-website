@@ -72,8 +72,16 @@ const rows: PlannedRow[] = [
   },
 ];
 
-const build = (organisationId = ACME, now?: Date) =>
-  envelopeFor({ organisationId, filename: "portfolio.csv", rows, now });
+const DIGEST = "v2|landlordName=Owner|unknown|auto|uk|reject_row";
+
+const build = (organisationId = ACME, now?: Date, digest = DIGEST) =>
+  envelopeFor({
+    organisationId,
+    filename: "portfolio.csv",
+    rows,
+    profileDigest: digest,
+    now,
+  });
 
 describe("only the rows that could write are carried", () => {
   test("errors, duplicates and unchanged rows are dropped", () => {
@@ -239,5 +247,60 @@ describe("failing closed without a secret", () => {
     } finally {
       process.env.AUTH_SECRET = secret;
     }
+  });
+});
+
+describe("a changed import profile invalidates an outstanding preview", () => {
+  /*
+    A preview is a promise about what confirming will write, computed under
+    BSCJ's reading of this agency's export at that moment. If that reading is
+    corrected in between — the second name column is a caretaker, not a tenant
+    — confirming the old preview would write records the agent reviewed under a
+    reading nobody holds any more.
+  */
+
+  test("the digest travels inside the signature", () => {
+    const envelope = build();
+    assert.equal(envelope.profileDigest, DIGEST);
+    const opened = openEnvelope(sealEnvelope(envelope), ACME, undefined, DIGEST);
+    assert.ok(opened);
+    assert.equal(opened.profileDigest, DIGEST);
+  });
+
+  test("an unchanged profile still opens", () => {
+    assert.ok(
+      openEnvelope(sealEnvelope(build()), ACME, new Date(), DIGEST),
+    );
+  });
+
+  test("a changed profile is REFUSED, not merged", () => {
+    const sealed = sealEnvelope(build());
+    const changed = "v2|landlordName=Owner|tenant|auto|uk|reject_row";
+    assert.equal(openEnvelope(sealed, ACME, new Date(), changed), null);
+  });
+
+  test("the browser cannot edit the digest to make it agree", () => {
+    const sealed = sealEnvelope(build());
+    const [payload, signature] = sealed.split(".");
+    const decoded = JSON.parse(
+      Buffer.from(payload, "base64url").toString("utf8"),
+    ) as ImportEnvelope;
+    decoded.profileDigest = "v2|whatever|tenant|auto|uk|reject_row";
+    const forged =
+      Buffer.from(JSON.stringify(decoded), "utf8").toString("base64url") +
+      "." +
+      signature;
+    assert.equal(
+      openEnvelope(forged, ACME, new Date(), decoded.profileDigest),
+      null,
+    );
+  });
+
+  test("omitting the current digest does not weaken the other checks", () => {
+    // Callers that genuinely have no profile to compare still get the
+    // organisation, signature and expiry checks.
+    const sealed = sealEnvelope(build(ACME));
+    assert.ok(openEnvelope(sealed, ACME));
+    assert.equal(openEnvelope(sealed, RIVAL), null);
   });
 });

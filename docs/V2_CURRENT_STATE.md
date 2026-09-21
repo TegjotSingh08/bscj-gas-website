@@ -741,6 +741,59 @@ usage**.
 
 ---
 
+## Agency import profiles — 21 September 2026
+
+Onboarding effort, not a new feature: an agency exports from its own system and
+the template's headings are not what comes out. **BSCJ now records how each
+agency's spreadsheet is read, once, from `/admin/organisations/<id>`**; the
+agency uploads against it. One importer, no per-agency code — adding an agency
+is data, and a renamed heading is an edit on a screen.
+
+Stored in `business_setting` under `portfolio-import-profile:<organisationId>`.
+The organisation is in the key, so there is no shared row on which a query
+could forget a `WHERE`. **No new table, no migration.**
+
+A profile decides the four things a heading cannot: which column is which, what
+a second person-name column means, how to read addresses and dates, and what to
+do when landlord contact details are missing. Every one defaults to the
+cautious reading. In particular `occupierRole` defaults to **no tenancy** — a
+tenancy asserts somebody lives there and is who a scheduling link is sent to,
+so a column nobody has confirmed is kept as an access note instead.
+
+Combined addresses are split, preserving flat identifiers: "Flat 2, 14 Example
+Street" keeps `Flat 2, 14`, because "Flat 2" alone is not unique in a postcode
+and "14" alone is the whole building. A unit with no building number is refused
+and shown to a person — `house_or_name` plus `postcode` is the key the
+duplicate check and the unique index both use, so a wrong split merges or
+splits real properties.
+
+**A changed profile invalidates an outstanding preview.** `profileDigest`
+travels inside the signed envelope and is compared at confirmation; a change is
+a refusal, not a merge. Existing records are never rewritten — a profile
+applies to future imports only. Validation, agency isolation, duplicate and
+conflict protection, repeat-import safety and preview-before-confirmation are
+all unchanged, and importing still sends nothing, creates no job and charges
+nobody.
+
+Full rationale and the findings so far: `docs/IMPORT_PROFILES.md`.
+
+**Open blocker recorded there, not decided:** `customer.email`, `customer.phone`
+and `property.customer_id` are all `NOT NULL`, so a property cannot be recorded
+without a landlord carrying both an email and a phone. An export with no
+landlord contact therefore imports nothing. Closing it needs migration `0008`
+plus requiring the detail at the operation that needs it. Not done — it is a
+schema change and a business decision.
+
+### Dashboard wording corrected
+
+The portal dashboard still advertised Jobs and Invoices as "coming soon" and
+said portal booking was "next", long after all three shipped. An agent reading
+it had no way to know the pages existed, which is much the same as not having
+built them. Jobs, Invoices and Landlords are now links; Compliance and Support,
+which genuinely have no page, still say coming soon.
+
+---
+
 ## Outstanding before launch — the complete list
 
 Everything below is inherited from earlier phases as well as this one. It is the

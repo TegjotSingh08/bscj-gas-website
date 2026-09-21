@@ -5,12 +5,15 @@ import { notFound } from "next/navigation";
 import { requireAdmin } from "@/lib/auth/session";
 import { getOrganisationForAdmin } from "@/lib/organisations/admin";
 import {
+  clearImportProfileAction,
   resendInvitationAction,
   revokeInvitationAction,
   setOrganisationActiveAction,
   setUserActiveAction,
 } from "../actions";
 import { NewOwnerForm } from "./NewOwnerForm";
+import { ImportProfileForm } from "./ImportProfileForm";
+import { readProfile } from "@/lib/portfolio/import/profile-store";
 
 export const metadata: Metadata = {
   title: "Agency",
@@ -53,6 +56,7 @@ export default async function AdminOrganisationPage({
   if (!found) notFound();
 
   const { organisation, users, jobCount } = found;
+  const { profile, configured } = await readProfile(organisation.id);
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-10">
@@ -228,6 +232,35 @@ export default async function AdminOrganisationPage({
           </h3>
           <NewOwnerForm organisationId={organisation.id} />
         </div>
+      </section>
+
+      <section className="mt-4 rounded-2xl border-2 border-navy-200 bg-white p-5">
+        <div className="flex flex-wrap items-baseline justify-between gap-3">
+          <h2 className="text-sm font-extrabold text-navy-900">
+            How their spreadsheet is read
+          </h2>
+          {configured && (
+            <form action={clearImportProfileAction}>
+              <input
+                type="hidden"
+                name="organisationId"
+                value={organisation.id}
+              />
+              <button
+                type="submit"
+                className="rounded-lg border-2 border-navy-200 px-3 py-1.5 text-xs font-bold text-navy-900 hover:border-navy-600"
+              >
+                Reset to the standard template
+              </button>
+            </form>
+          )}
+        </div>
+
+        <ImportProfileForm
+          organisationId={organisation.id}
+          profile={profile}
+          configured={configured}
+        />
       </section>
     </main>
   );

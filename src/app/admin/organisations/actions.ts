@@ -16,6 +16,8 @@ import {
   type FieldErrors,
 } from "@/lib/organisations/validation";
 import { recordAudit } from "@/lib/audit/record";
+import { parseProfileForm } from "@/lib/portfolio/import/profile";
+import { clearProfile, writeProfile } from "@/lib/portfolio/import/profile-store";
 import { inviteUser } from "@/lib/auth/onboarding";
 import { revokeCredentials } from "@/lib/auth/credentials";
 
@@ -227,6 +229,84 @@ export async function setUserActiveAction(form: FormData): Promise<void> {
       subjectType: "app_user",
       subjectId: userId,
       detail: { organisationId },
+    });
+  }
+
+  revalidatePath(`/admin/organisations/${organisationId}`);
+}
+
+/**
+ * Records how this agency's spreadsheet is read.
+ *
+ * Administrator-only, like everything else on this screen: what a column means
+ * is BSCJ's decision, taken once after looking at the export. The agency
+ * uploads against it and cannot change it.
+ *
+ * **It applies to future imports only.** Nothing already written is touched,
+ * and a preview taken under the previous profile is refused at confirmation
+ * rather than merged — see `openEnvelope`. That is why saving always moves
+ * `updatedAt`.
+ */
+export async function saveImportProfileAction(
+  _previous: ActionState,
+  form: FormData,
+): Promise<ActionState> {
+  const session = await requireAdmin();
+  requireCapability(session, "settings:write");
+
+  const organisationId = String(form.get("organisationId") ?? "");
+
+  const parsed = parseProfileForm(form);
+  if (!parsed.ok) return { errors: parsed.errors };
+
+  const saved = await writeProfile({
+    organisationId,
+    profile: parsed.value,
+    actorUserId: session.user.id,
+  });
+
+  if (!saved.ok) return { message: saved.reason };
+
+  await recordAudit({
+    actorUserId: session.user.id,
+    kind: "organisation.import_profile.saved",
+    subjectType: "agent_organisation",
+    subjectId: organisationId,
+    /*
+      The settings, which are business configuration, and never the agency's
+      column headings — those can carry a customer's own wording and there is
+      no operational question that needs them in the security log.
+    */
+    detail: {
+      occupierRole: parsed.value.occupierRole,
+      addressMode: parsed.value.addressMode,
+      dateOrder: parsed.value.dateOrder,
+      landlordMatch: parsed.value.landlordMatch,
+      mappedColumns: Object.keys(parsed.value.columns).length,
+    },
+  });
+
+  revalidatePath(`/admin/organisations/${organisationId}`);
+  return {
+    message:
+      "Import profile saved. It applies to their next upload; anything already imported is untouched, and any preview they have open will ask them to upload again.",
+  };
+}
+
+/** Forgets the profile, so the agency's imports fall back to the template. */
+export async function clearImportProfileAction(form: FormData): Promise<void> {
+  const session = await requireAdmin();
+  requireCapability(session, "settings:write");
+
+  const organisationId = String(form.get("organisationId") ?? "");
+  const cleared = await clearProfile(organisationId);
+
+  if (cleared) {
+    await recordAudit({
+      actorUserId: session.user.id,
+      kind: "organisation.import_profile.cleared",
+      subjectType: "agent_organisation",
+      subjectId: organisationId,
     });
   }
 

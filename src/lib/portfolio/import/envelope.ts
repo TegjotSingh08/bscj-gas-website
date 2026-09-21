@@ -92,6 +92,17 @@ export type ImportEnvelope = {
   filename: string;
   /** How many rows the agent saw in total, including ones that write nothing. */
   reviewed: number;
+  /**
+   * The import profile this plan was computed under.
+   *
+   * A preview is a promise about what confirming will write, made under BSCJ's
+   * reading of this agency's export at that moment. If that reading is
+   * corrected in between — the second name column is a caretaker, not a tenant
+   * — confirming the old preview would write records the agent reviewed under
+   * a reading nobody holds any more. Compared at confirmation; a change is a
+   * refusal, not a merge.
+   */
+  profileDigest: string;
   writes: PlannedWrite[];
 };
 
@@ -107,6 +118,7 @@ export function envelopeFor(input: {
   organisationId: string;
   filename: string;
   rows: PlannedRow[];
+  profileDigest: string;
   now?: Date;
 }): ImportEnvelope {
   const writes: PlannedWrite[] = [];
@@ -133,6 +145,7 @@ export function envelopeFor(input: {
     issuedAt: (input.now ?? new Date()).getTime(),
     filename: input.filename,
     reviewed: input.rows.length,
+    profileDigest: input.profileDigest,
     writes,
   };
 }
@@ -164,6 +177,8 @@ export function openEnvelope(
   sealed: string | undefined,
   organisationId: string,
   now = new Date(),
+  /** The profile as it is **now**. A change since the preview is a refusal. */
+  currentProfileDigest?: string,
 ): ImportEnvelope | null {
   if (!sealed) return null;
 
@@ -202,6 +217,19 @@ export function openEnvelope(
   const age = now.getTime() - envelope.issuedAt;
   if (!Number.isFinite(age) || age < 0) return null;
   if (age > ENVELOPE_MAX_AGE_SECONDS * 1000) return null;
+
+  /*
+    The profile must still be the one the preview was computed under. Refusing
+    is the only safe answer: the alternative is writing records under a reading
+    of the spreadsheet that BSCJ has since corrected, which the agent never saw
+    and nobody now holds.
+  */
+  if (
+    currentProfileDigest !== undefined &&
+    envelope.profileDigest !== currentProfileDigest
+  ) {
+    return null;
+  }
 
   return envelope;
 }

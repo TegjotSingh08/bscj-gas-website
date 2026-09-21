@@ -10,6 +10,7 @@ import {
   type PreviewState,
 } from "./actions";
 import type { PlannedRow, RowAction } from "@/lib/portfolio/import/plan";
+import { PROFILE_CHOICES } from "@/lib/portfolio/import/profile";
 
 /**
  * Upload, review, confirm.
@@ -80,11 +81,35 @@ export function ImportWizard() {
 
           {preview.missingColumns && preview.missingColumns.length > 0 && (
             <p className="mb-4 rounded-xl border-2 border-navy-200 bg-navy-50 px-4 py-3 text-sm text-navy-900">
-              Missing columns:{" "}
+              Still needed:{" "}
               <span className="font-mono text-xs font-bold">
                 {preview.missingColumns.join(", ")}
               </span>
             </p>
+          )}
+
+          {preview.duplicatedColumns && preview.duplicatedColumns.length > 0 && (
+            <p className="mb-4 rounded-xl border-2 border-flame-500 bg-flame-400/10 px-4 py-3 text-sm text-navy-900">
+              Claimed twice:{" "}
+              <span className="font-mono text-xs font-bold">
+                {preview.duplicatedColumns.join(", ")}
+              </span>
+              . Two columns cannot mean the same thing — pick one.
+            </p>
+          )}
+
+          {/*
+            The mapping panel appears once a file has been read, whether it
+            succeeded or not — a failed read is exactly when an agent needs to
+            say what their headings mean, and re-uploading the same file with
+            the choices attached is one click.
+          */}
+          {preview.resolved && preview.resolved.length > 0 && (
+            <MappingPanel
+              resolved={preview.resolved}
+              configured={preview.profileConfigured === true}
+              profile={preview.profile}
+            />
           )}
 
           <input
@@ -122,6 +147,122 @@ export function ImportWizard() {
         />
       )}
     </>
+  );
+}
+
+const VIA_LABEL: Record<string, string> = {
+  template: "standard heading",
+  saved: "your agency's profile",
+  chosen: "chosen for this upload",
+  unmapped: "not used",
+};
+
+function choiceLabel<T extends string>(
+  choices: readonly { value: T; label: string }[],
+  value: T | undefined,
+): string {
+  return choices.find((choice) => choice.value === value)?.label ?? String(value);
+}
+
+/**
+ * How this file was read, shown before anything is written.
+ *
+ * **Read-only.** What a column means is BSCJ's decision, taken once after
+ * looking at the agency's spreadsheet and recorded as a profile, so every
+ * upload is read the same way and an agent cannot change it mid-import — by
+ * accident or otherwise. What the agent gets is the clear preview: every
+ * heading, what it was taken to be, and the four readings that a heading alone
+ * cannot express.
+ */
+function MappingPanel({
+  resolved,
+  configured,
+  profile,
+}: {
+  resolved: NonNullable<PreviewState["resolved"]>;
+  configured: boolean;
+  profile: PreviewState["profile"];
+}) {
+  const used = resolved.filter((column) => column.key);
+  const ignored = resolved.filter((column) => !column.key);
+
+  return (
+    <details className="mb-4 rounded-xl border-2 border-navy-200 bg-white p-4" open>
+      <summary className="cursor-pointer text-sm font-bold text-navy-900">
+        How we read your file ({used.length} of {resolved.length} columns used)
+      </summary>
+
+      <p className="mt-2 text-xs text-navy-600">
+        {configured
+          ? "BSCJ has set up how your spreadsheet is read. If any of this is wrong, tell us and we will change it — do not edit your file."
+          : "Read using the standard headings, because no profile has been set up for your agency yet. If your export uses different wording, ask BSCJ to set one up."}
+      </p>
+
+      <ul className="mt-3 space-y-1 text-sm">
+        {used.map((column) => (
+          <li
+            key={`${column.header}-${column.index}`}
+            className="sm:grid sm:grid-cols-2 sm:gap-3"
+          >
+            <span className="font-mono text-xs font-bold text-navy-900">
+              {column.header || <em className="font-sans">(no heading)</em>}
+            </span>
+            <span className="text-navy-700">
+              {column.key}{" "}
+              <span className="text-xs text-navy-600">
+                ({VIA_LABEL[column.via] ?? column.via})
+              </span>
+            </span>
+          </li>
+        ))}
+      </ul>
+
+      {ignored.length > 0 && (
+        <p className="mt-3 text-xs text-navy-600">
+          Not used:{" "}
+          <span className="font-mono font-bold">
+            {ignored.map((column) => column.header).join(", ")}
+          </span>
+        </p>
+      )}
+
+      {profile && (
+        <dl className="mt-4 grid gap-2 border-t-2 border-navy-100 pt-3 text-xs sm:grid-cols-2">
+          <div>
+            <dt className="font-bold uppercase tracking-wide text-navy-600">
+              Second name column
+            </dt>
+            <dd className="text-navy-900">
+              {choiceLabel(PROFILE_CHOICES.occupierRole, profile.occupierRole)}
+            </dd>
+          </div>
+          <div>
+            <dt className="font-bold uppercase tracking-wide text-navy-600">
+              Dates
+            </dt>
+            <dd className="text-navy-900">
+              {choiceLabel(PROFILE_CHOICES.dateOrder, profile.dateOrder)}
+            </dd>
+          </div>
+          <div>
+            <dt className="font-bold uppercase tracking-wide text-navy-600">
+              Addresses
+            </dt>
+            <dd className="text-navy-900">
+              {choiceLabel(PROFILE_CHOICES.addressMode, profile.addressMode)}
+            </dd>
+          </div>
+          <div>
+            <dt className="font-bold uppercase tracking-wide text-navy-600">
+              Missing landlord contact
+            </dt>
+            <dd className="text-navy-900">
+              {choiceLabel(PROFILE_CHOICES.landlordMatch, profile.landlordMatch)}
+            </dd>
+          </div>
+        </dl>
+      )}
+    </details>
   );
 }
 

@@ -15,6 +15,16 @@
  */
 
 export type ColumnKey =
+  /**
+   * A whole address in one cell, the shape most agency exports carry.
+   *
+   * Not in the template — the template keeps the separate columns, which are
+   * unambiguous — but mappable, so an export that has one column instead of
+   * four needs no retyping. Split by `address-split.ts`, which refuses rather
+   * than guesses. The separate columns win where both are present: explicit
+   * beats derived.
+   */
+  | "fullAddress"
   | "houseOrName"
   | "street"
   | "town"
@@ -33,6 +43,8 @@ export type ColumnKey =
 
 export type ColumnSpec = {
   key: ColumnKey;
+  /** Whether the downloadable template carries it. */
+  inTemplate?: boolean;
   /** The header as it appears in the template. */
   header: string;
   required: boolean;
@@ -49,6 +61,14 @@ export type ColumnSpec = {
  * then who owns it, then who lives there, then what it already holds.
  */
 export const COLUMNS: readonly ColumnSpec[] = [
+  {
+    key: "fullAddress",
+    header: "full_address",
+    required: false,
+    inTemplate: false,
+    help: "The whole address in one cell, if your export has it that way — e.g. \"Flat 2, 14 Example Street, Wolverhampton, WV1 1AA\". Map this instead of the four columns below. Anything we cannot split confidently is shown for you to check.",
+    example: "Flat 2, 14 Example Street, Wolverhampton, WV1 1AA",
+  },
   {
     key: "houseOrName",
     header: "property_number_or_name",
@@ -156,7 +176,12 @@ export const COLUMNS: readonly ColumnSpec[] = [
   },
 ] as const;
 
-export const HEADERS: readonly string[] = COLUMNS.map((c) => c.header);
+/** The columns the downloadable template carries. */
+export const TEMPLATE_COLUMNS: readonly ColumnSpec[] = COLUMNS.filter(
+  (column) => column.inTemplate !== false,
+);
+
+export const HEADERS: readonly string[] = TEMPLATE_COLUMNS.map((c) => c.header);
 
 export const REQUIRED_COLUMNS: readonly ColumnSpec[] = COLUMNS.filter(
   (c) => c.required,
@@ -192,6 +217,9 @@ const BY_HEADER = new Map<string, ColumnSpec>(
  * column the tenth time, and nothing downstream would notice.
  */
 const ALIASES: Record<string, ColumnKey> = {
+  address: "fullAddress",
+  full_address: "fullAddress",
+  property_address: "fullAddress",
   address_1: "houseOrName",
   address1: "houseOrName",
   house: "houseOrName",
@@ -248,8 +276,8 @@ export function columnFor(header: string): ColumnSpec | null {
 export function templateCsv(): string {
   const quote = (value: string) => `"${value.replace(/"/g, '""')}"`;
   return [
-    COLUMNS.map((c) => quote(c.header)).join(","),
-    COLUMNS.map((c) => quote(c.example)).join(","),
+    TEMPLATE_COLUMNS.map((c) => quote(c.header)).join(","),
+    TEMPLATE_COLUMNS.map((c) => quote(c.example)).join(","),
   ].join("\r\n") + "\r\n";
 }
 

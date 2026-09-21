@@ -5,7 +5,10 @@ import { revalidatePath } from "next/cache";
 import { requireAgent, requireCapability } from "@/lib/auth/session";
 import { recordAudit } from "@/lib/audit/record";
 import { rateLimit } from "@/lib/booking/rate-limit";
-import { columnFor, COLUMNS, type ColumnKey } from "@/lib/portfolio/import/columns";
+import { COLUMNS, type ColumnKey } from "@/lib/portfolio/import/columns";
+import { resolveHeaders, type ResolvedColumn } from "@/lib/portfolio/import/mapping";
+import { readProfile } from "@/lib/portfolio/import/profile-store";
+import { profileDigest, type ImportProfile } from "@/lib/portfolio/import/profile";
 import {
   describeCsvProblem,
   LIMITS,
@@ -49,6 +52,14 @@ export type PreviewState = {
   error?: string;
   /** Column headers that could not be matched, reported rather than ignored. */
   unknownColumns?: string[];
+  /** How every heading in the file was understood, for the mapping panel. */
+  resolved?: ResolvedColumn[];
+  /** True when BSCJ has configured a profile for this agency. */
+  profileConfigured?: boolean;
+  /** The profile in force, so the preview can say how the file was read. */
+  profile?: ImportProfile;
+  /** Keys claimed by two headings — a fault in the file or the mapping. */
+  duplicatedColumns?: string[];
   /** Required columns the file does not have at all. */
   missingColumns?: string[];
   plan?: ImportPlan;
@@ -138,28 +149,71 @@ export async function previewImportAction(
     A column quietly ignored is how a hundred tenant email addresses go missing
     without anybody noticing until the invitations do not arrive.
   */
-  const mapping: (ColumnKey | null)[] = [];
-  const unknownColumns: string[] = [];
-  for (const cell of header) {
-    const column = columnFor(cell);
-    mapping.push(column?.key ?? null);
-    if (!column && cell.trim()) unknownColumns.push(cell.trim().slice(0, 60));
+  /*
+    What each heading means, in precedence order: what the agent chose on this
+    upload, then this agency's saved mapping, then the template and its
+    aliases. The organisation comes from the session — a file cannot name whose
+    mapping to load.
+  */
+  const { profile, configured } = await readProfile(session.organisationId);
+  /*
+    The agency uploads; it does not decide what its columns mean. BSCJ reviews
+    the spreadsheet once and records the reading, so every upload afterwards is
+    the same reading — and an agent cannot change, by accident or otherwise,
+    what a column is taken to be. The profile is shown in full on the preview.
+  */
+  const resolution = resolveHeaders({
+    headers: header,
+    saved: profile.columns,
+  });
+
+  const present = new Set(
+    Object.keys(resolution.byKey) as ColumnKey[],
+  );
+
+  /*
+    A combined address satisfies the four separate address columns. An export
+    with one address column is the common shape and must not be refused for
+    lacking headings it was never going to have — the split is checked per row,
+    where a failure names the actual cell.
+  */
+  if (present.has("fullAddress")) {
+    for (const key of ["houseOrName", "street", "postcode"] as ColumnKey[]) {
+      present.add(key);
+    }
   }
 
-  const present = new Set(mapping.filter(Boolean) as ColumnKey[]);
   const missingColumns = COLUMNS.filter(
     (column) => column.required && !present.has(column.key),
   ).map((column) => column.header);
 
-  if (missingColumns.length > 0) {
+  const unknownColumns = resolution.unmapped.map((header) =>
+    header.slice(0, 60),
+  );
+
+  if (missingColumns.length > 0 || resolution.duplicated.length > 0) {
     return {
       error:
-        "That file is missing columns the import needs. Download the template and use its headings.",
-      missingColumns,
+        resolution.duplicated.length > 0
+          ? "Two columns in that file mean the same thing. Map one of them to something else, or remove it."
+          : "That file is missing information the import needs. Map the columns below, or download the template and use its headings.",
+      missingColumns: missingColumns.length ? missingColumns : undefined,
+      duplicatedColumns: resolution.duplicated.length
+        ? resolution.duplicated.map(
+            (key) => COLUMNS.find((column) => column.key === key)?.header ?? key,
+          )
+        : undefined,
       unknownColumns: unknownColumns.length ? unknownColumns : undefined,
+      resolved: resolution.columns,
+      profileConfigured: configured,
+      profile,
       filename,
     };
   }
+
+  const mapping: (ColumnKey | null)[] = resolution.columns.map(
+    (column) => column.key,
+  );
 
   const valued = rows.map((values, index) => {
     const record: RowValues = {};
@@ -194,12 +248,19 @@ export async function previewImportAction(
     rows: valued,
     existing,
     existingLandlordEmails: new Set(landlords ? [...landlords.keys()] : []),
+    profile,
   });
 
   const envelope = envelopeFor({
     organisationId: session.organisationId,
     filename,
     rows: plan.rows,
+    /*
+      The reading this plan was computed under. Compared at confirmation, so a
+      profile BSCJ corrects in between invalidates the preview rather than
+      silently writing under a reading nobody holds any more.
+    */
+    profileDigest: profileDigest(profile),
   });
 
   await recordAudit({
@@ -216,8 +277,12 @@ export async function previewImportAction(
     sealed: sealEnvelope(envelope),
     filename,
     unknownColumns: unknownColumns.length ? unknownColumns : undefined,
+    resolved: resolution.columns,
+    profileConfigured: configured,
+    profile,
   };
 }
+
 
 /**
  * Writes the reviewed plan.
@@ -239,11 +304,23 @@ export async function confirmImportAction(
     ? String(form.get("plan"))
     : undefined;
 
-  const envelope = openEnvelope(sealed, session.organisationId);
+  /*
+    The profile as it is **now**. `openEnvelope` refuses a plan computed under
+    a different one, so a correction BSCJ makes between preview and confirm
+    invalidates the review instead of writing under a superseded reading.
+  */
+  const { profile } = await readProfile(session.organisationId);
+
+  const envelope = openEnvelope(
+    sealed,
+    session.organisationId,
+    new Date(),
+    profileDigest(profile),
+  );
   if (!envelope) {
     return {
       error:
-        "That review is no longer valid — it may have expired. Upload the file again and check the preview.",
+        "That review is no longer valid. It may have expired, or the import settings for your agency may have changed. Upload the file again and check the preview.",
     };
   }
 

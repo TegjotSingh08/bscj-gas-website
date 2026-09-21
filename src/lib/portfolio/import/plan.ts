@@ -31,6 +31,7 @@
 import { formatParsedDate } from "./dates";
 import type { ExistingProperty } from "./lookup";
 import { parseImportRow, type ImportRecord, type RowError, type RowValues } from "./rows";
+import { DEFAULT_PROFILE, type ImportProfile } from "./profile";
 
 export type RowAction =
   | "create"
@@ -336,7 +337,10 @@ export function buildImportPlan(input: {
   existing: Map<string, ExistingProperty>;
   /** Landlord emails the agency already holds, lower-cased. */
   existingLandlordEmails: Set<string>;
+  /** BSCJ's reading of this agency's export. Defaults to the cautious one. */
+  profile?: ImportProfile;
 }): ImportPlan {
+  const profile = input.profile ?? DEFAULT_PROFILE;
   const counts = { ...EMPTY_COUNTS };
   const rows: PlannedRow[] = [];
   /** First occurrence of each address key in this file. */
@@ -344,7 +348,7 @@ export function buildImportPlan(input: {
 
   for (const { line, values } of input.rows) {
     const address = addressOf(values);
-    const parsed = parseImportRow(values);
+    const parsed = parseImportRow(values, profile);
 
     if (!parsed.ok) {
       counts.error += 1;

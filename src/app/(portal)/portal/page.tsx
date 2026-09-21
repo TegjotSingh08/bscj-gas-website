@@ -30,22 +30,39 @@ export const dynamic = "force-dynamic";
  */
 
 /** The surfaces this portal will grow. Named now so the shape is visible. */
+/**
+ * The rest of the portal.
+ *
+ * `href` is what decides whether a card is a link or a promise. Jobs and
+ * Invoices were still labelled "coming soon" long after both shipped — an
+ * agent reading this dashboard had no way to know the pages existed, which is
+ * the same as not having built them.
+ */
 const SECTIONS = [
   {
     title: "Jobs",
     description: "Work requested, scheduled and completed.",
-  },
-  {
-    title: "Compliance",
-    description: "Certificates, due dates and renewals.",
+    href: "/portal/jobs",
   },
   {
     title: "Invoices",
     description: "What has been billed, and what is outstanding.",
+    href: "/portal/invoices",
+  },
+  {
+    title: "Landlords",
+    description: "The owners behind your properties, and their details.",
+    href: "/portal/landlords",
+  },
+  {
+    title: "Compliance",
+    description: "Certificates, due dates and renewals.",
+    href: null,
   },
   {
     title: "Support",
     description: "Message BSCJ about a job or a property.",
+    href: null,
   },
 ] as const;
 
@@ -83,8 +100,9 @@ export default async function PortalDashboardPage() {
         <h2 className="text-lg font-extrabold text-navy-900">Your portfolio</h2>
         <p className="mt-2 text-sm leading-relaxed text-navy-700">
           Add the properties you look after and we will track their certificate
-          dates. Booking work from the portal is next; until then, call or
-          WhatsApp {business.phoneDisplay} and we will arrange it directly.
+          dates. You can request work on any of them from its own page, or
+          import a whole portfolio from a spreadsheet. Prefer to talk? Call or
+          WhatsApp {business.phoneDisplay}.
         </p>
         <Link
           href="/portal/portfolio"
@@ -95,21 +113,37 @@ export default async function PortalDashboardPage() {
       </div>
 
       <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {SECTIONS.map((section) => (
-          <div
-            key={section.title}
-            className="rounded-2xl border-2 border-navy-200 bg-white p-5"
-            aria-disabled="true"
-          >
-            <h3 className="text-sm font-extrabold text-navy-900">
-              {section.title}
-            </h3>
-            <p className="mt-1 text-sm text-navy-600">{section.description}</p>
-            <p className="mt-3 inline-block rounded-lg bg-navy-50 px-2.5 py-1 text-xs font-bold uppercase tracking-wide text-navy-600">
-              Coming soon
-            </p>
-          </div>
-        ))}
+        {SECTIONS.map((section) =>
+          section.href ? (
+            <Link
+              key={section.title}
+              href={section.href}
+              className="rounded-2xl border-2 border-navy-200 bg-white p-5 hover:border-navy-600"
+            >
+              <h3 className="text-sm font-extrabold text-navy-900">
+                {section.title}
+              </h3>
+              <p className="mt-1 text-sm text-navy-600">{section.description}</p>
+              <p className="mt-3 inline-block text-xs font-bold text-flame-600 underline">
+                Open
+              </p>
+            </Link>
+          ) : (
+            <div
+              key={section.title}
+              className="rounded-2xl border-2 border-navy-200 bg-white p-5"
+              aria-disabled="true"
+            >
+              <h3 className="text-sm font-extrabold text-navy-900">
+                {section.title}
+              </h3>
+              <p className="mt-1 text-sm text-navy-600">{section.description}</p>
+              <p className="mt-3 inline-block rounded-lg bg-navy-50 px-2.5 py-1 text-xs font-bold uppercase tracking-wide text-navy-600">
+                Coming soon
+              </p>
+            </div>
+          ),
+        )}
       </div>
     </main>
     </>
