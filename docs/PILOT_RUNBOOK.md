@@ -41,8 +41,11 @@ to send.
 ### 1.2 What the pilot needs
 
 **Authentication**
-- `DATABASE_URL` — the pilot database. **Migration `0007` must be applied to it**;
-  it is applied to development only today. Check with `npm run db:status`.
+- `DATABASE_URL` — the pilot database. **Every migration on disk must be
+  applied to it.** `0000`–`0007` were applied on 20 September 2026;
+  **`0008_landlord_contact_optional` is outstanding everywhere** and must be
+  applied before the current commit is deployed — see §2E. Check with
+  `BSCJ_PILOT=1 npm run db:status`.
 - `AUTH_SECRET` — signs sessions, account credentials **and** import envelopes.
   All three fail closed without it. A fresh random value for the pilot
   environment; changing it later signs everyone out and invalidates every
@@ -89,8 +92,8 @@ to send.
 Run these in order. Each is a read or a scoped write inside the pilot's own
 fixtures; none touches real customer data.
 
-1. `npm run db:status` — connects, lists migrations, confirms `0007` applied,
-   prints the invoice sequence. Read-only.
+1. `npm run db:status` — connects, lists migrations, confirms every tag on
+   disk is applied, prints the invoice sequence. Read-only.
 2. Sign in at `/admin/login` — proves `DATABASE_URL` + `AUTH_SECRET`.
 3. Open `/book` and load availability — proves Google Calendar **read** and
    Redis.
@@ -104,17 +107,24 @@ fixtures; none touches real customer data.
 
 ## 2. The scheduler
 
-**Vercel Pro is active**, so the outbox drains once a minute:
+**Vercel Pro is active**, and `vercel.json` declares:
 
 ```json
-{ "path": "/api/cron/outbox", "schedule": "* * * * *" }
+{ "path": "/api/cron/outbox", "schedule": "*/15 * * * *" }
 ```
+
+*Corrected 21 September 2026.* This section previously said `* * * * *`, once a
+minute. That expression is within what Pro allows, but it never lets a Neon
+Free compute idle and would exhaust the monthly allowance in about sixteen
+days. **Fifteen minutes is the schedule in the repository and the one in
+force**; the arithmetic behind it is §2B.1, which is where the interval is
+explained rather than merely stated.
 
 Per Vercel's published limits (docs updated 2026-07-15), Pro allows a minimum
 interval of once per minute with per-minute precision. Hobby is once per day
 and **rejects a sub-daily expression at deploy time** rather than running it
-less often — which is why this expression requires Pro and why `npm run
-preflight` states that requirement.
+less often — which is why a sub-daily expression requires Pro at all and why
+`npm run preflight` states that requirement.
 
 ### 2.1 Cron runs against a project's PRODUCTION deployment
 
@@ -212,7 +222,7 @@ pilot is declared ready and then does not send anything.
 | Project `bscj-v2-pilot`, prod branch `v2-compliance-platform` | — | reported |
 | `BSCJ_APP_ORIGIN=https://bscj-v2-pilot.vercel.app`, Production | `lib/config/origin.ts` | **reported** — saved by the owner; not independently verified |
 | Functions London only | — | reported |
-| Neon Free `bscj-v2-pilot`, London, **not migrated** | `DATABASE_URL` / `DATABASE_URL_UNPOOLED` | reported |
+| Neon Free `bscj-v2-pilot`, London, migrated `0000`–`0007` | `DATABASE_URL` / `DATABASE_URL_UNPOOLED` | owner-observed 20 September 2026; **`0008` outstanding**, see §2E |
 | Upstash `bscj-v2-pilot`, London | `UPSTASH_REDIS_REST_URL` / `_TOKEN` → `lib/kv/store.ts` | reported |
 | Blob `bscj-v2-pilot-documents`, private, **Production only** | `BLOB_READ_WRITE_TOKEN` → `lib/storage/documents.ts` | reported; **see below** |
 | `AUTH_SECRET`, `SCHEDULING_TOKEN_SECRET`, Google creds, calendar id — Production only | as named | reported |
@@ -220,7 +230,7 @@ pilot is declared ready and then does not send anything.
 | Resend sending-only key, verified `bscj-solutions.com` | `RESEND_API_KEY` | reported |
 | `BOOKING_EMAIL_FROM=BSCJ Pilot <pilot@bscj-solutions.com>` | `lib/email/send.ts` | reported; **see below** |
 | `BOOKING_EMAIL_REPLY_TO`, `BOOKING_NOTIFICATION_EMAIL` = `admin@…` | `lib/email/send.ts` | reported |
-| `CRON_SECRET` absent | `lib/ops/cron-auth.ts` | reported, and **intended** |
+| `CRON_SECRET` set, Production only | `lib/ops/cron-auth.ts` | **reported, and exercised** — the first tenant invitation was delivered by a scheduled drain (§2D) |
 
 ### Three contract points worth checking against the code
 
@@ -397,6 +407,12 @@ the connection string is wrong.
 
 ### 2A.4 What will be applied
 
+> **This section describes the original bring-up.** A ninth migration,
+> `0008_landlord_contact_optional`, has since been added and is **not applied
+> anywhere**. For an existing pilot database that is the only outstanding one —
+> see §2E. For a database being rebuilt from scratch, all nine apply, and the
+> notes below still hold for the first eight.
+
 All eight outstanding migrations, `0000`–`0007`, in journal order. Every tag
 has both an up and a down file. Across all eight there is exactly **one** data
 statement — the `password_set_at` backfill in `0007` — and it is a no-op on a
@@ -423,13 +439,18 @@ that did nothing. Do not read anything into the silence; use the next step.
 BSCJ_PILOT=1 npm run db:status
 ```
 
-Expect, against the pilot target:
+Expect, against the pilot target — as it was on 20 September 2026, before
+`0008` existed:
 
 - `Migrations on disk : 8` and `Migrations applied : 8`
 - all eight tags `applied`, none `NOT APPLIED` or `DIFFERS FROM DISK`
 - `Tables in public : 24`
 - `Enum types : 22`
 - `Invoice sequence : starts at 1000, next number BSCJ-001000 (none issued yet)`
+
+Today the same command reports `Migrations on disk : 9` and `Migrations
+applied : 8`, with `0008_landlord_contact_optional` listed `NOT APPLIED`. That
+is the expected state until §2E is carried out.
 
 A `DIFFERS FROM DISK` line means a migration file changed after being applied.
 Stop and understand it before anything else.
@@ -536,6 +557,13 @@ Function duration was checked and needs no configuration: Vercel's default is
 
 ### 2B.3 Activating it — exact steps
 
+> **DONE — owner-reported, 21 September 2026.** `CRON_SECRET` is configured on
+> the pilot project and `/api/cron/outbox` runs every 15 minutes. **Do not
+> regenerate the secret**: changing it while a deployment holds the old value
+> makes every invocation `401`, and nothing in the application reports that.
+> The steps are kept as the record of what was done, and for rebuilding the
+> project. §2D is the evidence that it works.
+
 1. **Set `CRON_SECRET` on the pilot project**, Production environment only.
    At least 24 characters; generate it in a password manager. Vercel sends it
    automatically as `Authorization: Bearer <value>` on every cron invocation.
@@ -551,6 +579,13 @@ Confirm `CRON_SECRET` **by presence only** — that the variable is listed and
 scoped to Production. Never reveal or paste its value.
 
 ### 2B.4 Verifying with the invitation already queued
+
+> **DONE — owner-observed, 21 September 2026.** The queued invitation was
+> delivered by a scheduled drain and the tenant booked from it; see §2D. The
+> checks below are kept because they are what to repeat if the queue ever
+> stops moving again, and because two of the three pieces of evidence — the
+> `GET … 200` in the cron log and the Resend send — were not individually
+> recorded at the time.
 
 There is already a queued tenant invitation — "Invitation to book → tenant:
 Queued, not yet attempted" — with no corresponding Resend send. **Use it. Do
@@ -649,6 +684,134 @@ machine can reach the pilot's services, and it holds no pilot credentials.
 **Automatic retry is still unverified.** A first-attempt success exercises none
 of the retry path, and a failure must not be manufactured against live services
 to close it.
+
+---
+
+---
+
+## 2E. Releasing the current commit — migration before deploy
+
+The pilot is running an **earlier** commit. Four commits have landed locally
+since, and they go out as **one release**. Nothing here is optional ordering.
+
+### 2E.1 There is nothing to choose between
+
+`67bb2be → 721abb7 → 7087b74 → 4d7511b` is a straight line. Deploying the tip
+deploys all four, so "ship the branding first and migrate later" was never
+available: **`4d7511b` already contains `721abb7`**, the commit whose
+application code expects the relaxed columns. There is no cherry-pick, no
+reordering and no partial deploy — those would rewrite history to create a
+choice that does not exist.
+
+So the order is decided by one fact: `0008` must be applied **before** the code
+that depends on it starts serving.
+
+### 2E.2 Why migrating first is safe for what is running now
+
+`0008` is two `DROP NOT NULL` statements. It drops nothing, rewrites no data
+and changes no existing value.
+
+- **The deployed older code keeps working.** It supplies an email and a phone
+  on every write it makes, so a relaxed constraint is one it never reaches.
+- **It cannot be surprised by a null.** Only the *new* code can create a
+  landlord without contact details, and it is not deployed yet. Until it is,
+  no such row exists to be read.
+- **Consumer booking is untouched.** `/book` collects and validates both before
+  a job exists, in application code, and nothing here relaxes that path.
+
+The reverse order is the one that breaks: deploying `4d7511b` against an
+unmigrated database leaves the application expecting nullable columns the
+database still refuses, so a contactless import fails at insert time and the
+agent is told "That property could not be added" with nothing to act on.
+
+### 2E.3 Owner steps, in order
+
+**1. Confirm which database you are about to change.** Read-only, and it is the
+step that makes the rest safe.
+
+```bash
+BSCJ_PILOT=1 npm --prefix /Users/tegjot/Projects/bscj-gas-website run db:status
+```
+
+Check three things before going on:
+
+- `Mode: pilot`, and the confirmed endpoint **matches**.
+- `Target` is the pilot host and database, compared against the Neon console —
+  **if it is not the pilot, stop.**
+- `Migrations on disk : 9`, `Migrations applied : 8`, with
+  `0008_landlord_contact_optional` the only `NOT APPLIED` tag, and no
+  `DIFFERS FROM DISK` line anywhere.
+
+**2. Apply the one outstanding migration.**
+
+```bash
+BSCJ_PILOT=1 npm --prefix /Users/tegjot/Projects/bscj-gas-website run db:migrate
+```
+
+It applies only what the journal says is outstanding, so it is safe to repeat.
+It is also **silent on success** — a driver line, a websocket warning, then
+nothing. Read nothing into the silence.
+
+**3. Verify it, rather than assuming it.**
+
+```bash
+BSCJ_PILOT=1 npm --prefix /Users/tegjot/Projects/bscj-gas-website run db:status
+```
+
+Expect `Migrations on disk : 9`, `Migrations applied : 9`, all nine `applied`,
+and still **24 tables and 22 enums** — `0008` adds neither. The invoice
+sequence is untouched.
+
+**4. Only then push and deploy.**
+
+```bash
+git push origin v2-compliance-platform
+```
+
+The pilot project builds `v2-compliance-platform`, so the push is the deploy.
+Confirm afterwards that *Settings → Cron Jobs* still lists `/api/cron/outbox`
+at `*/15 * * * *`: a new deployment carries the schedule, and an Instant
+Rollback does not.
+
+**Do not re-run `admin:create`.** The pilot administrator exists, and running
+it against an existing address resets the password, increments
+`session_version` and revokes outstanding invitations.
+
+### 2E.4 What to check after the deploy
+
+- Sign in to the pilot portal and open **Portfolio → Import**. A CSV whose
+  landlord rows carry no email should now preview rather than refuse.
+- A row whose landlord name matches one already on file should ask **which
+  landlord it is** and refuse to import until answered. That is the intended
+  behaviour, not a fault.
+- Nothing about the tenant journey in §2D should change.
+
+### 2E.5 Rolling back, and its one hard limit
+
+The code rolls back freely: an Instant Rollback to the previous deployment
+restores it, and the older code works against the migrated schema for the
+reasons in §2E.2. **Do the code rollback first, and in most cases do only
+that** — a schema that permits more than the code uses costs nothing.
+
+**The schema does not roll back freely.**
+`drizzle/down/0008_landlord_contact_optional.down.sql` restores `NOT NULL`, and
+that statement **fails while any customer row has a null email or phone** —
+which is precisely the state the migration exists to allow. There are only
+three honest ways through it, and two of them are not on offer here:
+
+1. **Leave `0008` applied.** Nullable columns the application no longer uses
+   are inert. This is the right answer almost always.
+2. **Have BSCJ supply the missing details**, then reverse it. Find the rows
+   with `SELECT id, name FROM customer WHERE email IS NULL OR phone IS NULL;`
+   and fill them in from something real.
+3. **Remove those customer records.** They are landlords, with properties,
+   certificates and history hanging off them.
+
+**Never invent an email or a phone number to satisfy the constraint**, and
+never delete a business record to make a rollback succeed. A fiction in a
+`customer` row ends up on an invoice addressed to a landlord, and a deleted
+landlord takes their properties' history with them. If neither (1) nor (2) is
+acceptable, the answer is to stop and decide, not to unblock the SQL.
 
 ---
 

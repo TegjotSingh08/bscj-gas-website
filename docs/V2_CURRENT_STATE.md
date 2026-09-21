@@ -3,7 +3,7 @@
 **Read this first.** It exists so a new session does not have to re-audit the
 repository. Update it at the end of every piece of work.
 
-Last updated: 21 September 2026 (first tenant journey observed).
+Last updated: 21 September 2026 (release-readiness pass; migration 0008 outstanding).
 
 ---
 
@@ -483,10 +483,11 @@ far it got and that re-uploading is how to find out.
 
 ### Migration 0007 — actual status
 
-`0007_account_onboarding` is **applied to the development database only**
-(19 September 2026). It has **not** been applied to production, and production
-has no V2 deployment to apply it to. `npm run db:status` reports 8 of 8 applied,
-24 tables, 22 enums. The invoice sequence was not touched: `last_value` is
+*As recorded at the time; `0008` has since been added — see "Migration 0008"
+below.* `0007_account_onboarding` is **applied to the development database
+only** (19 September 2026). It has **not** been applied to production, and
+production has no V2 deployment to apply it to. `npm run db:status` reported
+8 of 8 applied, 24 tables, 22 enums. The invoice sequence was not touched: `last_value` is
 `1001`, so the next number is still `BSCJ-001002`, exactly as before this phase.
 
 No further migration was created during closeout — the fix in (2) carries its
@@ -545,8 +546,13 @@ document as an attachment, so the convenience portal link is simply omitted.
 
 ### The scheduler — resolved, and a method defect found
 
-**Vercel Pro is now active**, so `vercel.json` declares `* * * * *`: the outbox
-drains once a minute. Pro allows a one-minute minimum with per-minute
+> **Superseded on the interval only.** This section records `* * * * *`. The
+> schedule in `vercel.json`, and in force on the pilot, is **`*/15 * * * *`** —
+> see "Automatic email processing" below for why. Everything else here still
+> stands.
+
+**Vercel Pro is now active**, so `vercel.json` declared `* * * * *`: the outbox
+drained once a minute. Pro allows a one-minute minimum with per-minute
 precision; Hobby is once a day and rejects a sub-daily expression at deploy
 time, which is why the expression requires Pro.
 
@@ -607,8 +613,8 @@ cron plan limitation above. Turning "set" into "verified" is the runbook's job.
 
 ### Still not done
 
-`0007` remains applied to **development only**. No migration was created this
-phase. Nothing was provisioned, purchased, pushed or deployed, and no live
+*At that checkpoint.* `0007` remained applied to development only. No migration
+was created that phase. Nothing was provisioned, purchased, pushed or deployed, and no live
 write or real email was made.
 
 ---
@@ -681,13 +687,20 @@ Activation is two owner steps — set `CRON_SECRET` on the pilot project
 (Production only) and redeploy, since both a schedule change and a new variable
 need one. `PILOT_RUNBOOK.md` § 2B.3.
 
-### Still unverified
+### Activated, and observed
 
-Scheduled processing has not yet been observed to run. Verification uses the
-**invitation already queued** — deliberately not a new one — and is complete
-only with three pieces of evidence: a `GET … 200` in the Vercel cron log with
-`claimed:1, accepted:1`, a matching send in Resend, and the admin job page no
-longer showing "Queued". § 2B.4.
+**`CRON_SECRET` is configured on the pilot project** (Production only) and
+`/api/cron/outbox` runs every 15 minutes — owner-reported, 21 September 2026.
+**Do not regenerate it.** A secret that differs between Vercel and the
+deployment makes every invocation `401`, and nothing in the application reports
+that state.
+
+Scheduled processing **has** been observed: the queued invitation was delivered
+by a drain and the tenant booked from it, recorded under "First tenant journey"
+below. The three individual pieces of evidence in §2B.4 — the `GET … 200` in
+the cron log, the matching Resend send, the admin page no longer showing
+"Queued" — were not separately recorded at the time, so they remain the checks
+to repeat if the queue ever stops moving.
 
 **Automatic retries stay unverified even after that succeeds.** A first-attempt
 success exercises none of the retry path, and claiming otherwise on that
@@ -777,12 +790,16 @@ nobody.
 
 Full rationale and the findings so far: `docs/IMPORT_PROFILES.md`.
 
-**Open blocker recorded there, not decided:** `customer.email`, `customer.phone`
-and `property.customer_id` are all `NOT NULL`, so a property cannot be recorded
-without a landlord carrying both an email and a phone. An export with no
-landlord contact therefore imports nothing. Closing it needs migration `0008`
-plus requiring the detail at the operation that needs it. Not done — it is a
-schema change and a business decision.
+**That blocker is now closed in code.** `customer.email` and `customer.phone`
+are nullable in `src/lib/db/schema.ts` and in migration
+`0008_landlord_contact_optional`; `property.customer_id` stays `NOT NULL`, so a
+property still belongs to an identified owner. The requirement moved to the
+operations that have to *reach* somebody, which refuse by name when there is no
+address for the recipient they chose. Payer identity and recipient selection
+are unchanged.
+
+**Migration `0008` is not applied to any database.** It must be applied to the
+pilot **before** the current commit is deployed — `PILOT_RUNBOOK.md` §2E.
 
 ### Dashboard wording corrected
 
@@ -791,6 +808,122 @@ said portal booking was "next", long after all three shipped. An agent reading
 it had no way to know the pages existed, which is much the same as not having
 built them. Jobs, Invoices and Landlords are now links; Compliance and Support,
 which genuinely have no page, still say coming soon.
+
+---
+
+## Release-readiness pass — 21 September 2026
+
+A correction pass over the four unpushed commits, prepared as **one release**.
+Nothing was pushed, deployed, migrated or sent.
+
+### The deployment order was recorded wrongly, and is corrected
+
+The four commits are linear, so deploying `4d7511b` deploys `721abb7` with it.
+An earlier recommendation to ship the branding commit first and migrate
+afterwards was therefore describing a choice that does not exist — and if
+followed by deploying the tip, it would run application code that expects
+nullable `customer.email` and `customer.phone` against a database that still
+refuses them. A contactless import would fail at insert time and the agent
+would be told only "That property could not be added".
+
+**Migration first, then push.** `0008` is two `DROP NOT NULL` statements: it
+drops nothing, rewrites no data, and the currently-deployed older code cannot
+notice it, because that code always supplies both values and nothing has yet
+created a row without them. The exact owner steps, the checks around them and
+the rollback limits are `PILOT_RUNBOOK.md` §2E.
+
+**Rollback is asymmetric and the runbook says so.** Code rolls back freely;
+the schema does not. Restoring `NOT NULL` fails while any landlord has a null
+email or phone, which is the state the migration exists to allow. Leaving
+`0008` applied is almost always the right answer — a nullable column the code
+no longer uses is inert. Nothing is to be invented to satisfy the constraint
+and no business record is to be deleted to make the SQL succeed.
+
+### A unique matching name no longer attaches a property
+
+`match_existing_by_name` previously set `matchedLandlordId` on its own when
+exactly one landlord of that name existed, and the commit attached the property
+to them. A unique name is evidence; it is not identity. Two people share names,
+and the second may simply not be recorded yet — so the property, and eventually
+an invoice, could land in front of a stranger with nothing downstream to
+notice.
+
+It is now a **suggestion requiring an explicit recorded choice**: the preview
+asks, per row, whether this is the same person or a different one of the same
+name, and **an unanswered row is held** rather than written. Declining records
+a second landlord of that name, which is the honest outcome for two distinct
+people — nobody is told to merge records because a spreadsheet repeated a name.
+An ambiguous name still holds the row, and its message no longer suggests
+merging either.
+
+The existing mechanics carry it: the suggested id travels **inside the signed
+envelope**, so the browser may accept or decline a suggestion the preview made
+and can never name a different landlord; the answer is read as an allow-list of
+two values with everything else meaning "unanswered"; `createProperty`
+re-checks that the landlord belongs to the agency; and the answer is part of
+the plan digest, so answering later is a new import rather than a blocked
+repeat.
+
+### Two preview promises the commit was not keeping
+
+Both about a landlord's own details on a property already held:
+
+- **Neither side has an email.** `conflictsBetween` offered "Landlord details"
+  as applicable; `commitImport` had nothing to identify the landlord by and
+  skipped it. The agent ticked a box and nothing happened. Now reported and
+  **not applicable**, with the reason stated.
+- **The file names a different landlord.** The preview correctly refused to
+  re-parent the property, and the commit — looking the incoming email up across
+  the agency — updated *that other landlord's* name, company and phone anyway.
+  A landlord record is now only updated when the file carries the same,
+  non-empty email as the landlord the property already belongs to, and the
+  update goes to that owner **by id** rather than by a search.
+
+### Later dates: tested against production logic, and two wordings fixed
+
+`lib/scheduling/later-dates.ts` is new and holds the rule the tenant scheduler
+renders from. The previous test file reimplemented the rule inside itself and
+otherwise grepped the component's source, so it would have passed against the
+broken component; the cases now run against the code that ships.
+
+Two wordings were wrong against what the page displays:
+
+- **"You are now choosing from times after <date>"** was describing a filter
+  the page does not apply — revealing later dates *widens* the list rather than
+  replacing it, and the earlier times are still shown. It now says the list
+  includes them, and keeps the old sentence only for an overdue job, where
+  there is genuinely nothing earlier.
+- **"We open more dates as they get closer"** was said in two different
+  situations. A diary that does not reach past the deadline will open more; one
+  that reaches past it and is fully booked will not, and telling somebody to
+  wait when waiting cannot help is the thing worth avoiding. The horizon is
+  read off the days the availability API returns — it is **not** widened, and
+  `maximumAdvanceDays` is still nowhere near this component.
+
+Covered: a deadline inside, at and beyond the booking window; later dates that
+exist, that are all taken, and that the window does not reach; an empty diary;
+returning to the earlier list with the reservation retained; and the late
+acknowledgement remaining server-decided.
+
+### Documentation corrected
+
+Stale statements reconciled with the code: the cron interval (`*/15`, not every
+minute), `CRON_SECRET` (configured and exercised, not "deliberately absent"),
+the nullable-contact blocker (closed in code, migration outstanding), the
+migration count and which are applied, and the "branch is unpushed" claim.
+
+### What is still unverified
+
+- **Outlook and every other real mail client.** The branded emails were
+  rendered in a browser only. Conservative markup is a reason to expect them to
+  work, not evidence that they do. `npm run previews` writes both emails, light
+  and dark, to the git-ignored `previews/` directory from fictional content and
+  sends nothing. No defect was found in them this pass, so they were left
+  alone.
+- **Automatic retries**, exactly as before.
+- **The import identity flow against a real database.** It is proved against
+  the planning code and against recording fakes of the mutations, which is
+  what `identity.test.ts` is. Nothing on this machine can reach the pilot.
 
 ---
 
@@ -854,9 +987,14 @@ full list, not the pilot subset.
 
 ### Deployment and configuration
 
-12. **The branch is still unpushed**, with no upstream. The work exists on one
-    machine. This remains the highest-value, lowest-cost thing to fix.
-13. **V2 is not deployed.** No production environment has any of it.
+12. **The branch is ahead of its upstream**, not unpushed — see the correction
+    under "Known issues, V2". `v2-compliance-platform` tracks
+    `origin/v2-compliance-platform`, and four local commits (`67bb2be`,
+    `721abb7`, `7087b74`, `4d7511b`) are not pushed. They are linear, so the
+    push is a fast-forward and deploys all four together.
+13. **V2 is not on the live site.** `main` and `www.bscj-solutions.com` are
+    untouched. It *is* deployed to the separate pilot project at
+    `bscj-v2-pilot.vercel.app`, at an earlier commit than the branch tip.
 14. **Environment variables required in production**, none of which are set
     there yet:
     - `DATABASE_URL` — nothing works without it
@@ -874,8 +1012,10 @@ full list, not the pilot subset.
     ever sent: no tenant invitation, no certificate, no invoice, and **no
     account invitation or password reset**. An agency invited with no schedule
     running simply never hears from us.
-16. **Migration 0007 must be applied** to any database V2 is deployed against.
-    It is applied to development only.
+16. **Migration 0008 must be applied** to any database the current commit is
+    deployed against. `0000`–`0007` are applied to development and to the
+    pilot; **`0008` is applied nowhere.** Order matters and is documented in
+    `PILOT_RUNBOOK.md` §2E: migrate first, then deploy.
 
 ### Known issues
 
