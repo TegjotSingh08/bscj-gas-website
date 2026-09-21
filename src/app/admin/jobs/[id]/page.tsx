@@ -151,9 +151,9 @@ export default async function AdminJobPage({
     only trace that something was left undone would be gone. An issued
     certificate with no active position pointing at it *is* the state.
   */
-  const renewalOutstanding = currentCertificate
+  const renewalState = currentCertificate
     ? await renewalIsOutstanding(currentCertificate.id)
-    : false;
+    : "resolved";
 
   /*
     What the outbox says about each recipient, **per certificate version**.
@@ -423,7 +423,7 @@ export default async function AdminJobPage({
 
                     {cert.status === "issued" && (
                       <>
-                        {renewalOutstanding && (
+                        {renewalState === "outstanding" && (
                           <p
                             role="alert"
                             className="mt-3 rounded-lg border-2 border-flame-500 bg-flame-400/10 px-3 py-2 text-xs font-semibold text-navy-900"
@@ -433,6 +433,22 @@ export default async function AdminJobPage({
                             renewal write did not land. Press the button below —
                             it is safe, and it does nothing if the renewal
                             already matches.
+                          </p>
+                        )}
+                        {/*
+                          Unknown is said, not hidden. Reporting "nothing is
+                          wrong" from a query that failed is the one answer that
+                          would let a real failure sit unnoticed.
+                        */}
+                        {renewalState === "unavailable" && (
+                          <p
+                            role="status"
+                            className="mt-3 rounded-lg border-2 border-navy-300 bg-navy-50 px-3 py-2 text-xs font-semibold text-navy-900"
+                          >
+                            We could not check whether this certificate&rsquo;s
+                            renewal was recorded. That is not the same as it
+                            being fine — reload, and if it persists the button
+                            below is safe to press either way.
                           </p>
                         )}
                         <UpdateRenewal

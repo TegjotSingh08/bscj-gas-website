@@ -347,7 +347,7 @@ describe("when the renewal write fails after the certificate is written", () => 
     const { rows } = await conn.client.query<{ id: string }>(
       "select id from certificate where status = 'issued'",
     );
-    assert.equal(await renewalIsOutstanding(rows[0].id), true);
+    assert.equal(await renewalIsOutstanding(rows[0].id), "outstanding");
   });
 
   test("and it clears itself once the renewal lands", async () => {
@@ -363,7 +363,7 @@ describe("when the renewal write fails after the certificate is written", () => 
     });
 
     assert.deepEqual(await listOutstandingRenewals(), []);
-    assert.equal(await renewalIsOutstanding(rows[0].id), false);
+    assert.equal(await renewalIsOutstanding(rows[0].id), "resolved");
   });
 
   test("an ordinary release is never reported as outstanding", async () => {
@@ -392,7 +392,7 @@ describe("when the renewal write fails after the certificate is written", () => 
     const { rows } = await conn.client.query<{ id: string }>(
       "select id from certificate where status = 'superseded'",
     );
-    assert.equal(await renewalIsOutstanding(rows[0].id), false);
+    assert.equal(await renewalIsOutstanding(rows[0].id), "resolved");
     assert.deepEqual(await listOutstandingRenewals(), []);
   });
 
