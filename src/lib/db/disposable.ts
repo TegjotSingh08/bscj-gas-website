@@ -1,5 +1,6 @@
 import "server-only";
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createRequire } from "node:module";
 
 import * as schema from "./schema";
@@ -85,13 +86,59 @@ export function disposableDb(url: string): unknown | null {
   };
 
   /*
-    **One connection, on purpose.** A pool that hands out whichever connection
-    is free would make the batch below meaningless: its `BEGIN` and its
-    `COMMIT` could land on different sessions, and the atomicity the
-    application relies on would silently not be there.
+    **One connection *and* a lock.** Neither on its own is enough.
+
+    An earlier version used `max: 1` alone and reasoned that a single
+    connection made the batch below atomic. It does not. `pool.query` checks
+    the connection out and hands it back **per statement**, so between the
+    `BEGIN` and the `COMMIT` it returns to the pool and another caller's query
+    is served on it — inside the open transaction. A browser issues concurrent
+    requests as a matter of course, so this is reachable, and what it produces
+    is one request's write rolled back by an unrelated request's failure.
+
+    The lock is what supplies the property; `max: 1` is what makes "the same
+    session" true. Stated for what it is: **a test-harness approximation of
+    the Neon driver's batch**, correct for the one driven session this handle
+    exists for. It is not a transaction manager, and it makes no claim about
+    the application's concurrency — the in-process integration harness gives
+    every connection its own `pg.Client`, and that is what the concurrency
+    tests use.
   */
   const pool = new Pool({ connectionString: url, max: 1 });
   const db = drizzle(pool, { schema });
+
+  /*
+    Whether the current asynchronous context is the batch that holds the lock.
+
+    `AsyncLocalStorage` rather than a flag, because a flag cannot tell the
+    batch's own statements apart from a concurrent request's: both run while
+    the batch is awaiting. A Drizzle statement begins executing when it is
+    awaited, so awaiting it inside `run` puts its `pool.query` in this context
+    and leaves every other caller's outside it.
+  */
+  const inBatch = new AsyncLocalStorage<true>();
+
+  /** One unit of work at a time, in arrival order. */
+  let tail: Promise<unknown> = Promise.resolve();
+  const exclusively = <T>(body: () => Promise<T>): Promise<T> => {
+    const run = tail.then(body, body);
+    tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  };
+
+  /*
+    Every query waits for the lock unless it belongs to the batch holding it.
+    Without this the lock would only order batches against each other, and an
+    ordinary query would still land in the middle of one.
+  */
+  const query = pool.query.bind(pool) as (...args: unknown[]) => Promise<unknown>;
+  pool.query = ((...args: unknown[]) =>
+    inBatch.getStore()
+      ? query(...args)
+      : exclusively(() => query(...args))) as typeof pool.query;
 
   /**
    * The Neon driver's one-transaction batch, over `node-postgres`.
@@ -101,40 +148,34 @@ export function disposableDb(url: string): unknown | null {
    * the same meaning — one transaction, all or nothing — enforced by Postgres
    * rather than described.
    *
-   * **`BEGIN` goes through the pool, not through a checked-out client.** An
-   * earlier version took a dedicated client for the transaction and then
-   * awaited the Drizzle statements, which are bound to the *pool* — so they
-   * queued for a connection the batch itself was holding, and with `max: 1`
-   * that is a deadlock. It presented as an import that claimed its run, wrote
-   * nothing and sat at "Importing…" for ever, which is how it was found.
-   *
-   * With `max: 1` the pool has exactly one connection and serialises onto it,
-   * so `BEGIN`, the statements and `COMMIT` all land on the same session in
-   * the order they are issued.
-   *
-   * **The limitation that comes with that**, stated rather than discovered: a
-   * genuinely concurrent caller on this same handle would have its statements
-   * fall inside this transaction. That is acceptable for what this is for —
-   * driving one browser session — and it is why the in-process integration
-   * harness gives each connection its own `pg.Client` instead, which is what
-   * every concurrency test uses.
+   * **No dedicated client is checked out**, deliberately. The statements are
+   * bound to the *pool*, so a transaction opened on a client the pool did not
+   * give them would be a transaction with nothing in it — and with `max: 1`,
+   * checking one out while the statements queue for the same connection is a
+   * deadlock. It presented once as an import that claimed its run, wrote
+   * nothing and sat at "Importing…" for ever, which is how it was found. So
+   * `BEGIN` goes through the pool like everything else, and the lock is what
+   * guarantees nothing else is on the connection in between.
    */
-  db.batch = async (statements: readonly PromiseLike<unknown>[]) => {
-    await pool.query("BEGIN");
-    try {
-      const results: unknown[] = [];
-      for (const statement of statements) results.push(await statement);
-      await pool.query("COMMIT");
-      return results;
-    } catch (error) {
-      try {
-        await pool.query("ROLLBACK");
-      } catch {
-        // The transaction is going back whatever happens to this statement.
-      }
-      throw error;
-    }
-  };
+  db.batch = async (statements: readonly PromiseLike<unknown>[]) =>
+    exclusively(() =>
+      inBatch.run(true, async () => {
+        await pool.query("BEGIN");
+        try {
+          const results: unknown[] = [];
+          for (const statement of statements) results.push(await statement);
+          await pool.query("COMMIT");
+          return results;
+        } catch (error) {
+          try {
+            await pool.query("ROLLBACK");
+          } catch {
+            // The transaction is going back whatever happens to this statement.
+          }
+          throw error;
+        }
+      }),
+    );
 
   return db;
 }

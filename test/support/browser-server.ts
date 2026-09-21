@@ -46,8 +46,22 @@ import path from "node:path";
 import { DISPOSABLE_URL } from "./disposable-postgres";
 
 /** A port of its own, so a developer's own `next dev` is never disturbed. */
-export const BROWSER_PORT = 3210;
+export const BROWSER_PORT = Number(process.env.BSCJ_BROWSER_PORT ?? 3210);
 export const BASE_URL = `http://127.0.0.1:${BROWSER_PORT}`;
+
+/**
+ * Where the server is run from.
+ *
+ * **Why this is not simply the repository.** Two things share a checkout's
+ * `.next`: a developer's own dev server and this one. The last attempt at a
+ * certificate release failed on exactly that — another server held the
+ * directory. `BSCJ_BROWSER_CWD` points this harness at a separate checkout of
+ * the same revision (a `git worktree`), which also means no `.env.local`,
+ * `.env.pilot` or any other ignored file is even present for Next to read.
+ *
+ * Unset, it is the repository, which is what an ordinary local run wants.
+ */
+export const SERVER_CWD = process.env.BSCJ_BROWSER_CWD ?? process.cwd();
 
 let server: ChildProcess | null = null;
 let documentDir: string | null = null;
@@ -63,8 +77,22 @@ let documentDir: string | null = null;
 export function isolatedEnvironment(): NodeJS.ProcessEnv {
   documentDir ??= mkdtempSync(path.join(tmpdir(), "bscj-browser-docs-"));
 
+  /*
+    Anything inherited that names a database is removed rather than merely
+    overridden. `DATABASE_URL_UNPOOLED` is read by drizzle-kit and is only a
+    comment in `.env.example`, so the coverage test below would not catch it,
+    and an ambient one would be a live connection string inside a harness
+    whose whole claim is that it cannot reach one.
+  */
+  const inherited = { ...process.env };
+  for (const key of Object.keys(inherited)) {
+    if (key.startsWith("DATABASE_URL") || key.startsWith("POSTGRES_")) {
+      delete inherited[key];
+    }
+  }
+
   return {
-    ...process.env,
+    ...inherited,
 
     // The throwaway database, and the flag that lets the app use its driver.
     DATABASE_URL: DISPOSABLE_URL,
@@ -106,16 +134,31 @@ export function isolatedEnvironment(): NodeJS.ProcessEnv {
     BSCJ_AGENCY_PAGE: "",
 
     /*
-      **Not production, so the local document store will run.**
+      **Development, and it has to be a development *build* to mean anything.**
 
-      That store refuses under `NODE_ENV=production` — correctly, because a
-      serverless filesystem is ephemeral — and Blob is the only alternative and
-      is a real external service. Without this the release control is disabled
-      and the whole document half of the application cannot be exercised.
+      The local document store refuses under `NODE_ENV=production` —
+      correctly, because a serverless filesystem is ephemeral — and Blob, the
+      only alternative, is a real external service. So the document half of
+      the application can only be exercised outside production.
 
-      `next start` would normally set production itself; setting it here wins,
-      because a variable already in the environment is what the process reads.
-      Nothing else about the build changes: it is still the compiled output.
+      An earlier version of this file claimed that setting the variable here
+      was enough under `next start`, "because a variable already in the
+      environment is what the process reads". **That is wrong**, and the
+      recorded blocker was the consequence. The Next CLI does honour an
+      already-set `NODE_ENV`, but by then it is too late: a production build
+      has already folded `process.env.NODE_ENV === "production"` away at
+      compile time. In `.next/server` the compiled check reads
+
+          "local" == driver ? { ready: false, requirement: "…development-only…" }
+
+      with the comparison gone. The store refuses on a production build
+      whatever the environment says.
+
+      Hence `next dev` below. It is the same application, the same pages, the
+      same server actions and the same database — compiled for development,
+      which is what the store's own rule requires and is therefore honest
+      rather than a way around it. Nothing is overridden and no safeguard is
+      relaxed.
     */
     NODE_ENV: "development",
   };
@@ -131,23 +174,32 @@ export function configuredKeys(): string[] {
 /**
  * Starts the server and waits for it to answer.
  *
- * `next start` serves the compiled build — the same output a deployment runs —
- * with `NODE_ENV` set to development so the local document store is permitted.
- * See `isolatedEnvironment` for why that is the right trade here.
+ * **`next dev`, and deliberately so.** The document store the certificate
+ * journey needs refuses on a production build — not because of the runtime
+ * environment but because the build folds the check away, which is evidenced
+ * in `isolatedEnvironment` above. A development build is the only
+ * configuration in which the local store is permitted to run, so it is the
+ * one used, rather than overriding a safeguard to keep a production build.
+ *
+ * What that costs is stated plainly: this is not the compiled output a
+ * deployment serves. It is the same source, the same routes, the same server
+ * actions, the same guards and the same database. The production build is
+ * exercised separately by `npm run build`.
  *
  * Whatever Next would read from a `.env` file, it does not: an already-present
  * environment variable wins, and `isolatedEnvironment` sets **every** key the
- * application reads. There is no key left for a file to supply, and the
- * fixture-only sign-in is the check that this held.
+ * application reads. There is no key left for a file to supply, the separate
+ * checkout has no such file anyway, and the fixture-only sign-in is the check
+ * that this held.
  */
 export async function startServer(): Promise<void> {
   if (server) return;
 
   server = spawn(
     "npx",
-    ["next", "start", "-p", String(BROWSER_PORT), "-H", "127.0.0.1"],
+    ["next", "dev", "-p", String(BROWSER_PORT), "-H", "127.0.0.1"],
     {
-      cwd: process.cwd(),
+      cwd: SERVER_CWD,
       env: isolatedEnvironment(),
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -157,7 +209,7 @@ export async function startServer(): Promise<void> {
   server.stdout?.on("data", (chunk) => logs.push(String(chunk)));
   server.stderr?.on("data", (chunk) => logs.push(String(chunk)));
 
-  const deadline = Date.now() + 60_000;
+  const deadline = Date.now() + 180_000;
   while (Date.now() < deadline) {
     try {
       const response = await fetch(`${BASE_URL}/admin/login`, {

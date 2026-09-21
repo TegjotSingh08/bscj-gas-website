@@ -1,6 +1,7 @@
-import { test, describe, before, after, beforeEach } from "node:test";
+import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import path from "node:path";
 
 import {
   connect,
@@ -11,98 +12,330 @@ import {
 } from "../support/disposable-postgres";
 import { setDbForTesting } from "../../src/lib/db/client";
 import { seed, type Fixture } from "../support/fixtures";
-import { isolatedEnvironment } from "../support/browser-server";
+import {
+  BASE_URL,
+  isolatedEnvironment,
+  startServer,
+  stopServer,
+} from "../support/browser-server";
+import { follow, get, signIn, type HttpSession } from "../support/http-session";
+import { hashPassword } from "../../src/lib/auth/password";
 import { isDisposableTarget } from "../../src/lib/db/disposable";
 
 /**
- * The boundaries the browser pane could not be driven across, closed here.
+ * The access boundaries, exercised as the people who are refused by them.
  *
- * Signing in as an agent and then asking for an admin page produces a redirect,
- * and the browser tool reports a redirect as a failed navigation — so that one
- * check could not be *clicked*. It is asserted against the real database
- * instead, which is stronger than the click would have been: the guard itself
- * is exercised with a real agent session.
+ * **What this file used to do, and why it was not enough.** One test called
+ * `assertCan("agent_owner", "certificate:issue")` and was named "requireAdmin
+ * refuses an agent session". It tested neither `requireAdmin` nor a session:
+ * it tested a lookup table. Another read every admin `page.tsx` off disk and
+ * checked the source contained `requireAdmin()`. That is a useful check —
+ * a new page that forgets the guard is caught by it — but it is a check on
+ * *source text*, and describing it as a verified boundary was wrong.
  *
- * Everything else in this file is about the harness keeping its promises.
+ * Both are kept below, named for what they actually are. The boundaries
+ * themselves are now established the only way they can be: a real server, a
+ * real sign-in with a real password, and real requests made as each person.
+ *
+ * Every account and record is fictional, the database is thrown away with the
+ * run, and nothing external is reachable.
  */
+
+const PASSWORD = "fixture-password-not-a-secret";
 
 let conn: Connection;
 let fixture: Fixture;
+let admin: HttpSession;
+let agent: HttpSession;
+let rival: HttpSession;
 
 before(async () => {
   await start();
   conn = await connect();
   setDbForTesting(conn.db as never);
+  await reset(conn);
+  fixture = await seed(conn);
+
+  // The application's own hashing, so the ordinary login path is what runs.
+  const hash = await hashPassword(PASSWORD);
+  await conn.client.query(
+    "update app_user set password_hash = $1, password_set_at = now()",
+    [hash],
+  );
+
+  await startServer();
+  admin = await signIn("admin@fixture.example.invalid", PASSWORD);
+  agent = await signIn("agent@fixture.example.invalid", PASSWORD);
+  rival = await signIn("rival@fixture.example.invalid", PASSWORD);
 });
 
 after(async () => {
+  await stopServer();
   setDbForTesting(null);
   await stop();
 });
 
-beforeEach(async () => {
-  await reset(conn);
-  fixture = await seed(conn);
-});
+/** How many times an administrator has run the reconciliation sweep. */
+async function sweepsRecorded(): Promise<number> {
+  const { rows } = await conn.client.query<{ n: string }>(
+    "select count(*)::text as n from audit_event where kind = 'ops.reconciliation_run'",
+  );
+  return Number(rows[0].n);
+}
 
-describe("the admin guard refuses an agent", () => {
-  test("requireAdmin refuses an agent session, and says nothing about why", async () => {
-    const { assertCan } = await import("../../src/lib/auth/roles");
-
-    /*
-      The capability an admin page needs. An agent holds `portfolio:write` and
-      `job:create`; it does not hold this, and `assertCan` throws rather than
-      returning a value a caller could forget to check.
-    */
-    assert.throws(() => assertCan("agent_owner", "certificate:issue"));
-    assert.throws(() => assertCan("agent_member", "invoice:write"));
-    assert.throws(() => assertCan("engineer", "portfolio:write"));
-
-    // And an administrator holds them.
-    assert.doesNotThrow(() => assertCan("admin", "certificate:issue"));
-    assert.doesNotThrow(() => assertCan("admin", "invoice:write"));
+/** The sweep, as an HTTP caller with this session would ask for it. */
+async function runSweep(session: HttpSession) {
+  const response = await fetch(`${BASE_URL}/api/admin/reconcile`, {
+    method: "POST",
+    headers: { cookie: session.cookie(), origin: BASE_URL },
+    redirect: "manual",
   });
+  return { status: response.status, body: await response.text() };
+}
 
-  test("every admin page asks for itself, so a missed matcher cannot expose one", async () => {
+describe("the sessions are real, and they are the fixtures'", () => {
+  test("each one signed in through the ordinary credentials endpoint", async () => {
     /*
-      The middleware matcher is a list somebody has to remember to update. This
-      is the check that does not depend on remembering — and it is why the
-      redirect the browser saw is the expected behaviour rather than a fault.
+      This is also the isolation proof. These accounts exist only in the
+      throwaway database; a server that had picked up a real `DATABASE_URL`
+      from an environment file could not have signed any of them in.
     */
-    const { readdirSync, statSync } = await import("node:fs");
-    const path = await import("node:path");
-
-    const pages: string[] = [];
-    const walk = (dir: string) => {
-      for (const entry of readdirSync(dir)) {
-        const full = path.join(dir, entry);
-        if (statSync(full).isDirectory()) walk(full);
-        else if (entry === "page.tsx") pages.push(full);
-      }
-    };
-    walk(path.resolve(process.cwd(), "src/app/admin"));
-
-    assert.ok(pages.length > 0);
-    for (const page of pages) {
-      const contents = readFileSync(page, "utf8");
-      if (page.includes(`${path.sep}login${path.sep}`)) continue;
-      assert.match(contents, /requireAdmin\(\)/, page);
-    }
+    assert.deepEqual(await admin.whoami(), {
+      role: "admin",
+      email: "admin@fixture.example.invalid",
+    });
+    assert.deepEqual(await agent.whoami(), {
+      role: "agent_owner",
+      email: "agent@fixture.example.invalid",
+    });
+    assert.deepEqual(await rival.whoami(), {
+      role: "agent_owner",
+      email: "rival@fixture.example.invalid",
+    });
   });
 });
 
-describe("one agency cannot read another's portfolio", () => {
-  test("a property is not found under the wrong organisation", async () => {
+describe("an agency user cannot reach an admin page", () => {
+  const adminPages = [
+    "/admin",
+    "/admin/reconcile",
+    "/admin/due",
+    "/admin/jobs",
+  ];
+
+  for (const path of adminPages) {
+    test(`${path} refuses them, and an administrator is served it`, async () => {
+      const refused = await get(agent, path);
+      assert.ok(
+        refused.status >= 300 && refused.status < 400,
+        `${path} answered ${refused.status} to an agency user`,
+      );
+      assert.equal(
+        refused.location,
+        "/admin/login",
+        "and the destination is the staff sign-in page, named explicitly",
+      );
+
+      const served = await get(admin, path);
+      assert.equal(served.status, 200, `${path} is served to an administrator`);
+      assert.ok(served.body.length > 1000, "and it is the real page");
+    });
+  }
+
+  test("the job page too, which carries the mutations", async () => {
+    const path = `/admin/jobs/${fixture.jobId}`;
+    const refused = await get(agent, path);
+    assert.equal(refused.status, 307);
+    assert.equal(refused.location, "/admin/login");
+
+    const served = await get(admin, path);
+    assert.equal(served.status, 200);
+    assert.match(served.body, new RegExp(fixture.jobReference));
+  });
+});
+
+describe("every redirect chain ends somewhere", () => {
+  /**
+   * **The defect this was written for.** `/admin/login` redirected *any*
+   * session to `/admin`, and `/admin` sends everybody who is not an
+   * administrator back to `/admin/login`. The two bounced off each other
+   * until the browser gave up with ERR_TOO_MANY_REDIRECTS.
+   *
+   * For an agency user that turned "you are in the wrong place" into a dead
+   * end. For an **engineer** it was worse: the staff form sends a successful
+   * sign-in to `/admin`, so an engineer who typed the right password was
+   * thrown straight into the loop and could not reach their own screens at
+   * all.
+   *
+   * Asserting the first hop would not have caught it — the first hop was
+   * correct in every case. These follow the whole chain.
+   */
+  const journeys: [string, () => HttpSession, string][] = [
+    ["an agency user asking for an admin page", () => agent, "/admin/reconcile"],
+    ["an agency user at the staff sign-in page", () => agent, "/admin/login"],
+    ["an agency user asking for the engineer's day", () => agent, "/engineer"],
+    ["an engineer asking for an admin page", () => engineer(), "/admin/reconcile"],
+    ["an engineer at the staff sign-in page", () => engineer(), "/admin/login"],
+    ["an administrator at the staff sign-in page", () => admin, "/admin/login"],
+  ];
+
+  let engineerSession: HttpSession | null = null;
+  const engineer = () => {
+    assert.ok(engineerSession, "the engineer signed in");
+    return engineerSession;
+  };
+
+  before(async () => {
+    engineerSession = await signIn("engineer@fixture.example.invalid", PASSWORD);
+  });
+
+  for (const [description, session, path] of journeys) {
+    test(`${description} arrives somewhere`, async () => {
+      const { hops, finalStatus, finalPath } = await follow(session(), path);
+      assert.notEqual(
+        finalStatus,
+        null,
+        `still redirecting after ${hops.length} hops: ${hops
+          .map((hop) => `${hop.status} -> ${hop.location}`)
+          .join(", ")}`,
+      );
+      assert.equal(finalStatus, 200, `landed on ${finalPath}`);
+    });
+  }
+
+  test("and an engineer lands on their own day, not a staff page they cannot have", async () => {
+    const { finalPath, finalStatus } = await follow(engineer(), "/admin/login");
+    assert.equal(finalStatus, 200);
+    assert.equal(finalPath, "/engineer");
+  });
+
+  test("an agency user is told why the staff page is not theirs", async () => {
+    const page = await get(agent, "/admin/login");
+    assert.equal(page.status, 200);
+    assert.match(page.body, /signed in as an agency user/i);
+    assert.match(page.body, /\/portal/);
+  });
+});
+
+describe("an agency user cannot perform an admin mutation", () => {
+  test("the sweep refuses them, and writes nothing", async () => {
+    /*
+      A real administrative mutation over real HTTP: it writes an audit row
+      every time it runs, so "nothing happened" is checkable rather than
+      assumed. The same request is then made by an administrator, which is
+      what makes the refusal meaningful — otherwise a broken endpoint would
+      pass this test by refusing everybody.
+    */
+    const before = await sweepsRecorded();
+
+    const refused = await runSweep(agent);
+    assert.equal(refused.status, 401);
+    assert.match(refused.body, /unauthenticated/);
+    assert.equal(
+      await sweepsRecorded(),
+      before,
+      "the attempt left no trace, because it did not run",
+    );
+
+    const allowed = await runSweep(admin);
+    assert.equal(allowed.status, 200);
+    assert.match(allowed.body, /"ok":true/);
+    assert.equal(
+      await sweepsRecorded(),
+      before + 1,
+      "and an administrator's identical request did run",
+    );
+  });
+
+  test("an admin server action refuses them before it runs", async () => {
+    /*
+      A Server Action is a public HTTP endpoint with a generated name. This
+      posts to one on the admin job page with a real agency session and
+      asserts the guard redirects rather than the action executing — and
+      that the job is untouched either way.
+    */
+    const actionId = adminActionId("assignEngineerAction");
+    const body = new FormData();
+    body.set("0", JSON.stringify(["$undefined", "$K1"]));
+    body.set("1_jobId", fixture.jobId);
+    body.set("1_engineerId", fixture.engineerUserId);
+
+    const response = await fetch(`${BASE_URL}/admin/jobs/${fixture.jobId}`, {
+      method: "POST",
+      headers: {
+        cookie: agent.cookie(),
+        origin: BASE_URL,
+        "Next-Action": actionId,
+      },
+      body,
+      redirect: "manual",
+    });
+    await response.text();
+
+    assert.match(
+      response.headers.get("x-action-redirect") ?? "",
+      /^\/admin\/login/,
+      "the guard sent them to the staff sign-in page instead of acting",
+    );
+
+    const { rows } = await conn.client.query<{ engineer: string | null }>(
+      "select assigned_engineer_id as engineer from job where id = $1",
+      [fixture.jobId],
+    );
+    assert.equal(rows[0].engineer, null, "and no engineer was assigned");
+  });
+});
+
+/**
+ * The generated name of one server action on the admin job page.
+ *
+ * Read from the build's own manifest rather than hardcoded, because the id is
+ * a content hash and changes whenever the module does. A missing entry fails
+ * the test loudly rather than silently testing nothing.
+ */
+function adminActionId(exportName: string): string {
+  const root = path.resolve(
+    process.env.BSCJ_BROWSER_CWD ?? process.cwd(),
+    ".next/dev/static/chunks",
+  );
+  for (const entry of readdirSync(root)) {
+    if (!entry.endsWith(".js")) continue;
+    const source = readFileSync(path.join(root, entry), "utf8");
+    const match = source.match(
+      new RegExp(
+        `\\{"(60[0-9a-f]{40})":\\{"name":"${exportName}"\\}\\}`,
+      ),
+    );
+    if (match) return match[1];
+  }
+  throw new Error(`No action id found for ${exportName}`);
+}
+
+describe("one agency cannot reach another's records", () => {
+  test("a property is served to its owner and not found by the other", async () => {
+    const path = `/portal/portfolio/${fixture.propertyId}`;
+
+    const owner = await get(agent, path);
+    assert.equal(owner.status, 200);
+
+    const other = await get(rival, path);
+    assert.equal(other.status, 404, "not found, rather than refused by name");
+  });
+
+  test("and so is a job", async () => {
+    const path = `/portal/jobs/${fixture.jobId}`;
+    assert.equal((await get(agent, path)).status, 200);
+    assert.equal((await get(rival, path)).status, 404);
+  });
+
+  test("the query behind them scopes by organisation, not by id alone", async () => {
     const { getProperty } = await import("../../src/lib/portfolio/queries");
 
-    const mine = await getProperty(fixture.organisationId, fixture.propertyId);
-    assert.ok(mine, "the owning agency finds it");
-
-    const theirs = await getProperty(
-      fixture.otherOrganisationId,
-      fixture.propertyId,
+    assert.ok(await getProperty(fixture.organisationId, fixture.propertyId));
+    assert.equal(
+      await getProperty(fixture.otherOrganisationId, fixture.propertyId),
+      null,
     );
-    assert.equal(theirs, null, "the other agency finds nothing");
   });
 
   test("and a job cannot be raised against it from the other agency", async () => {
@@ -128,14 +361,50 @@ describe("one agency cannot read another's portfolio", () => {
   });
 });
 
+describe("the capability table, which is not the same as a guard", () => {
+  test("it withholds administrative capabilities from every other role", async () => {
+    /*
+      Named for what it is. `assertCan` is the lookup the guards consult; this
+      checks the lookup. What the guards *do* with it is established above, by
+      making the requests.
+    */
+    const { assertCan } = await import("../../src/lib/auth/roles");
+
+    assert.throws(() => assertCan("agent_owner", "certificate:issue"));
+    assert.throws(() => assertCan("agent_member", "invoice:write"));
+    assert.throws(() => assertCan("engineer", "portfolio:write"));
+
+    assert.doesNotThrow(() => assertCan("admin", "certificate:issue"));
+    assert.doesNotThrow(() => assertCan("admin", "invoice:write"));
+  });
+
+  test("every admin page's source asks for the guard, so a new one cannot forget", async () => {
+    /*
+      A source-level check, and described as one. It cannot tell you the
+      guard works — the requests above do that — but it does catch the page
+      somebody adds next month without one, which no amount of testing
+      today's pages would.
+    */
+    const pages: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir)) {
+        const full = path.join(dir, entry);
+        if (statSync(full).isDirectory()) walk(full);
+        else if (entry === "page.tsx") pages.push(full);
+      }
+    };
+    walk(path.resolve(process.cwd(), "src/app/admin"));
+
+    assert.ok(pages.length > 0);
+    for (const page of pages) {
+      if (page.includes(`${path.sep}login${path.sep}`)) continue;
+      assert.match(readFileSync(page, "utf8"), /requireAdmin\(\)/, page);
+    }
+  });
+});
+
 describe("the browser harness keeps its promises", () => {
   test("it fixes every key the application documents", () => {
-    /*
-      Next gives an already-present environment variable precedence over a
-      `.env` file, so a key the harness sets cannot be supplied by one. A key it
-      *misses* could be — which is what this catches when somebody adds a
-      setting and forgets the harness.
-    */
     const example = readFileSync(".env.example", "utf8");
     const documented = [...example.matchAll(/^([A-Z][A-Z0-9_]*)=/gm)].map(
       (match) => match[1],
@@ -157,6 +426,23 @@ describe("the browser harness keeps its promises", () => {
     assert.match(String(fixed.DATABASE_URL), /127\.0\.0\.1:55433/);
   });
 
+  test("an inherited database name of any kind is removed, not overridden", () => {
+    /*
+      `DATABASE_URL_UNPOOLED` is only a comment in `.env.example`, so the
+      coverage test above would not notice it. An ambient one would be a live
+      connection string inside a harness whose whole claim is that it cannot
+      reach one.
+    */
+    const saved = process.env.DATABASE_URL_UNPOOLED;
+    process.env.DATABASE_URL_UNPOOLED = "postgresql://someone@example.com/live";
+    try {
+      assert.equal(isolatedEnvironment().DATABASE_URL_UNPOOLED, undefined);
+    } finally {
+      if (saved === undefined) delete process.env.DATABASE_URL_UNPOOLED;
+      else process.env.DATABASE_URL_UNPOOLED = saved;
+    }
+  });
+
   test("it leaves every external service unreachable", () => {
     const fixed = isolatedEnvironment();
     for (const key of [
@@ -173,6 +459,32 @@ describe("the browser harness keeps its promises", () => {
 
   test("the agency page stays off in the harness too", () => {
     assert.equal(isolatedEnvironment().BSCJ_AGENCY_PAGE, "");
+  });
+
+  test("and the running server really is serving the agency page off", async () => {
+    const response = await get(null, "/letting-agents");
+    assert.equal(response.status, 404);
+  });
+
+  test("the document half of the application can actually be exercised", async () => {
+    /*
+      **The blocker this closes.** The local document store refuses under
+      `NODE_ENV=production`, and a production build folds that check away at
+      compile time — so under `next start` the release control is disabled
+      whatever the environment says, and the certificate journey cannot be
+      driven at all. The harness runs `next dev` for exactly this reason.
+
+      If somebody puts `next start` back, the admin job page will print the
+      store's requirement instead of the release control, and this fails.
+    */
+    const page = await get(admin, `/admin/jobs/${fixture.jobId}`);
+    assert.equal(page.status, 200);
+    assert.doesNotMatch(
+      page.body,
+      /development-only and refuses to run in production/,
+      "the local document store is refusing, so nothing can be uploaded or released",
+    );
+    assert.match(page.body, /Release this certificate/);
   });
 });
 
