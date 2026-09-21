@@ -90,6 +90,8 @@ is never described as one.
 | `ff1b3e7` | Count renewals once, and only against the service they are for |
 | `e2c4841` | Stop a superseded certificate displacing its own correction |
 | `bf11241` | Promise only what the email provider actually guarantees |
+| `c41e4da` | Drive the connected workflow through the application, against PostgreSQL |
+| `c19b27d` | Make the acceptance pack's claims and its order true |
 
 Working tree: clean.
 
@@ -117,7 +119,12 @@ Working tree: clean.
 | final | `npm run lint` | 1 pre-existing warning (`invitationRow`, unrelated) |
 | final | `npm run build` | clean |
 | final | diff scan | no secrets, no real addresses, migrations additive and paired |
-| **22 Sep** | `npm run test:integration` | **81 pass, 0 fail** against real PostgreSQL 18.4 |
+| **22 Sep, final** | `npm run test:integration` | **101 pass, 30 suites, 0 fail** against real PostgreSQL 18.4 |
+| 22 Sep, final | `npm test` | 2231 pass, 448 suites, 0 fail |
+| 22 Sep, final | `npm run typecheck` | clean |
+| 22 Sep, final | `npm run lint` | 1 pre-existing warning (`invitationRow`) |
+| 22 Sep, final | `npm run build` | clean |
+| 22 Sep | real server, port 3211/3212 | `/letting-agents` 404 without the flag, 200 with it |
 | 22 Sep | `npm test` | 2228 pass, 0 fail |
 | 22 Sep | `npm run typecheck` | clean |
 | 22 Sep | `npm run lint` | 1 pre-existing warning |
@@ -134,17 +141,25 @@ disturbed) and has been stopped. It used no external service.
 
 ## Next action after interruption
 
-**Second pass, 22 September — in progress.**
+**Second pass, 22 September — complete.** All six objectives done:
 
-Done: disposable PostgreSQL (objective 1), renewals query (finding 2),
-certificate correction race and durable recovery (finding 3).
+| | |
+| --- | --- |
+| 1 | Disposable PostgreSQL 18.4, project-local, fail-closed |
+| 2 | Renewals query: row multiplication, service matching, totals, pagination |
+| 3 | Certificate correction race + durable, discoverable recovery |
+| 4 | Email retry guarantees corrected in behaviour **and** wording |
+| 5 | Connected workflow through the application against PostgreSQL |
+| 6 | Acceptance pack: fresh state per scenario, correct order, real publication gate |
 
-Next: **finding 5** — the connected workflow against PostgreSQL. Agency import
-→ CP12 requested → tenant schedules → engineer assigned → work completed →
-certificate uploaded, reviewed and released → compliance updated → delivery
-intent processed → invoice drafted, issued, delivered → payment recorded. Use
-`test/support/fixtures.ts` for starting accounts only; every transition must go
-through the application. Then **finding 6** (acceptance-pack corrections).
+**Nothing is in progress and nothing is blocked.** The next step is the owner's:
+work through `docs/acceptance/README.md` in the order it now states — review,
+migrate, deploy, *then* test.
+
+The one thing a further session would add is **browser coverage of the
+signed-in screens**. They need a database and a session; the disposable
+PostgreSQL now makes that possible for the first time, but it was not attempted
+this pass and is not claimed.
 
 If resuming, the most valuable remaining work, in order:
 
