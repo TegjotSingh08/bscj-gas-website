@@ -1,0 +1,61 @@
+%PDF-1.4
+% ----------------------------------------------------------------------
+% ----------------------------------------------------------------------
+% ----------------------------------------------------------------------
+% ----------------------------------------------------------------------
+% ----------------------------------------------------------------------
+% ----------------------------------------------------------------------
+% ----------------------------------------------------------------------
+% ----------------------------------------------------------------------
+% ----------------------------------------------------------------------
+% ----------------------------------------------------------------------
+% ----------------------------------------------------------------------
+% ----------------------------------------------------------------------
+% ----------------------------------------------------------------------
+% ----------------------------------------------------------------------
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 1157 >>
+stream
+q 1 0 0 RG 3 w 0.25 0 0 0.25 k
+BT 1 0 0 rg /F1 54 Tf 1 0.36 -0.36 1 70 250 Tm (TEST - NOT VALID) Tj ET
+Q
+BT 1 0 0 rg /F1 20 Tf 28 760 Td (TEST DOCUMENT - NOT A VALID CERTIFICATE) Tj ET
+BT 0 0 0 rg /F1 13 Tf 28 730 Td (This file exists only to exercise BSCJ's certificate upload and review) Tj ET
+BT 0 0 0 rg /F1 13 Tf 28 712 Td (screens with fictional data. It certifies nothing.) Tj ET
+BT 0 0 0 rg /F1 15 Tf 28 676 Td (Gas Safety Record \(SPECIMEN\)) Tj ET
+BT 0 0 0 rg /F1 12 Tf 28 650 Td (Certificate number:  TEST-NOT-VALID-0001) Tj ET
+BT 0 0 0 rg /F1 12 Tf 28 632 Td (Property:            14 Fixture Street, Wolverhampton, WV1 1AA) Tj ET
+BT 0 0 0 rg /F1 12 Tf 28 614 Td (Landlord:            Ada Fixture \(fictional\)) Tj ET
+BT 0 0 0 rg /F1 12 Tf 28 596 Td (Inspection date:     20 September 2026) Tj ET
+BT 0 0 0 rg /F1 12 Tf 28 578 Td (Next due date:       19 September 2027) Tj ET
+BT 0 0 0 rg /F1 12 Tf 28 560 Td (Engineer:            SPECIMEN - no engineer attended) Tj ET
+BT 1 0 0 rg /F1 13 Tf 28 524 Td (Do not issue, send, print or file this document.) Tj ET
+BT 1 0 0 rg /F1 13 Tf 28 506 Td (Every name, address and date on it is invented.) Tj ET
+
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000001031 00000 n 
+0000001080 00000 n 
+0000001137 00000 n 
+0000001263 00000 n 
+0000002472 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+2547
+%%EOF
