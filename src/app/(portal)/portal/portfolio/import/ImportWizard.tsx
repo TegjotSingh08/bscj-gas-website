@@ -285,7 +285,20 @@ function Review({
 }) {
   const { counts } = plan;
   const conflicts = plan.rows.filter((row) => row.action === "conflict");
-  const errors = plan.rows.filter((row) => row.action === "error");
+  /*
+    Two different kinds of row end up as `error`, and calling both "cannot be
+    read" is misleading: a row held because its landlord has no email address
+    was read perfectly well, and the fix is a different one — an address in the
+    spreadsheet, or a word with BSCJ about the setting. They are separated so
+    each gets the instruction that actually applies to it.
+  */
+  const allErrors = plan.rows.filter((row) => row.action === "error");
+  const held = allErrors.filter((row) => row.landlordContactMissing === true);
+  const errors = allErrors.filter((row) => row.landlordContactMissing !== true);
+  /** Rows that will be written with a landlord we have no way of contacting. */
+  const contactless = plan.rows.filter(
+    (row) => row.action === "create" && row.landlordContactMissing === true,
+  );
   /*
     Rows that cannot be written until somebody says who the landlord is. A
     unique matching name is evidence, not identity — two landlords can share
@@ -334,8 +347,60 @@ function Review({
           <Count label="Need a decision" value={counts.conflict} />
           <Count label="Already match" value={counts.unchanged} />
           <Count label="Repeated" value={counts.duplicate_in_file} />
-          <Count label="Cannot be read" value={counts.error} />
+          <Count label="Not imported" value={counts.error} />
         </dl>
+
+        {held.length > 0 && (
+          <div className="mt-5 rounded-xl border-2 border-navy-300 bg-navy-50 p-4">
+            <h3 className="text-sm font-extrabold text-navy-900">
+              {held.length} row{held.length === 1 ? " was" : "s were"} held —
+              no landlord email address
+            </h3>
+            <p className="mt-1 text-xs text-navy-700">
+              Your agency&rsquo;s import settings say to hold these rather than
+              record a landlord we cannot contact. Add the email addresses to
+              those rows and upload the file again; everything else below still
+              goes in. If your portfolio genuinely has no addresses for these
+              landlords, ask BSCJ to change the setting for your agency.
+            </p>
+            <ul className="mt-3 space-y-1">
+              {held.slice(0, 50).map((row) => (
+                <li key={row.line} className="text-sm">
+                  <span className="font-bold text-navy-900">Row {row.line}</span>{" "}
+                  <span className="text-navy-700">{row.address}</span>
+                </li>
+              ))}
+            </ul>
+            {held.length > 50 && (
+              <p className="mt-2 text-xs text-navy-600">
+                …and {held.length - 50} more.
+              </p>
+            )}
+          </div>
+        )}
+
+        {contactless.length > 0 && (
+          <div className="mt-5 rounded-xl border-2 border-navy-300 bg-navy-50 p-4">
+            <h3 className="text-sm font-extrabold text-navy-900">
+              {contactless.length} propert{contactless.length === 1 ? "y" : "ies"}{" "}
+              will be recorded with no landlord email address
+            </h3>
+            {/*
+              Said here rather than left to be discovered later. Recording a
+              contactless landlord is a legitimate choice — the property, its
+              address and its due date are all worth having — but it defers
+              something, and the person confirming the import should know what.
+            */}
+            <p className="mt-1 text-xs text-navy-700">
+              The property, its address and its certificate date are recorded
+              normally, and we will not invent an address. What has to wait is
+              anything that needs to <span className="font-bold">reach</span>{" "}
+              that landlord: sending them a certificate, or issuing them an
+              invoice, will ask for an address before it goes anywhere. You can
+              add one at any time on the landlord&rsquo;s own page.
+            </p>
+          </div>
+        )}
 
         {errors.length > 0 && (
           <div className="mt-5 rounded-xl border-2 border-flame-500 bg-flame-400/10 p-4">

@@ -56,17 +56,35 @@ export type AddressMode = "auto" | "combined" | "separate";
 export type DateOrder = "uk" | "iso_only";
 
 /**
- * What to do about a property whose landlord contact details are missing.
+ * What to do about a property whose landlord has **no email address**.
  *
- * - `reject_row` (default) — the row is held for review and nothing is
- *   written. Honest, and never invents a contact.
- * - `match_existing_by_name` — if the agency already has **exactly one**
- *   landlord with that name, attach the property to them. Not an invention:
- *   the record exists and BSCJ confirmed for this agency that names are
- *   unique enough to match on. Ambiguous or unmatched names still fall back
- *   to `reject_row`.
+ * Before migration `0008` this question barely arose: `customer.email` was
+ * `NOT NULL`, so a contactless landlord could not be recorded however anybody
+ * configured it. Now it can, which makes this a real policy with real
+ * consequences — and makes it important that each option does what it says.
+ *
+ * - `reject_row` (the default, and what "hold the row" has always claimed to
+ *   mean) — **the row is held.** Nothing is written for it, and the preview
+ *   names the column to fill in. Nothing is invented and nothing is recorded
+ *   on a guess.
+ * - `record_without_contact` — the landlord is recorded **with no contact
+ *   details**, which is what the file actually says. The property, its address
+ *   and its due date all become visible and actionable. What is deferred is
+ *   *reaching* them: issuing an invoice to that landlord, or releasing a
+ *   certificate to them, refuses by name until an address exists.
+ * - `match_existing_by_name` — as `record_without_contact`, plus: where the
+ *   agency already has exactly one landlord of that name, the preview
+ *   **suggests** it and asks. A name is evidence, not identity, so an
+ *   unanswered suggestion holds the row and an ambiguous name holds it
+ *   outright. A row that carries an email never uses this weaker signal.
+ *
+ * **No option ever invents an email address or a phone number.** The choice is
+ * only between holding the row and recording what is genuinely known.
  */
-export type LandlordMatch = "reject_row" | "match_existing_by_name";
+export type LandlordMatch =
+  | "reject_row"
+  | "record_without_contact"
+  | "match_existing_by_name";
 
 export type ImportProfile = {
   /** Bumped if the shape changes, so an old row is recognised not misread. */
@@ -130,6 +148,7 @@ const ADDRESS_MODES: readonly AddressMode[] = ["auto", "combined", "separate"];
 const DATE_ORDERS: readonly DateOrder[] = ["uk", "iso_only"];
 const LANDLORD_MATCHES: readonly LandlordMatch[] = [
   "reject_row",
+  "record_without_contact",
   "match_existing_by_name",
 ];
 
@@ -151,6 +170,17 @@ function oneOf<T extends string>(
  * path, and a heading naming a column the code does not define is dropped —
  * the column set is code, the profile is data, and data does not invent
  * columns.
+ *
+ * **Compatibility with profiles saved before `record_without_contact` existed.**
+ * The shape did not change, so the version stays at 2 and every saved profile
+ * is read back exactly as written. What changed is that `reject_row` now does
+ * what its label always said — it holds the row instead of quietly recording a
+ * contactless landlord, which is what it had started doing once migration
+ * `0008` made the columns nullable. That is strictly more conservative: an
+ * agency configured for `reject_row` writes **less** than before, never more,
+ * and BSCJ moves them to `record_without_contact` in one click if holding is
+ * not what they wanted. A saved value this code does not recognise still falls
+ * back to `reject_row`, which is the option that writes nothing.
  */
 export function parseProfile(value: unknown): ImportProfile {
   if (typeof value !== "object" || value === null) return { ...DEFAULT_PROFILE };
@@ -240,17 +270,30 @@ export const PROFILE_CHOICES = {
     { value: "uk" as const, label: "Day first (31/01/2027)", detail: "What a British export normally contains. ISO is always accepted too." },
     { value: "iso_only" as const, label: "Only YYYY-MM-DD", detail: "Refuses anything else. For an export known to mix conventions." },
   ],
+  /*
+    Three genuinely different answers to "this row's landlord has no email
+    address". Each `detail` states what is recorded **and** what still refuses
+    afterwards, because "record it anyway" is only a safe choice if the person
+    choosing knows what it defers.
+  */
   landlordMatch: [
     {
       value: "reject_row" as const,
-      label: "Hold the row for review",
-      detail: "Nothing is written and nothing is invented. The safe default.",
+      label: "Hold the row — do not import it",
+      detail:
+        "Nothing is written for that property. The preview says which column to fill in and the agency uploads again. The safe default: choose it when the agency can get the addresses.",
+    },
+    {
+      value: "record_without_contact" as const,
+      label: "Record the landlord without contact details",
+      detail:
+        "The property, its address and its due date are recorded, and the landlord is recorded with whatever is known. No email or phone number is invented. Issuing an invoice to that landlord, or sending them a certificate, refuses until somebody adds an address. Choose it when the portfolio is worth recording before the contacts arrive.",
     },
     {
       value: "match_existing_by_name" as const,
-      label: "Match a landlord already on file by name",
+      label: "Record without contact, and ask about matching names",
       detail:
-        "Only when exactly one landlord of that name exists for this agency. Anything ambiguous is still held. Never creates a landlord.",
+        "As above, and when exactly one landlord of that name is already on file the preview asks whether it is the same person. A name is not proof, so an unanswered question holds the row, and two landlords of one name hold it outright. Only choose this where the agency's names are reliable.",
     },
   ],
 } as const;

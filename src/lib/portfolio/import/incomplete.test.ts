@@ -32,7 +32,10 @@ const plan = (
     held?: ExistingProperty[];
     emails?: string[];
     byName?: Record<string, NameMatch>;
-    landlordMatch?: "reject_row" | "match_existing_by_name";
+    landlordMatch?:
+      | "reject_row"
+      | "record_without_contact"
+      | "match_existing_by_name";
   } = {},
 ) =>
   buildImportPlan({
@@ -44,9 +47,104 @@ const plan = (
       : undefined,
     profile: {
       ...DEFAULT_PROFILE,
-      landlordMatch: options.landlordMatch ?? "reject_row",
+      /*
+        This file is about what happens when a portfolio's landlords have no
+        contact details, so its default is the policy that records them.
+        `reject_row` — which **holds** such rows — has its own block below.
+      */
+      landlordMatch: options.landlordMatch ?? "record_without_contact",
     },
   });
+
+describe("the hold policy actually holds", () => {
+  /*
+    **The defect this covers.** `reject_row` is labelled "hold the row for
+    review — nothing is written", and it was consulted only on the way into the
+    name-matching branch. So once migration 0008 made the columns nullable, a
+    contactless row under `reject_row` fell straight through and was created:
+    an agency configured for "do not import it" was importing it.
+  */
+  test("a contactless landlord is held, not quietly recorded", () => {
+    const result = plan([row(2)], { landlordMatch: "reject_row" });
+
+    assert.equal(result.counts.create, 0);
+    assert.equal(result.counts.error, 1);
+    assert.equal(result.wouldWrite, 0);
+    assert.equal(result.rows[0].landlordContactMissing, true);
+  });
+
+  test("the held row names the column to fill in", () => {
+    const result = plan([row(2)], { landlordMatch: "reject_row" });
+    const [problem] = result.rows[0].errors ?? [];
+
+    assert.equal(problem.column, "landlord_email");
+    assert.match(problem.message, /no email address/i);
+    // It says the setting is a setting, so an agent knows who can change it.
+    assert.match(problem.message, /import settings|ask BSCJ/i);
+  });
+
+  test("holding one row does not hold the rest of the file", () => {
+    const result = plan(
+      [
+        row(2, { houseOrName: "14" }),
+        row(3, { houseOrName: "16", landlordEmail: "ada@fixture.example.invalid" }),
+      ],
+      { landlordMatch: "reject_row" },
+    );
+
+    assert.equal(result.counts.error, 1);
+    assert.equal(result.counts.create, 1);
+  });
+
+  test("a row that carries an email is unaffected by the policy", () => {
+    const result = plan([row(2, { landlordEmail: "ada@fixture.example.invalid" })], {
+      landlordMatch: "reject_row",
+    });
+    assert.equal(result.counts.create, 1);
+  });
+
+  test("a property already on file is not held — nothing new would be recorded", () => {
+    /*
+      The policy governs *recording a landlord we have no contact for*. Where
+      the property is already held, no landlord is created, and demanding an
+      email address on every row of a repeat upload would be noise an agent
+      cannot act on.
+    */
+    const held: ExistingProperty = {
+      id: "p-1",
+      key: "WV1 1AA|14",
+      houseOrName: "14",
+      street: "Fixture Street",
+      town: null,
+      postcode: "WV1 1AA",
+      landlordId: "c-1",
+      landlordName: "Ada Fixture",
+      landlordEmail: null,
+      landlordPhone: null,
+      landlordCompany: null,
+      tenancyId: null,
+      tenantName: null,
+      tenantEmail: null,
+      tenantPhone: null,
+      dueDate: null,
+      inspectionDate: null,
+    };
+
+    const result = plan([row(2)], {
+      landlordMatch: "reject_row",
+      held: [held],
+    });
+
+    assert.equal(result.counts.error, 0);
+    assert.equal(result.counts.unchanged, 1);
+  });
+
+  test("nothing in a held row is invented to get it through", () => {
+    const result = plan([row(2)], { landlordMatch: "reject_row" });
+    // No record at all — there is nothing to carry a fabricated contact.
+    assert.equal(result.rows[0].record, undefined);
+  });
+});
 
 describe("a first import with names but no contact details", () => {
   test("a property with a named owner and no contact is importable", () => {
@@ -77,6 +175,15 @@ describe("a first import with names but no contact details", () => {
     // "Not known" and "wrong" are different answers.
     assert.equal(plan([row(2, { landlordEmail: "   " })]).counts.create, 1);
     assert.equal(plan([row(2, { landlordEmail: "nonsense" })]).counts.error, 1);
+  });
+
+  test("the row says its landlord has no contact, so the preview can explain it", () => {
+    assert.equal(plan([row(2)]).rows[0].landlordContactMissing, true);
+    assert.equal(
+      plan([row(2, { landlordEmail: "ada@fixture.example.invalid" })]).rows[0]
+        .landlordContactMissing,
+      undefined,
+    );
   });
 
   test("a contactless row is never reported as a landlord already on file", () => {

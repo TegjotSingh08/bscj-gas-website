@@ -49,7 +49,7 @@ Four things a heading cannot tell us, each defaulting to the cautious reading:
 | `occupierRole` | A second name column may be the tenant, a caretaker or the managing contact. **Default `unknown`, which creates no tenancy** — a tenancy asserts somebody lives there and is who a scheduling link is sent to. The name is kept as an access note instead: visible to the engineer, asserting nothing, contacting nobody. |
 | `addressMode` | Whether to trust the combined cell, the separate columns, or whichever exists. |
 | `dateOrder` | `uk` (day first) or `iso_only`, which refuses anything else — for an export known to mix conventions. |
-| `landlordMatch` | What to do when landlord contact details are missing: hold the row (default), or **suggest** an existing landlord when exactly one of that name exists for this agency. A suggestion is not an attachment — see "A name is not an identity" below. Never invents contact details. |
+| `landlordMatch` | What to do when a landlord has **no email address**. Three genuinely different answers — see "The three answers to a missing landlord email" below. None of them ever invents contact details. |
 
 ### The one asymmetry, and why
 
@@ -148,6 +148,41 @@ delivery, not at issue.
 
 Applying it is an owner step, and it has to happen **before** the current
 commit is deployed: `PILOT_RUNBOOK.md` §2E.
+
+## The three answers to a missing landlord email
+
+Before migration `0008` this setting barely mattered: `customer.email` was
+`NOT NULL`, so a contactless landlord could not be recorded however anybody had
+configured it. Now it can, so the setting decides — and for a while it did not.
+
+**The defect.** `reject_row` is labelled "hold the row for review — nothing is
+written", and the policy was consulted **only on the way into the
+name-matching branch**. Once the columns became nullable, a contactless row
+under `reject_row` fell straight past it and was created. An agency configured
+for "do not import it" was importing it, with a landlord nobody could contact.
+
+There are now three options, each of which does what it says:
+
+| Setting | What happens to a row whose landlord has no email |
+| --- | --- |
+| `reject_row` *(default)* | **Held.** Nothing is written for that property. The preview names `landlord_email` and says the setting can be changed. The rest of the file still imports. |
+| `record_without_contact` | The property, its address and its due date are recorded, and the landlord is recorded with whatever is known. **What is deferred is reaching them**: issuing them an invoice, or sending them a certificate, refuses until an address exists. |
+| `match_existing_by_name` | As `record_without_contact`, plus a suggestion when exactly one landlord of that name is on file — see below. |
+
+Two things hold across all three. **No option invents an email address or a
+phone number.** And the policy applies only where a landlord would actually be
+created: a property the agency already holds is reported as `unchanged` or as a
+conflict, never held for an address on a re-upload of a file that is already in.
+
+### Compatibility with profiles saved before this
+
+The profile shape did not change, so `version` stays at **2** and every saved
+profile is read back exactly as written. What changed is `reject_row`'s
+behaviour, and it changed to match its own label — so an agency configured for
+it now writes **less** than it did, never more. That is the safe direction, and
+BSCJ moves an agency to `record_without_contact` in one click if holding turns
+out not to be what they wanted. A stored value this code does not recognise
+still falls back to `reject_row`, the option that writes nothing.
 
 ## A name is not an identity
 

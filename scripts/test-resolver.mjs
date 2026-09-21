@@ -31,6 +31,7 @@ function firstExisting(basePath) {
 const STUBS = {
   "next/server": path.resolve(process.cwd(), "scripts/next-server-stub.mjs"),
   "next/headers": path.resolve(process.cwd(), "scripts/next-headers-stub.mjs"),
+  "next/cache": path.resolve(process.cwd(), "scripts/next-cache-stub.mjs"),
 };
 
 registerHooks({

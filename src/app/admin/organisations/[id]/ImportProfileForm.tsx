@@ -146,7 +146,7 @@ export function ImportProfileForm({
         />
         <Choice
           name="landlordMatch"
-          legend="When landlord contact details are missing"
+          legend="When a landlord has no email address"
           choices={PROFILE_CHOICES.landlordMatch}
           current={profile.landlordMatch}
         />

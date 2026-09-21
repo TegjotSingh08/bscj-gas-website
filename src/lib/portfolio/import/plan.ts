@@ -159,6 +159,15 @@ export type PlannedRow = {
    * of a stranger, and nothing downstream would notice.
    */
   landlordChoiceRequired?: boolean;
+  /**
+   * Whether this row's landlord has no email address.
+   *
+   * Set on both the rows that are written and the rows that are held for it,
+   * so the preview can explain the consequence once, in the agency's terms:
+   * the property is recorded and actionable, and the things that have to
+   * *reach* the landlord refuse until an address exists.
+   */
+  landlordContactMissing?: boolean;
   /** Dates, written out long, so a misread ordering is visible. */
   dueDateLong?: string;
   tenancyStartedLong?: string;
@@ -470,58 +479,95 @@ export function buildImportPlan(input: {
     }
     seen.set(record.key, line);
 
-    /*
-      **A landlord with no contact details, where the profile says names are
-      reliable.**
+    const existing = input.existing.get(record.key);
 
-      A unique matching name is **evidence, not identity**. Two landlords can
-      share a name and the second may simply not be on file yet, so the match
-      is offered as a suggestion and the row is held until somebody chooses.
-      Silently attaching a property to whichever J. Smith came first puts it —
-      and eventually an invoice — in front of the wrong person, and nothing
-      downstream would notice. An ambiguous name is held outright: there is
-      nothing sensible to suggest. A name that matches nothing is not an error;
-      a new landlord is created from it, with no contact, which is exactly what
-      the file says.
-    */
-    let landlordMatch: NameMatch["outcome"] | undefined;
-    let suggestedLandlordId: string | undefined;
-    let suggestedLandlordName: string | undefined;
-
-    if (!record.landlord.email && profile.landlordMatch === "match_existing_by_name") {
+    if (!existing) {
       /*
-        The same normalisation `matchLandlordsByName` keyed the map with.
-        Inlined rather than imported: `lookup.ts` is `server-only` and reaches
-        the database, and this module is deliberately pure.
-      */
-      const found = input.landlordsByName?.get(
-        record.landlord.name.replace(/\s+/g, " ").trim().toLowerCase(),
-      );
-      landlordMatch = found?.outcome ?? "none";
-      if (found?.outcome === "one") {
-        suggestedLandlordId = found.id;
-        suggestedLandlordName = found.name;
-      }
+        **A landlord with no email address**, and what this agency's profile says
+        to do about it.
 
-      if (landlordMatch === "ambiguous") {
+        Until migration `0008` the question was academic: `customer.email` was
+        `NOT NULL`, so such a row could not be recorded however anybody had
+        configured it. Now it can, so the setting decides — and each of the three
+        answers is genuinely different.
+      */
+      let landlordMatch: NameMatch["outcome"] | undefined;
+      let suggestedLandlordId: string | undefined;
+      let suggestedLandlordName: string | undefined;
+      const landlordContactMissing = !record.landlord.email;
+
+      if (landlordContactMissing && profile.landlordMatch === "reject_row") {
+        /*
+          **Hold the row.** This is what the option has always been labelled as
+          doing, and for a while it was not doing it: the policy was consulted
+          only on the way into the name-matching branch, so a contactless row
+          under `reject_row` fell straight through and was created. An agency
+          configured for "do not import it" was importing it.
+
+          Held, not failed. Nothing is written, the column to fill in is named,
+          and the rest of the file still goes in.
+        */
         counts.error += 1;
         rows.push({
           line,
           action: "error",
           address,
+          landlordContactMissing: true,
           errors: [
             {
-              column: "landlord_name",
-              message: `More than one landlord of this name is already on file, and this row has no email to tell them apart. Add an email to the row so we know which one it is.`,
+              column: "landlord_email",
+              message:
+                "This landlord has no email address, and your agency's import settings say to hold such rows rather than record them. Add the address to this row and upload again, or ask BSCJ to change the setting.",
             },
           ],
         });
         continue;
       }
-    }
 
-    const existing = input.existing.get(record.key);
-    if (!existing) {
+      if (landlordContactMissing && profile.landlordMatch === "match_existing_by_name") {
+        /*
+          A unique matching name is **evidence, not identity**. Two landlords can
+          share a name and the second may simply not be on file yet, so the match
+          is offered as a suggestion and the row is held until somebody chooses.
+          Silently attaching a property to whichever J. Smith came first puts it —
+          and eventually an invoice — in front of the wrong person, and nothing
+          downstream would notice. An ambiguous name is held outright: there is
+          nothing sensible to suggest. A name that matches nothing is not an
+          error; a new landlord is created from it, with no contact, which is
+          exactly what the file says.
+        */
+        /*
+          The same normalisation `matchLandlordsByName` keyed the map with.
+          Inlined rather than imported: `lookup.ts` is `server-only` and reaches
+          the database, and this module is deliberately pure.
+        */
+        const found = input.landlordsByName?.get(
+          record.landlord.name.replace(/\s+/g, " ").trim().toLowerCase(),
+        );
+        landlordMatch = found?.outcome ?? "none";
+        if (found?.outcome === "one") {
+          suggestedLandlordId = found.id;
+          suggestedLandlordName = found.name;
+        }
+
+        if (landlordMatch === "ambiguous") {
+          counts.error += 1;
+          rows.push({
+            line,
+            action: "error",
+            address,
+            landlordContactMissing: true,
+            errors: [
+              {
+                column: "landlord_name",
+                message: `More than one landlord of this name is already on file, and this row has no email to tell them apart. Add an email to the row so we know which one it is.`,
+              },
+            ],
+          });
+          continue;
+        }
+      }
+
       counts.create += 1;
       rows.push({
         line,
@@ -541,6 +587,7 @@ export function buildImportPlan(input: {
         suggestedLandlordId,
         suggestedLandlordName,
         landlordChoiceRequired: suggestedLandlordId ? true : undefined,
+        landlordContactMissing: landlordContactMissing || undefined,
         dueDateLong,
         tenancyStartedLong,
       });

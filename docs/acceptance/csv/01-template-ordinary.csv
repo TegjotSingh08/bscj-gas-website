@@ -1,0 +1,4 @@
+property_number_or_name,street,town,postcode,landlord_name,landlord_email,landlord_phone,tenant_name,tenant_email,certificate_expiry
+14,Fixture Street,Wolverhampton,WV1 1AA,Ada Fixture,ada@fixture.example.invalid,07700900001,Tom Tenant,tom@fixture.example.invalid,31/10/2026
+16,Fixture Street,Wolverhampton,WV1 1AA,Ada Fixture,ada@fixture.example.invalid,07700900001,,,15/01/2027
+2 Sample Court,Sample Road,Wolverhampton,WV2 2BB,Ben Sample,ben@sample.example.invalid,07700900002,Uma Tenant,uma@sample.example.invalid,
