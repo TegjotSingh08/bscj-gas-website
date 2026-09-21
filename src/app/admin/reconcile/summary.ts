@@ -23,12 +23,21 @@ export type ReconcileVisibility = {
   renewalsUnavailable: boolean;
   /** They were read, but the walk stopped before the end of the ordering. */
   renewalsIncomplete: boolean;
+  /**
+   * This page began at a cursor, so it covers only part of the ordering.
+   *
+   * **Reaching the end of a continuation is not reaching the end.** The walk
+   * started after a position somebody else chose; everything before that
+   * position was not looked at on this request and is not ruled out by it.
+   */
+  renewalsPartialScope: boolean;
   /** Every source answered fully, so "nothing outstanding" can be unqualified. */
   everythingKnown: boolean;
   /**
    * Nothing is outstanding **and** everything was readable.
    *
-   * False whenever anything is unknown, however empty the rest looks.
+   * False whenever anything is unknown, however empty the rest looks, and
+   * false on a continuation page whatever it found.
    */
   nothingOutstanding: boolean;
 };
@@ -36,6 +45,8 @@ export type ReconcileVisibility = {
 export function summariseReconcile(input: {
   /** Null when the compliance records could not be read. */
   renewals: { rows: readonly unknown[]; stoppedBecause: RenewalStop } | null;
+  /** True when this request began at a cursor rather than at the beginning. */
+  continued: boolean;
   /** False when the outbox query failed. */
   messagesReadable: boolean;
   /** False when the reservation store could not be listed. */
@@ -48,12 +59,18 @@ export function summariseReconcile(input: {
     failedNotifications: number;
   };
 }): ReconcileVisibility {
-  const { renewals, messagesReadable, reservationsListed, counts } = input;
+  const { renewals, continued, messagesReadable, reservationsListed, counts } =
+    input;
 
   const renewalsUnavailable = renewals === null;
   const renewalsIncomplete =
     renewals !== null && renewals.stoppedBecause !== "exhausted";
-  const renewalsComplete = renewals !== null && !renewalsIncomplete;
+  /*
+    Complete means the whole ordering was walked, which a continuation never
+    does however cleanly it finishes. `exhausted` on a continuation means
+    "nothing after that position", and the page must not round that up.
+  */
+  const renewalsComplete = renewals !== null && !renewalsIncomplete && !continued;
 
   const everythingKnown =
     renewalsComplete && messagesReadable && reservationsListed;
@@ -69,12 +86,14 @@ export function summariseReconcile(input: {
   return {
     renewalsUnavailable,
     renewalsIncomplete,
+    renewalsPartialScope: continued,
     everythingKnown,
     /*
       Deliberately requires `renewalsComplete` rather than merely
       "not unavailable": a walk that stopped at its bound has not ruled
       anything out, and saying nothing is outstanding on the strength of it
-      would be the same mistake in a quieter form.
+      would be the same mistake in a quieter form. A continuation page is the
+      same mistake again — an empty tail says nothing about the head.
     */
     nothingOutstanding: renewalsComplete && everyQueueEmpty,
   };

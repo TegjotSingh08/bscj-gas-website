@@ -87,6 +87,8 @@ type Candidate = {
   inspectionDate: string;
   nextDueDate: string;
   issuedAt: Date;
+  /** The same instant at full `timestamptz` precision. See `CANDIDATE_COLUMNS`. */
+  issuedAtCursor: string;
 };
 
 /**
@@ -130,6 +132,25 @@ const CANDIDATE_COLUMNS = {
   inspectionDate: certificates.inspectionDate,
   nextDueDate: certificates.nextDueDate,
   issuedAt: certificates.issuedAt,
+  /*
+    **The ordering value, rendered by PostgreSQL and never by JavaScript.**
+
+    `issuedAt` above arrives as a `Date`, which holds milliseconds.
+    `timestamptz` holds **microseconds**. Building a cursor from the `Date`
+    therefore truncated it — and a truncated cursor sorts *before* the row it
+    came from, so `issued_at > cursor` matched that row again. Six
+    certificates sharing `09:00:00.123456+00` were walked for ever, one page
+    at a time, until the caller's own safety bound stopped it.
+
+    So the cursor value is produced by the database in a form that survives
+    the round trip exactly. `to_char` rather than `::text` because it does not
+    depend on the session's `DateStyle`, and `at time zone 'UTC'` with a
+    literal `Z` because a cursor that means a different instant in a different
+    session is not a cursor.
+  */
+  issuedAtCursor: sql<string>`to_char(${certificates.issuedAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`.as(
+    "issued_at_cursor",
+  ),
 };
 
 function candidateQuery(db: NonNullable<ReturnType<typeof getDb>>) {
@@ -230,7 +251,18 @@ function needsApplying(
  * the ordering itself, and that position means the same thing on the next
  * request whatever happened in between.
  */
-export type RenewalCursor = { issuedAt: string; certificateId: string };
+export type RenewalCursor = {
+  /**
+   * The issue instant at **microsecond** precision, as PostgreSQL rendered it.
+   *
+   * Never `Date.prototype.toISOString()`. That is millisecond-resolution, and
+   * a cursor a thousandth of a second before the row it names re-selects that
+   * row on the next page — for ever, since each page then begins where the
+   * last one did.
+   */
+  issuedAt: string;
+  certificateId: string;
+};
 
 /**
  * Why a traversal stopped. The caller has to be able to tell these apart.
@@ -363,7 +395,7 @@ export async function listOutstandingRenewals(
       for (const candidate of page) {
         examined += 1;
         cursor = {
-          issuedAt: candidate.issuedAt.toISOString(),
+          issuedAt: candidate.issuedAtCursor,
           certificateId: candidate.certificateId,
         };
         if (!needsApplying(candidate, positions)) continue;

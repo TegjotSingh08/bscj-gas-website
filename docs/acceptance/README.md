@@ -48,10 +48,10 @@ then does not work.
 
 ### Automated, against a real database
 
-`npm run test:integration` — **156 tests** against a real **PostgreSQL 18.4**
+`npm run test:integration` — **161 tests** against a real **PostgreSQL 18.4**
 started by the test run from `node_modules`, with the real migration chain
 `0000`–`0009` applied and real constraints, transactions and independent
-connections. `npm test` — **2251** unit tests. Both were run on this release
+connections. `npm test` — **2255** unit tests. Both were run on this release
 and both pass.
 
 **Neither touches the development or pilot database.** The harness deletes any
@@ -98,18 +98,25 @@ to the real file input programmatically because the browser tool cannot open a
 native file dialog. Everything after the attachment — the submit, the review
 gate, the release, the recovery — was a real click on the real control.
 
-### Owner-observed, live — **preserved from earlier, still the only live evidence**
+### Owner-observed, live — **the only live evidence, and it is real evidence**
 
-On the pilot, 21 September 2026: a tenant **invitation received at 02:30**, the
-tenant **booked at 02:39**, the **confirmation received at 02:45**, and the
-appointment **visible in the dedicated pilot Google Calendar**. Agency
-invitation and password setup also completed. These are the owner's
-observations, not mine, and nothing since has re-verified them.
+On the pilot at `d4d3c82`, 21 September 2026: a tenant **invitation received at
+02:30**, the tenant **booked at 02:39**, the **confirmation received at 02:45**,
+and the appointment **visible in the dedicated pilot Google Calendar**. Agency
+invitation and password setup also completed.
 
-### Not verified by anybody
+These are the owner's observations, not mine, and they are **successes**:
+Resend really delivered, and Google Calendar really received the appointment.
+Nothing in this pack should be read as saying email or the calendar is
+unproven. What they do not cover is **this release** — they were taken against
+the previous deployment.
 
-See §6. In particular **automatic email retries have never run against a real
-provider**, and **no real mail client has rendered these templates**.
+### Without evidence of their own
+
+See §6. In short: the **Blob** document driver has never been called from here;
+the email templates **as they now read** have not been sent or received, though
+delivery itself is proven above; **no real mail client has rendered them**; and
+**automatic retries have never run against a real provider failure**.
 
 ---
 
@@ -288,7 +295,7 @@ PDF structure) so the upload and review screens can be exercised.
 | --- | --- |
 | **Admin → Renewals due** (`/admin/due`) | New. Overdue, due in a range **you choose and it shows back to you**, and properties with no date at all. A property with a job already open says so with its reference, so nobody chases work already in hand. |
 | **Admin → Reconciliation** (`/admin/reconcile`) | The message queue is now row-by-row instead of three counts: what it is, which job, how many attempts, what the last reason was in plain words, and a **Try sending it again** button on messages that have genuinely given up. |
-| **Admin → Reconciliation**, the renewals section | It now says when it has **not** finished looking. The search over released certificates is bounded so a page render cannot become a full scan; if it stops at that bound it says how many it examined and offers **Continue from here** rather than printing an empty list. A failed read says the records are *unknown*, and "Nothing outstanding." is withheld until every source has actually answered. |
+| **Admin → Reconciliation**, the renewals section | It now says when it has **not** finished looking. The search over released certificates is bounded so a page render cannot become a full scan; if it stops at that bound it says how many it examined and offers **Continue from here** rather than printing an empty list. A failed read says the records are *unknown*, and "Nothing outstanding." is withheld until every source has actually answered. A **continuation** page says so in as many words, carries **Back to the start**, and never claims a clean result — reaching the end of a tail proves nothing about the head. |
 | **Admin → Agencies → Import settings** | The landlord-contact setting now has **three** options, each stating what is recorded and what still refuses afterwards. |
 | **Portfolio → Import** preview (agency) | Held rows are separated from unreadable rows; contactless landlords are counted and explained; same-name landlords are asked about. |
 | **Admin → job → issued certificate** | New **Update the renewal from this certificate** button. Safe to press at any time. |
@@ -438,7 +445,18 @@ cycle, and the connected workflow from job request to recorded payment.
 including the whole certificate path and both access boundaries that were
 previously asserted only against a lookup table.
 
-**Still not verified, by me or by anybody:**
+**Live, and already observed by the owner — this is not an unverified area.**
+On the pilot at `d4d3c82`, 21 September 2026: an agency invitation delivered
+and its password set, a tenant invitation **received**, the tenant's booking
+made, the **confirmation received**, and the appointment **present in the
+dedicated pilot Google Calendar**. Those are real deliveries through Resend
+and real writes to Google, observed by the owner. Saying "email has never been
+verified" would be wrong, and the earlier wording here came close to it.
+
+What that evidence does **not** cover is this release: it was taken against
+the previous deployment, before the changes below.
+
+**Still without evidence of their own:**
 
 - **The pilot's own database.** The suites run against a throwaway server and
   must not touch the pilot. Migration `0009` has been applied only there.
@@ -457,14 +475,24 @@ previously asserted only against a lookup table.
   cannot be influenced at run time at all. The harness therefore runs
   `next dev`, which is the only configuration the store permits — the
   safeguard is honoured rather than worked around.
-- **Real email delivery.** The transport is captured in every test; Resend has
-  never been called from here.
+- **The email templates as they now read.** Delivery itself is proven (above);
+  what has changed since is the wording and layout, and no message in this
+  release's form has been sent or received. Send one of each on the pilot and
+  read it.
+- **Any real mail client's rendering.** The templates were rendered in a
+  browser only, never in Outlook. Independent of delivery working, and
+  **not claimed**.
 - **Automatic retries against a real provider failure.** A first-attempt
   success exercises none of the retry path, and a failure must not be
-  manufactured against live services to close it. **Not claimed.**
-- **Outlook, or any real mail client.** The templates were rendered in a
-  browser only. **Not claimed.**
-- **Live calendar, Blob and Redis behaviour.**
+  manufactured against live services to close it. The queue's
+  give-up-and-ask-a-person behaviour is covered against real PostgreSQL; the
+  provider's half of it is **not claimed**.
+- **Redis, and Google Calendar on this release.** The calendar write was
+  observed on the previous deployment; nothing in this release touches that
+  path, and nothing has re-verified it either.
+- **Nothing was sent, written or called from here.** Every suite captures the
+  transport, and the browser runs had Resend, Google, Redis and Blob
+  configured as absent.
 
 ## 7. Owner decisions that actually block real agency use
 

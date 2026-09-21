@@ -182,6 +182,51 @@ Every other interaction was a click on the real control.
 | `npm run lint` | see below |
 | `npm run build` | see below |
 
+## Correction pass — 22 September 2026
+
+**Narrow.** One defect in the cursor added by the third pass, one over-claim on
+the page that uses it, and one over-broad sentence in the report. No feature
+work.
+
+| | What was wrong | What was done |
+| --- | --- | --- |
+| 1 | The keyset cursor was built with `candidate.issuedAt.toISOString()`. A JavaScript `Date` holds **milliseconds**; `timestamptz` holds **microseconds**. So a row issued at `09:00:00.123456+00` produced the cursor `…123Z` — a position *earlier than the row it came from* — and `issued_at > cursor` matched that row again. Every page began where the last one did, and the traversal repeated for ever. Reproduced independently: the tie test failed `20 !== 6`. | The cursor value is rendered by PostgreSQL with `to_char(… at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')` and never passes through a `Date`. The id tie-breaker is unchanged. Nothing stored was rewritten, no precision was given up, and no time was added to anything. |
+| 2 | A continuation page could print **"Nothing outstanding."** Exhausting the records *after* a cursor says nothing about the ones before it. | `summariseReconcile` takes `continued`, and a continuation is never "complete". The section renders even when empty, states its scope, says *"No repairs after that point. Earlier ones, if any, are still on the pages before this."*, and carries **Back to the start**. |
+| 3 | The report listed real email delivery under "not verified by anybody", which is wrong. | The owner's live observations on `d4d3c82` are recorded as the successes they are. What lacks evidence is named precisely: the Blob driver, the templates **as they now read**, any real mail client, and automatic retries against a provider failure. |
+
+### How the fix was established
+
+Each of the five new regressions fails against the truncating cursor and
+passes against the fixed one — verified by putting the truncation back and
+running them. Two pre-existing tests now fail against it too, because the
+seeded history carries microseconds.
+
+| Regression | What it holds |
+| --- | --- |
+| the cursor keeps the microseconds the database stores | the cursor reads `…123456Z`, not `…123Z` |
+| six sharing one microsecond instant | each returned exactly once, then termination |
+| timestamps a microsecond apart | six distinct positions inside one millisecond, in order |
+| across the query's own page boundary | 250 repairs sharing an instant, one call, 250 examined, none twice |
+| continuing after the examination bound | resumes *after* the 2,000, examines 1, ends |
+
+Rendered and read back from the running application on the throwaway
+database: the first page, a continuation (2 of 3, banner and **Back to the
+start** present), a continuation past the last repair (0 rows, no "Nothing
+outstanding."), and a malformed cursor (fails closed to the *unknown* alert,
+no crash).
+
+### Gates on the correction
+
+| Command | Result |
+| --- | --- |
+| `npm run test:integration` | **161 pass, 48 suites, 0 fail** |
+| `npm test` | **2255 pass, 455 suites, 0 fail** |
+| `npm run typecheck` | clean |
+| `npm run lint` | 1 pre-existing warning (`invitationRow`) |
+| `npm run build` | clean, in an isolated checkout |
+
+---
+
 ### Still the owner's, and not done here
 
 The six-step checklist at the top of `docs/acceptance/README.md`. Nothing was
@@ -212,7 +257,18 @@ These block **real agency use** and cannot be invented:
 
 ## Outstanding external verification
 
-- Actual Outlook (and any real mail client) rendering.
+**Already owner-observed, live, on `d4d3c82`** — and not to be re-listed as
+unverified: agency invitation delivered, password set, tenant invitation
+received, booking made, confirmation received, appointment in the dedicated
+pilot Google Calendar. Real Resend deliveries and a real Google write.
+
+Still without evidence of their own, all of them about **this** release:
+
+- The Blob document driver. The certificate screens are browser-verified
+  against the local store; the driver underneath them has never been called.
+- The email templates as they now read — delivery works, the current wording
+  has not been sent or received.
+- Any real mail client's rendering (Outlook in particular).
 - Automatic outbox retries against a real provider failure.
 - The deployed CSV identity/review/commit journey, by the owner.
-- Live calendar, Blob and Redis behaviour.
+- Redis, and the calendar path on this release.

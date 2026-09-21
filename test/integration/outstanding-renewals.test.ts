@@ -476,7 +476,13 @@ async function seedResolvedHistory(count: number): Promise<void> {
         version, status, inspection_date, next_due_date, issued_at)
      select j.id, j.property_id, $1, 'HIST-' || j.reference, 1, 'issued',
             date '2025-01-10', date '2026-01-09',
-            timestamptz '2025-01-15 09:00:00+00'
+            /*
+              A microsecond component on every one of them, deliberately. It
+              costs nothing here and it means the cursor handed back at the
+              examination bound is a sub-millisecond one — which is exactly
+              the cursor that used to re-select its own row.
+            */
+            timestamptz '2025-01-15 09:00:00.000789+00'
               + (row_number() over (order by j.reference)) * interval '1 minute'
      from job j where j.reference like 'BSCJ-HIST%'`,
     [org],
@@ -600,6 +606,77 @@ describe("a genuine repair behind a long run of history", () => {
 });
 
 /**
+ * `count` certificates whose compliance write never landed.
+ *
+ * Written directly, as the residue of failures that happened before today —
+ * the same shape the injected-failure test produces through the real
+ * release path, which is where that path is exercised. Here what is under
+ * test is the traversal, and it needs more of them than one release makes.
+ *
+ * No active cycle exists for these properties at all, so `decidePosition`
+ * answers `establish`: a repair the retry button can make.
+ */
+async function seedUnresolvedFailures(
+  count: number,
+  options: { issuedAt?: string; tag?: string; spacing?: string } = {},
+): Promise<void> {
+  const tag = options.tag ?? "FAIL";
+  const q = conn.client;
+
+  await q.query(
+    `insert into property
+       (agent_organisation_id, customer_id, house_or_name, street, postcode)
+     select $1, $2, $4 || g, $4 || ' Street', 'WV8 8AA'
+     from generate_series(1, $3::int) g`,
+    [fixture.organisationId, fixture.landlordId, count, tag],
+  );
+
+  await q.query(
+    `insert into job
+       (reference, idempotency_key, agent_organisation_id, customer_id,
+        billing_customer_id, property_id, product_id, source,
+        scheduling_method, lifecycle_status, appliance_count,
+        price_total_pence, customer_snapshot, property_snapshot,
+        price_snapshot)
+     select ref, ref, $1, $2, $2, property_id, 'cp12', 'portal',
+            'tenant_selected', 'completed', 1, 4500,
+            '{"name":"Ada Fixture"}'::jsonb,
+            '{"postcode":"WV8 8AA"}'::jsonb,
+            '{"totalPence":4500}'::jsonb
+     from (
+       select p.id as property_id,
+              'BSCJ-' || $3 || lpad(
+                (row_number() over (order by p.id))::text, 4, '0') as ref
+       from property p where p.street = $3 || ' Street'
+     ) numbered`,
+    [fixture.organisationId, fixture.landlordId, tag],
+  );
+
+  await q.query(
+    `insert into certificate
+       (job_id, property_id, agent_organisation_id, certificate_number,
+        version, status, inspection_date, next_due_date, issued_at)
+     select j.id, j.property_id, $1, $3 || '-' || j.reference, 1, 'issued',
+            date '2026-09-20', date '2027-09-19',
+            $2::timestamptz
+              + (row_number() over (order by j.reference)) * $4::interval
+     from job j where j.reference like 'BSCJ-' || $3 || '%'`,
+    [
+      fixture.organisationId,
+      options.issuedAt ?? "2026-10-01 09:00:00+00",
+      tag,
+      /*
+        Identical timestamps when an instant is named, so ties are genuinely
+        tested — and `spacing` when the interval itself is the point, which
+        is how "a microsecond apart" is written below.
+      */
+      options.spacing ??
+        (options.issuedAt === undefined ? "1 minute" : "0 seconds"),
+    ],
+  );
+}
+
+/**
  * The traversal itself: its bound, its order, and its continuation.
  *
  * A bound on the work is right — a page render must not become a full scan of
@@ -608,72 +685,6 @@ describe("a genuine repair behind a long run of history", () => {
  * position to resume from, and these tests are what hold that to it.
  */
 describe("the walk over candidates", () => {
-  /**
-   * `count` certificates whose compliance write never landed.
-   *
-   * Written directly, as the residue of failures that happened before today —
-   * the same shape the injected-failure test produces through the real
-   * release path, which is where that path is exercised. Here what is under
-   * test is the traversal, and it needs more of them than one release makes.
-   *
-   * No active cycle exists for these properties at all, so `decidePosition`
-   * answers `establish`: a repair the retry button can make.
-   */
-  async function seedUnresolvedFailures(
-    count: number,
-    options: { issuedAt?: string; tag?: string } = {},
-  ): Promise<void> {
-    const tag = options.tag ?? "FAIL";
-    const q = conn.client;
-
-    await q.query(
-      `insert into property
-         (agent_organisation_id, customer_id, house_or_name, street, postcode)
-       select $1, $2, $4 || g, $4 || ' Street', 'WV8 8AA'
-       from generate_series(1, $3::int) g`,
-      [fixture.organisationId, fixture.landlordId, count, tag],
-    );
-
-    await q.query(
-      `insert into job
-         (reference, idempotency_key, agent_organisation_id, customer_id,
-          billing_customer_id, property_id, product_id, source,
-          scheduling_method, lifecycle_status, appliance_count,
-          price_total_pence, customer_snapshot, property_snapshot,
-          price_snapshot)
-       select ref, ref, $1, $2, $2, property_id, 'cp12', 'portal',
-              'tenant_selected', 'completed', 1, 4500,
-              '{"name":"Ada Fixture"}'::jsonb,
-              '{"postcode":"WV8 8AA"}'::jsonb,
-              '{"totalPence":4500}'::jsonb
-       from (
-         select p.id as property_id,
-                'BSCJ-' || $3 || lpad(
-                  (row_number() over (order by p.id))::text, 4, '0') as ref
-         from property p where p.street = $3 || ' Street'
-       ) numbered`,
-      [fixture.organisationId, fixture.landlordId, tag],
-    );
-
-    await q.query(
-      `insert into certificate
-         (job_id, property_id, agent_organisation_id, certificate_number,
-          version, status, inspection_date, next_due_date, issued_at)
-       select j.id, j.property_id, $1, $3 || '-' || j.reference, 1, 'issued',
-              date '2026-09-20', date '2027-09-19',
-              $2::timestamptz
-                + (row_number() over (order by j.reference)) * $4::interval
-       from job j where j.reference like 'BSCJ-' || $3 || '%'`,
-      [
-        fixture.organisationId,
-        options.issuedAt ?? "2026-10-01 09:00:00+00",
-        tag,
-        // Identical timestamps when asked for, so ties are genuinely tested.
-        options.issuedAt === undefined ? "1 minute" : "0 seconds",
-      ],
-    );
-  }
-
   test("reaching the bound is an incomplete answer, not an empty one", async () => {
     /*
       Two thousand resolved certificates — a portfolio BSCJ would reach in a
@@ -726,8 +737,11 @@ describe("the walk over candidates", () => {
       can repeat a row or skip one — skipping being the failure that matters,
       because the row it skips is a repair nobody is told about. The
       certificate id breaks the tie.
+
+      The shared instant carries **microseconds**, which is the precision
+      `timestamptz` actually keeps. See the block below for why that matters.
     */
-    await seedUnresolvedFailures(6, { issuedAt: "2026-10-01 09:00:00+00" });
+    await seedUnresolvedFailures(6, { issuedAt: "2026-10-01 09:00:00.123456+00" });
 
     const { rows } = await conn.client.query<{ n: string }>(
       `select count(distinct issued_at)::text as n from certificate`,
@@ -757,5 +771,168 @@ describe("the walk over candidates", () => {
       cursor: null,
       examined: 0,
     });
+  });
+});
+
+/**
+ * Precision finer than a millisecond, which is what the database keeps.
+ *
+ * **The defect these were written for.** The cursor was built with
+ * `candidate.issuedAt.toISOString()`. A JavaScript `Date` holds
+ * **milliseconds**; PostgreSQL `timestamptz` holds **microseconds**. So a
+ * certificate issued at `09:00:00.123456+00` produced the cursor
+ * `09:00:00.123Z` — a position *earlier* than the row it was taken from.
+ * `issued_at > cursor` then matched that same row again, and because every
+ * page after the first began at the same truncated instant, the traversal
+ * returned the same certificates for ever. It stopped only when the caller
+ * ran out of patience: the tie test above failed `20 !== 6`.
+ *
+ * It is not a tie-breaking problem and the id tie-breaker did not help — the
+ * row was not tied with anything, it was strictly greater than its own
+ * cursor. The fix is that the cursor value is rendered by PostgreSQL at full
+ * precision and never passes through a `Date`.
+ *
+ * Nothing stored changes, no precision is given up, and no time is added to
+ * anything.
+ */
+describe("a cursor over sub-millisecond timestamps", () => {
+  /** Walk one row at a time, following the cursor, as a paging caller would. */
+  async function walk(limit = 1, guardAt = 400) {
+    const seen: string[] = [];
+    let cursor: RenewalCursor | null = null;
+    let steps = 0;
+
+    for (; steps < guardAt; steps += 1) {
+      const step = await listOutstandingRenewals({ limit, after: cursor });
+      assert.notEqual(step, null, "the records were readable");
+      seen.push(...step!.rows.map((row) => row.jobReference));
+      if (step!.stoppedBecause === "exhausted") {
+        assert.equal(step!.cursor, null, "an exhausted walk names no position");
+        return { seen, steps: steps + 1, terminated: true };
+      }
+      cursor = step!.cursor;
+    }
+    return { seen, steps, terminated: false };
+  }
+
+  test("the cursor keeps the microseconds the database stores", async () => {
+    /*
+      The property the fix rests on, asserted directly rather than inferred
+      from the walk terminating. A cursor truncated to milliseconds would
+      read `…:00.123Z` here.
+    */
+    await seedUnresolvedFailures(1, { issuedAt: "2026-10-01 09:00:00.123456+00" });
+
+    const page = await listOutstandingRenewals({ limit: 1 });
+    assert.equal(page!.rows.length, 1);
+    assert.equal(page!.cursor?.issuedAt, "2026-10-01T09:00:00.123456Z");
+  });
+
+  test("six sharing one microsecond instant are each returned exactly once", async () => {
+    await seedUnresolvedFailures(6, { issuedAt: "2026-10-01 09:00:00.123456+00" });
+
+    const { seen, terminated } = await walk();
+    assert.equal(terminated, true, "the walk ended rather than going round");
+    assert.equal(seen.length, 6, "none skipped, none repeated");
+    assert.equal(new Set(seen).size, 6);
+  });
+
+  test("timestamps a microsecond apart are distinguished, not conflated", async () => {
+    /*
+      Six certificates inside a **single millisecond**: `…123456` through
+      `…123461`. Truncated to milliseconds they are one instant and
+      indistinguishable; at the precision the column actually has they are six
+      ordered positions. The walk must see six, once each, in order.
+    */
+    await seedUnresolvedFailures(6, {
+      issuedAt: "2026-10-01 09:00:00.123455+00",
+      spacing: "1 microsecond",
+    });
+
+    const { rows } = await conn.client.query<{ n: string; span: string }>(
+      `select count(distinct issued_at)::text as n,
+              (max(issued_at) - min(issued_at))::text as span
+         from certificate`,
+    );
+    assert.equal(rows[0].n, "6", "six distinct instants");
+    assert.equal(rows[0].span, "00:00:00.000005", "inside one millisecond");
+
+    const { seen, terminated } = await walk();
+    assert.equal(terminated, true);
+    assert.deepEqual(
+      seen,
+      [...seen].sort(),
+      "and in the order the references were issued",
+    );
+    assert.equal(seen.length, 6);
+    assert.equal(new Set(seen).size, 6);
+  });
+
+  test("a walk across the query's own page boundary loses and repeats nothing", async () => {
+    /*
+      Two hundred and fifty repairs sharing one microsecond instant, against
+      an internal page of two hundred. One call, so the boundary is crossed by
+      the cursor rather than by the caller — which is the path that has no
+      test above it otherwise, and the one the truncation broke silently.
+    */
+    await seedUnresolvedFailures(250, {
+      issuedAt: "2026-10-01 09:00:00.654321+00",
+    });
+
+    const all = await listOutstandingRenewals({ limit: 1_000 });
+    assert.notEqual(all, null);
+    assert.equal(all!.stoppedBecause, "exhausted");
+    assert.equal(all!.cursor, null);
+    assert.equal(all!.examined, 250, "every candidate was judged once");
+
+    const references = all!.rows.map((row) => row.jobReference);
+    assert.equal(references.length, 250);
+    assert.equal(new Set(references).size, 250, "no certificate twice");
+  });
+
+  test("continuing after the examination bound makes progress and ends", async () => {
+    /*
+      The bound hands back a cursor. With the truncating cursor that position
+      was a lie by up to a millisecond, so continuing re-examined rows the
+      first call had already judged and the second call could not finish
+      either. Here the history is two thousand certificates whose instants all
+      carry microseconds, with one genuine repair behind them.
+    */
+    await seedResolvedHistory(2_000);
+    const certificateId = await failedRelease();
+
+    const first = await listOutstandingRenewals();
+    assert.equal(first!.stoppedBecause, "bound");
+    assert.deepEqual(first!.rows, []);
+    assert.equal(first!.examined, 2_000);
+    assert.match(
+      first!.cursor!.issuedAt,
+      /\.\d{6}Z$/,
+      "the position it stopped at is stated to the microsecond",
+    );
+
+    const second = await listOutstandingRenewals({ after: first!.cursor });
+    assert.equal(second!.stoppedBecause, "exhausted");
+    assert.equal(second!.cursor, null);
+    assert.equal(
+      second!.examined,
+      1,
+      "it resumed after the two thousand, not among them",
+    );
+    assert.deepEqual(
+      second!.rows.map((row) => row.jobReference),
+      [fixture.jobReference],
+    );
+
+    // And the repair the continuation found is a real one the button clears.
+    const { updateRenewalFromCertificate } = await import(
+      "../../src/lib/documents/certificates"
+    );
+    const retried = await updateRenewalFromCertificate({
+      session: admin() as never,
+      jobId: fixture.jobId,
+      certificateId,
+    });
+    assert.equal(retried.ok, true);
   });
 });

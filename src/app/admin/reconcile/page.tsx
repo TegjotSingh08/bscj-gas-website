@@ -101,6 +101,7 @@ export default async function ReconcilePage({
 
   const { nothingOutstanding, everythingKnown } = summariseReconcile({
     renewals,
+    continued: after !== null,
     messagesReadable: outstanding !== null,
     reservationsListed: queue.unpersistedListed,
     counts: {
@@ -193,7 +194,9 @@ export default async function ReconcilePage({
             note="The appointment exists in the calendar and the customer has their confirmation. Only our own record is missing."
             rows={queue.unpersistedBookings}
           />
-          {renewals && <OutstandingRenewals renewals={renewals} />}
+          {renewals && (
+            <OutstandingRenewals renewals={renewals} continued={after !== null} />
+          )}
           <MessageQueue rows={messageRows} />
         </div>
       )}
@@ -221,9 +224,26 @@ export default async function ReconcilePage({
  * hide exactly what this section exists to show. So an incomplete answer says
  * so and offers the continuation, even with nothing to list.
  */
-function OutstandingRenewals({ renewals }: { renewals: OutstandingRenewals }) {
+function OutstandingRenewals({
+  renewals,
+  continued,
+}: {
+  renewals: OutstandingRenewals;
+  /** This page began at a cursor, so it covers only part of the ordering. */
+  continued: boolean;
+}) {
   const { rows, stoppedBecause, cursor, examined } = renewals;
-  if (rows.length === 0 && stoppedBecause === "exhausted") return null;
+
+  /*
+    An empty, finished, **first** page is genuinely nothing to show. An empty
+    finished *continuation* is not: it means "nothing after that position",
+    and disappearing would leave the reader believing they had seen the
+    whole list. So a continuation always renders, if only to say what it
+    covered and offer the way back.
+  */
+  if (rows.length === 0 && stoppedBecause === "exhausted" && !continued) {
+    return null;
+  }
 
   const continueHref = cursor
     ? `/admin/reconcile?afterIssuedAt=${encodeURIComponent(cursor.issuedAt)}&afterCertificate=${encodeURIComponent(cursor.certificateId)}`
@@ -235,13 +255,38 @@ function OutstandingRenewals({ renewals }: { renewals: OutstandingRenewals }) {
         Certificates released without their renewal ({rows.length}
         {stoppedBecause === "exhausted" ? "" : " so far"})
       </h2>
-      <p className="mt-1 text-xs leading-relaxed text-navy-700">
-        Each of these is a released certificate whose property&rsquo;s next-due
-        date did not move — the second write did not land. The document is
-        genuinely released; only the renewal is missing. Open the job and press
-        <span className="font-bold"> Update the renewal from this certificate</span>,
-        which is safe to press at any time.
-      </p>
+
+      {continued && (
+        <p
+          role="status"
+          className="mt-2 rounded-xl border-2 border-navy-300 bg-white px-4 py-3 text-xs leading-relaxed text-navy-800"
+        >
+          <strong>This is a continuation.</strong> It covers only certificates
+          issued after the point the previous page stopped at. Anything earlier
+          was not looked at here, so reaching the end of this list does{" "}
+          <strong>not</strong> mean there is nothing outstanding.{" "}
+          <Link
+            href="/admin/reconcile"
+            className="font-bold text-flame-600 underline"
+          >
+            Back to the start
+          </Link>
+          .
+        </p>
+      )}
+      {rows.length > 0 && (
+        <p className="mt-1 text-xs leading-relaxed text-navy-700">
+          Each of these is a released certificate whose property&rsquo;s
+          next-due date did not move — the second write did not land. The
+          document is genuinely released; only the renewal is missing. Open the
+          job and press
+          <span className="font-bold">
+            {" "}
+            Update the renewal from this certificate
+          </span>
+          , which is safe to press at any time.
+        </p>
+      )}
 
       {rows.length > 0 && (
         <ul className="mt-3 space-y-2">
@@ -261,6 +306,13 @@ function OutstandingRenewals({ renewals }: { renewals: OutstandingRenewals }) {
             </li>
           ))}
         </ul>
+      )}
+
+      {rows.length === 0 && stoppedBecause === "exhausted" && (
+        <p className="mt-3 text-sm font-semibold text-navy-900">
+          No repairs after that point. Earlier ones, if any, are still on the
+          pages before this.
+        </p>
       )}
 
       {stoppedBecause !== "exhausted" && continueHref && (

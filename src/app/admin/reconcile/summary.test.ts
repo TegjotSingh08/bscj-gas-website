@@ -24,6 +24,7 @@ const exhausted = { rows: [], stoppedBecause: "exhausted" as const };
 
 const base = {
   renewals: exhausted,
+  continued: false,
   messagesReadable: true,
   reservationsListed: true,
   counts: empty,
@@ -114,5 +115,55 @@ describe("the other two unknowns", () => {
     const result = summariseReconcile({ ...base, reservationsListed: false });
     assert.equal(result.everythingKnown, false);
     assert.equal(result.nothingOutstanding, true);
+  });
+});
+
+describe("when the page began at a cursor", () => {
+  /**
+   * **Reaching the end of a continuation is not reaching the end.**
+   *
+   * The walk started after a position the previous page stopped at, so
+   * everything before that position was never looked at on this request.
+   * `exhausted` here means "nothing after that point" — and printing
+   * "Nothing outstanding." on the strength of it would report a tail as if
+   * it were the whole, which is the same error as reporting a failed query
+   * as a clean one.
+   */
+  test("an empty continuation is not a clean bill of health", () => {
+    const result = summariseReconcile({ ...base, continued: true });
+    assert.equal(result.renewalsPartialScope, true);
+    assert.equal(result.nothingOutstanding, false);
+    assert.equal(result.everythingKnown, false);
+    // Not an error state either — the query worked and finished.
+    assert.equal(result.renewalsUnavailable, false);
+    assert.equal(result.renewalsIncomplete, false);
+  });
+
+  test("and neither is one that found nothing with every other queue empty", () => {
+    const result = summariseReconcile({
+      ...base,
+      continued: true,
+      renewals: { rows: [], stoppedBecause: "exhausted" },
+      counts: empty,
+    });
+    assert.equal(result.nothingOutstanding, false);
+  });
+
+  test("a continuation that found repairs reports them as partial too", () => {
+    const result = summariseReconcile({
+      ...base,
+      continued: true,
+      renewals: { rows: [{}], stoppedBecause: "limit" },
+    });
+    assert.equal(result.renewalsPartialScope, true);
+    assert.equal(result.renewalsIncomplete, true);
+    assert.equal(result.nothingOutstanding, false);
+  });
+
+  test("the first page keeps its unqualified answer", () => {
+    const result = summariseReconcile({ ...base, continued: false });
+    assert.equal(result.renewalsPartialScope, false);
+    assert.equal(result.nothingOutstanding, true);
+    assert.equal(result.everythingKnown, true);
   });
 });
