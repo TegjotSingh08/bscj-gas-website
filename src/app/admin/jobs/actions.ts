@@ -12,6 +12,7 @@ import {
   queueCertificateEmail,
   releaseCertificate,
   requeueCertificateEmail,
+  updateRenewalFromCertificate,
 } from "@/lib/documents/certificates";
 import { isoDateInZone } from "@/lib/booking/time";
 import { bookingConfig } from "@/lib/booking/config";
@@ -216,6 +217,37 @@ export async function releaseCertificateAction(
 
   revalidatePath(`/admin/jobs/${jobId}`);
   revalidatePath(`/portal/jobs/${jobId}`);
+  return { message: result.message };
+}
+
+/**
+ * Moving the renewal for a certificate that is already released.
+ *
+ * The recovery half of releasing. The certificate row and the compliance row
+ * cannot be one statement — the cycle has to point at the certificate's id,
+ * which does not exist until the certificate is written — so "released, but
+ * the renewal did not move" is reachable. This is the button that clears it,
+ * and it is idempotent, so pressing it when nothing is wrong changes nothing.
+ */
+export async function updateRenewalAction(
+  _previous: ReleaseActionState,
+  form: FormData,
+): Promise<ReleaseActionState> {
+  const session = await requireAdmin();
+
+  const jobId = String(form.get("jobId") ?? "");
+  const certificateId = String(form.get("certificateId") ?? "");
+  if (!jobId || !certificateId) return { error: "No certificate was named." };
+
+  const result = await updateRenewalFromCertificate({
+    session,
+    jobId,
+    certificateId,
+  });
+  if (!result.ok) return { error: result.error };
+
+  revalidatePath(`/admin/jobs/${jobId}`);
+  revalidatePath("/admin/due");
   return { message: result.message };
 }
 

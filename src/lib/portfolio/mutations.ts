@@ -467,12 +467,22 @@ export async function replaceTenancy(
   }
 }
 
-/** Records or updates what the property already holds. */
+/**
+ * Records or updates what the property already holds, for **one service**.
+ *
+ * `productId` defaults to the CP12 because that is what every existing caller
+ * means — an imported spreadsheet's `certificate_expiry` column, and the
+ * manual "record what they already have" form. It is a parameter rather than a
+ * constant because the supersede below is scoped by it: superseding *every*
+ * active cycle when recording a CP12 position would quietly cancel a boiler
+ * service position that has nothing to do with it.
+ */
 export async function setCompliancePosition(
   organisationId: string,
   propertyId: string,
   input: CompliancePositionInput,
   actorUserId: string,
+  productId: string = "cp12",
 ): Promise<MutationResult> {
   const db = getDb();
   if (!db) return { status: "not_configured" };
@@ -504,13 +514,20 @@ export async function setCompliancePosition(
           and(
             eq(complianceCycles.propertyId, propertyId),
             eq(complianceCycles.agentOrganisationId, organisationId),
+            /*
+              **Scoped to the one service.** Without this, recording a CP12
+              position would supersede a boiler-service position as well —
+              cancelling a record nobody asked about, and leaving the property
+              looking as though the service had never been established.
+            */
+            eq(complianceCycles.productId, productId),
             eq(complianceCycles.status, "active"),
           ),
         ),
       db.insert(complianceCycles).values({
         propertyId,
         agentOrganisationId: organisationId,
-        productId: "cp12",
+        productId,
         inspectionDate: input.inspectionDate,
         dueDate: input.dueDate,
         dueDateSource: "manual",
@@ -521,7 +538,7 @@ export async function setCompliancePosition(
         agentOrganisationId: organisationId,
         kind: "compliance.recorded",
         actor: `user:${actorUserId}`,
-        detail: { dueDate: input.dueDate },
+        detail: { dueDate: input.dueDate, productId },
       }),
     ]);
 

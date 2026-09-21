@@ -28,6 +28,7 @@ import {
   isIssued as isInvoiceIssued,
   type InvoiceStatus,
 } from "@/lib/invoices/model";
+import { applyCertificateToCompliance } from "@/lib/compliance/apply";
 import { checkPdf } from "./validate";
 import {
   canUploadCertificate,
@@ -69,7 +70,19 @@ import {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type DocumentResult =
-  | { ok: true; message: string; documentId?: string }
+  | {
+      ok: true;
+      message: string;
+      documentId?: string;
+      /**
+       * The certificate is released but its renewal did not move.
+       *
+       * Set only by `releaseCertificate`, and only when the compliance write
+       * failed after the certificate was written. It is what the screen uses to
+       * offer the retry rather than leaving the two records quietly disagreeing.
+       */
+      complianceOutstanding?: boolean;
+    }
   | { ok: false; error: string; errors?: Record<string, string> };
 
 const NOT_FOUND = "That job could not be found.";
@@ -324,6 +337,8 @@ export async function releaseCertificate(input: {
       reference: jobs.reference,
       propertyId: jobs.propertyId,
       agentOrganisationId: jobs.agentOrganisationId,
+      // Which service this job is, so the release moves the right renewal.
+      productId: jobs.productId,
     })
     .from(jobs)
     .where(eq(jobs.id, jobId))
@@ -457,11 +472,140 @@ export async function releaseCertificate(input: {
     },
   });
 
+  /*
+    **The renewal, which is the point of the certificate existing.**
+
+    Until this, releasing wrote a `certificate` row and stopped: every screen
+    that shows a due date reads `compliance_cycle`, and nothing updated it. An
+    administrator could review and release a perfectly good CP12 and the
+    property would still show the old date, or none.
+
+    It is a second step rather than part of the batch above because the cycle
+    has to point at the certificate's id, which does not exist until the insert
+    returns. So it can fail on its own — and when it does, the certificate is
+    genuinely released and the renewal genuinely has not moved. That is
+    reported rather than swallowed, and `applyCertificateToCompliance` is
+    idempotent, so the administrator's retry is safe.
+  */
+  const applied = await applyCertificateToCompliance({
+    organisationId: job.agentOrganisationId,
+    propertyId: job.propertyId,
+    jobId: job.id,
+    jobProductId: job.productId,
+    certificate: {
+      id: certificateId,
+      jobId: job.id,
+      inspectionDate: checked.details.inspectionDate,
+      nextDueDate: checked.details.nextDueDate,
+    },
+    actorUserId: session.user.id,
+  });
+
+  const released = isCorrection
+    ? `Released as version ${nextVersion}. The previous version is kept and marked superseded.`
+    : "Released. The agency can now see it.";
+
+  if (applied.status === "failed" || applied.status === "not_configured") {
+    return {
+      ok: true,
+      message: `${released} The renewal date could not be updated — the certificate is released, but this property's next-due date has not moved. Use "Update the renewal from this certificate" on this job to try again.`,
+      complianceOutstanding: true,
+    };
+  }
+
   return {
     ok: true,
-    message: isCorrection
-      ? `Released as version ${nextVersion}. The previous version is kept and marked superseded.`
-      : "Released. The agency can now see it.",
+    message:
+      applied.status === "ok" && applied.message
+        ? `${released} ${applied.message}`
+        : released,
+  };
+}
+
+/**
+ * Moving the renewal for a certificate that is already released.
+ *
+ * The recovery half of the step above. It exists because the cycle write can
+ * fail after the certificate has been written, and an administrator looking at
+ * a released certificate whose due date did not move needs something to press
+ * rather than a developer. Idempotent, so pressing it when nothing is wrong
+ * changes nothing.
+ */
+export async function updateRenewalFromCertificate(input: {
+  session: Session;
+  jobId: string;
+  certificateId: string;
+}): Promise<DocumentResult> {
+  const { session, jobId, certificateId } = input;
+  assertCan(session.user.role, "certificate:issue");
+  if (session.scope.kind !== "all") return { ok: false, error: NOT_FOUND };
+
+  const db = getDb();
+  if (!db) return { ok: false, error: NO_DATABASE };
+  if (!UUID.test(jobId) || !UUID.test(certificateId)) {
+    return { ok: false, error: NOT_FOUND };
+  }
+
+  const [row] = await db
+    .select({
+      certificateId: certificates.id,
+      inspectionDate: certificates.inspectionDate,
+      nextDueDate: certificates.nextDueDate,
+      status: certificates.status,
+      jobId: jobs.id,
+      propertyId: jobs.propertyId,
+      agentOrganisationId: jobs.agentOrganisationId,
+      productId: jobs.productId,
+    })
+    .from(certificates)
+    .innerJoin(jobs, eq(jobs.id, certificates.jobId))
+    .where(and(eq(certificates.id, certificateId), eq(certificates.jobId, jobId)))
+    .limit(1);
+
+  if (!row) return { ok: false, error: "That certificate could not be found." };
+  /*
+    Only the certificate that currently stands. Re-applying a superseded
+    version would walk the property's renewal backwards to a document that has
+    already been corrected.
+  */
+  if (row.status !== "issued") {
+    return {
+      ok: false,
+      error: "That version has been superseded. Use the current certificate.",
+    };
+  }
+
+  const applied = await applyCertificateToCompliance({
+    organisationId: row.agentOrganisationId,
+    propertyId: row.propertyId,
+    jobId: row.jobId,
+    jobProductId: row.productId,
+    certificate: {
+      id: row.certificateId,
+      jobId: row.jobId,
+      inspectionDate: row.inspectionDate,
+      nextDueDate: row.nextDueDate,
+    },
+    actorUserId: session.user.id,
+  });
+
+  if (applied.status === "not_applicable") {
+    return {
+      ok: false,
+      error:
+        "This job is a boiler service, which has no certificate renewal to update.",
+    };
+  }
+  if (applied.status !== "ok") {
+    return {
+      ok: false,
+      error: "The renewal could not be updated just now. Try again shortly.",
+    };
+  }
+
+  return {
+    ok: true,
+    message: applied.message ?? "The renewal already matched this certificate.",
   };
 }
 

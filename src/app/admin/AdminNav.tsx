@@ -14,6 +14,7 @@ import { SignOutButton } from "./SignOutButton";
  */
 export type AdminSection =
   | "dashboard"
+  | "due"
   | "jobs"
   | "invoices"
   | "organisations"
@@ -30,6 +31,7 @@ export function AdminNav({
 }) {
   const links = [
     { href: "/admin", label: "Dashboard", key: "dashboard" },
+    { href: "/admin/due", label: "Renewals due", key: "due" },
     { href: "/admin/jobs", label: "Jobs", key: "jobs" },
     { href: "/admin/invoices", label: "Invoices", key: "invoices" },
     { href: "/admin/organisations", label: "Agencies", key: "organisations" },

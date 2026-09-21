@@ -64,6 +64,13 @@
       "when": 1790400000000,
       "tag": "0008_landlord_contact_optional",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1790500000000,
+      "tag": "0009_one_active_cycle_per_service",
+      "breakpoints": true
     }
   ]
 }

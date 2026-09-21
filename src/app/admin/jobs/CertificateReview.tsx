@@ -5,6 +5,7 @@ import { useActionState, useState } from "react";
 import {
   queueCertificateEmailAction,
   releaseCertificateAction,
+  updateRenewalAction,
   requeueCertificateEmailAction,
   type ReleaseActionState,
 } from "./actions";
@@ -314,6 +315,69 @@ function RetryRecipient({
           {state.error}
         </span>
       )}
+    </form>
+  );
+}
+
+/**
+ * Moving the renewal from a certificate that is already released.
+ *
+ * The recovery control. Releasing writes the certificate and then the
+ * compliance position, and the two cannot be one statement — the position has
+ * to point at the certificate's id, which does not exist until the certificate
+ * is written. So "released, but the renewal did not move" is reachable, and the
+ * answer is a button rather than a developer.
+ *
+ * Idempotent: pressing it when the renewal already matches says so and changes
+ * nothing. It is shown on every issued certificate rather than only after a
+ * failure, because an administrator who sees a stale due date should not have
+ * to reproduce the failure to find the fix.
+ */
+export function UpdateRenewal({
+  jobId,
+  certificateId,
+}: {
+  jobId: string;
+  certificateId: string;
+}) {
+  const [state, action, pending] = useActionState<ReleaseActionState, FormData>(
+    updateRenewalAction,
+    {},
+  );
+
+  return (
+    <form action={action} className="mt-3">
+      <input type="hidden" name="jobId" value={jobId} />
+      <input type="hidden" name="certificateId" value={certificateId} />
+
+      {state.error && (
+        <p
+          role="alert"
+          className="mb-2 rounded-lg border-2 border-flame-500 bg-flame-400/10 px-3 py-2 text-xs font-semibold text-navy-900"
+        >
+          {state.error}
+        </p>
+      )}
+      {state.message && (
+        <p
+          role="status"
+          className="mb-2 rounded-lg border-2 border-navy-200 bg-navy-50 px-3 py-2 text-xs font-semibold text-navy-900"
+        >
+          {state.message}
+        </p>
+      )}
+
+      <button
+        type="submit"
+        disabled={pending}
+        className="rounded-lg border-2 border-navy-300 bg-white px-3 py-1.5 text-xs font-bold text-navy-900 hover:border-navy-600 disabled:opacity-60"
+      >
+        {pending ? "Updating…" : "Update the renewal from this certificate"}
+      </button>
+      <span className="ml-2 text-xs text-navy-600">
+        Safe to press at any time — it does nothing if the renewal already
+        matches.
+      </span>
     </form>
   );
 }

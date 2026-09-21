@@ -36,6 +36,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 // ---------------------------------------------------------------------------
 // Enumerations
@@ -1383,6 +1384,22 @@ export const complianceCycles = pgTable(
     index("compliance_cycle_organisation_idx").on(table.agentOrganisationId),
     index("compliance_cycle_due_idx").on(table.dueDate),
     index("compliance_cycle_status_idx").on(table.status),
+    /*
+      **One active position per property, per service.**
+
+      The application supersedes the active cycle and inserts its replacement
+      in a single batch, which is correct in isolation and not enough: two
+      requests arriving together can each read "nothing active", each insert,
+      and leave the property with two active positions that no later read can
+      choose between. This makes the loser of that race fail instead.
+
+      Partial, because superseded and cancelled cycles are the property's
+      history and there are meant to be many — only `active` is singular. A
+      plain unique index would forbid next year's certificate.
+    */
+    uniqueIndex("compliance_cycle_one_active_per_service")
+      .on(table.propertyId, table.productId)
+      .where(sql`${table.status} = 'active'`),
   ],
 );
 

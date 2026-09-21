@@ -26,7 +26,11 @@ import { assignRefusal, canAssign, canUnassign } from "@/lib/jobs/work";
 import type { JobLifecycleStatus } from "@/lib/jobs/lifecycle";
 import { ResendInvitation } from "../ResendInvitation";
 import { AssignEngineer } from "../AssignEngineer";
-import { ReleaseCertificate, SendCertificate } from "../CertificateReview";
+import {
+  ReleaseCertificate,
+  SendCertificate,
+  UpdateRenewal,
+} from "../CertificateReview";
 import {
   certificateRecipientAddresses,
   listJobCertificates,
@@ -405,12 +409,18 @@ export default async function AdminJobPage({
                     </dl>
 
                     {cert.status === "issued" && (
-                      <SendCertificate
-                        jobId={job.id}
-                        certificate={cert}
-                        recipients={recipients}
-                        states={sendStates(cert.id)}
-                      />
+                      <>
+                        <UpdateRenewal
+                          jobId={job.id}
+                          certificateId={cert.id}
+                        />
+                        <SendCertificate
+                          jobId={job.id}
+                          certificate={cert}
+                          recipients={recipients}
+                          states={sendStates(cert.id)}
+                        />
+                      </>
                     )}
                   </li>
                 ))}
