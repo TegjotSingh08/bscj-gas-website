@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { notFound } from "next/navigation";
 
 import { pageOpenGraph } from "@/lib/metadata";
 import { TrustRow } from "@/components/TrustRow";
 import { AreasCovered } from "@/components/AreasCovered";
 import { business, cp12 } from "@/lib/business";
+import { agencyPagePublished } from "@/lib/config/publication";
 import { JsonLd, breadcrumbSchema } from "@/lib/schema";
 
 /**
@@ -15,7 +17,19 @@ import { JsonLd, breadcrumbSchema } from "@/lib/schema";
  * and the invoice are all built and running; this page is the front door to
  * them, not an advertisement for a roadmap.
  *
- * What is deliberately absent, because none of it is true or agreed yet:
+ * **It is off unless BSCJ turns it on.** An earlier note claimed the page was
+ * "unpublished" because it carried `noindex` and was absent from the sitemap.
+ * That was wrong and worth correcting plainly: a route that exists is reachable
+ * by anyone who types it the moment it is deployed, whatever robots are asked
+ * to do. `noindex` is a request to search engines, not an access control.
+ *
+ * So publication is a real switch — `BSCJ_AGENCY_PAGE`, absent by default —
+ * and the route answers 404 without it. The owner decides when this page goes
+ * live by setting one environment variable, and nothing about deploying the
+ * code makes that decision for them.
+ *
+ * What is deliberately absent from the content, because none of it is true or
+ * agreed yet:
  *
  * - **No agency pricing.** The tiering mechanism exists and carries no figures.
  *   Quoting one here would invent a commercial term nobody has approved, so the
@@ -31,19 +45,26 @@ import { JsonLd, breadcrumbSchema } from "@/lib/schema";
  *   for you" would describe a product decision nobody has made.
  */
 
+/*
+  Read at request time rather than baked in at build. Publishing is then a
+  variable on the deployment and a restart, not a rebuild.
+*/
+export const dynamic = "force-dynamic";
+
 export const metadata: Metadata = {
   title: "Gas Safety for Letting Agents — Wolverhampton",
   description: `Managed CP12 gas safety certificates for letting agents and portfolio landlords in Wolverhampton. Your properties in one place, tenants book their own appointment, certificates and invoices in one portal.`,
   alternates: { canonical: "/letting-agents" },
   openGraph: pageOpenGraph("/letting-agents"),
   /*
-    **Not published.** The page is complete and ready to be read, and the owner
-    has not approved its wording — so it is kept out of the index and out of
-    `sitemap.ts`, and nothing links to it from the site's navigation. Remove
-    this block and add the route to the sitemap when it is signed off.
+    Belt as well as braces. The gate below is what actually keeps the page
+    private; this only asks search engines not to index it once it is on, which
+    can be removed when the page is genuinely launched and added to
+    `sitemap.ts`.
   */
   robots: { index: false, follow: false },
 };
+
 
 const STEPS = [
   {
@@ -73,6 +94,13 @@ const STEPS = [
 ];
 
 export default function LettingAgentsPage() {
+  /*
+    Not published: not merely unindexed, but **not served**. A 404 is the same
+    answer an unknown route gives, so the page's existence is not disclosed
+    either.
+  */
+  if (!agencyPagePublished()) notFound();
+
   return (
     <>
       <JsonLd

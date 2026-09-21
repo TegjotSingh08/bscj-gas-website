@@ -1,36 +1,84 @@
-# Morning acceptance pack — 22 September 2026
-
-Everything needed to check last night's work, in the order worth doing it.
+# Acceptance pack — 22 September 2026
 
 **Nothing in here has been pushed, deployed, migrated or sent.** Every file is
 fictional. The addresses use `.example.invalid`, which cannot receive mail.
 
+## Do these in this order
+
+The previous version of this pack listed the tests first and the deployment
+last, which asked you to test fixes that were not on the pilot yet. Corrected:
+
+1. **Review the release.** `git log d4d3c82..HEAD` and the diff. Nothing is
+   pushed, so this is the last point at which rejecting it costs nothing.
+2. **Check the migration pre-condition** — §4.1. Read-only, and it is the one
+   check that can stop `0009` part-way.
+3. **Confirm the target and migrate** — §4.2 to §4.4.
+4. **Push, which deploys** — §4.5.
+5. **Then** work through §1 to §3. Every expectation in them describes the
+   behaviour *after* this release; run them before the deploy and they will
+   describe the old behaviour and look like failures.
+
+§5 is the stop conditions and rollback limits. Read it before step 3.
+
 ---
 
-## 0. The one thing to know first
+---
 
-**No disposable database could be established on this machine** — no Docker, no
-Postgres, no embedded engine — and the development and pilot databases are not
-disposable. So the verification behind this pack is:
+## 0. How this was verified
 
 | Level | What it means |
 | --- | --- |
 | **unit** | A pure function, called directly. |
-| **service** | The real production service and server-action code, with the **database and external adapters faked at their boundary**. Permissions, envelope signing, idempotency, recipient selection, ordering and error handling are genuinely exercised. |
-| **browser** | A real page rendered and driven. Public pages and email previews only — everything behind sign-in needs a database. |
-| **live** | Nothing. |
+| **postgres** | Production code against a **real PostgreSQL 18.4**, started by the test run from `node_modules`, with the real migration chain `0000`–`0009` applied and real constraints, transactions and independent connections. |
+| **captured services** | Calendar, Redis holds, document storage and the email transport replaced at their own boundary with recorders. Nothing leaves the process. |
+| **browser** | A real page rendered and driven. Public pages and email previews only. |
+| **live** | Nothing. Every live result in this repository is the owner's observation, recorded as theirs. |
 
-A service-level pass is **not** proof against Postgres. The unique indexes, the
-foreign keys and the real transaction semantics are not exercised anywhere in
-this pack, and §6 lists what that leaves for you to check on the pilot.
+`npm test` runs the unit suite. `npm run test:integration` runs the PostgreSQL
+one. **Neither touches the development or pilot database** — the harness deletes
+any inherited `DATABASE_URL` from its process and refuses any connection string
+that is not the throwaway server it started itself.
+
+§6 lists what remains unverified.
 
 ---
 
 ## 1. Fictional CSVs, with the exact settings and expected results
 
+> **Run these after deploying** (step 5 above). They describe the behaviour this
+> release introduces.
+
 In `docs/acceptance/csv/`. Upload each at **Portfolio → Import** in the agency
 portal. The profile is set by BSCJ at
 **Admin → Agencies → *(agency)* → Import settings**.
+
+### Each scenario needs its own starting state
+
+**This is the correction that matters most in this section.** An import is not
+idempotent in the way a reader might assume: once file 01 has been confirmed,
+its three properties are on file, so uploading it again reports *three rows
+already match* rather than *three to be added*. The earlier version of this pack
+described every scenario as a fresh three-row import, which is only true the
+first time.
+
+So each scenario below is written for a **fresh agency**, and the fastest way to
+get one is to make one:
+
+1. **Admin → Agencies → New agency.** Call it after the scenario — *Fixture A
+   (01)*, *Fixture B (02a)* and so on. Fictional throughout; nobody is invited
+   and no message is sent by creating one.
+2. Set that agency's import settings as the scenario says.
+3. Invite yourself as its agent, or use an existing pilot agent account moved to
+   it, and upload the file.
+
+Where a scenario is run more than once under different settings — file 02 is run
+three times — **use a different agency each time**. Re-running against the same
+one is a legitimate thing to do, but the expected results are then the
+*cumulative* ones, and they are given at the end of §1.2 rather than repeated
+per policy.
+
+Nothing here requires deleting records to reset. Making a new fictional agency
+is cheaper than unpicking one, and it leaves the evidence of each run intact.
 
 ### 1.1 `01-template-ordinary.csv` — the baseline
 
@@ -50,6 +98,9 @@ portal. The profile is set by BSCJ at
 ### 1.2 `02-missing-landlord-contact.csv` — the policy that changed
 
 *Run it three times, changing one setting each time.*
+
+*Run each of (a), (b) and (c) against **its own fresh agency**. Cumulative
+expectations for re-running against one agency are at the end.*
 
 **(a) "Hold the row — do not import it"** (the default)
 
@@ -74,13 +125,26 @@ them with a landlord nobody could contact.
 
 **(c) "Record without contact, and ask about matching names"** — see 1.3.
 
+**If you re-run these against one agency instead**, the expectations are
+cumulative and differ:
+
+| Run | Under | Expect |
+| --- | --- | --- |
+| 1st | hold the row | 1 added, 2 held |
+| 2nd | record without contact | **2 added** — the property from run 1 already matches, and only the two previously-held rows are new |
+| 3rd | either | **0 added**, 3 already match |
+
+Both readings are correct behaviour. The three-fresh-rows reading is only the
+first one.
+
 ### 1.3 `03-same-name-distinct-landlords.csv` — identity
 
 *Settings: **Record without contact, and ask about matching names**.*
 
-Needs one landlord already on file called **Ada Fixture** and **two** called
-**J Smith** to exercise both branches. If your portfolio has neither, add them
-first, or read this as the description of intended behaviour.
+**Starting state, on a fresh fictional agency.** Add three landlords by hand at
+**Portfolio → Landlords → New** before uploading — one called **Ada Fixture**,
+and **two** both called **J Smith** — so both branches have something to find.
+Give them any fictional email; the file's rows carry none, which is the point.
 
 | Expect | |
 | --- | --- |
@@ -157,7 +221,7 @@ PDF structure) so the upload and review screens can be exercised.
 | **Admin → Agencies → Import settings** | The landlord-contact setting now has **three** options, each stating what is recorded and what still refuses afterwards. |
 | **Portfolio → Import** preview (agency) | Held rows are separated from unreadable rows; contactless landlords are counted and explained; same-name landlords are asked about. |
 | **Admin → job → issued certificate** | New **Update the renewal from this certificate** button. Safe to press at any time. |
-| `/letting-agents` | New public page, **not published** — `noindex`, not in the sitemap, not linked from the site. Read it and decide. |
+| `/letting-agents` | New public page, **off by default**. It answers 404 unless `BSCJ_AGENCY_PAGE=1` is set on the deployment. Read it and decide whether to publish. |
 
 ### Preview and evidence paths
 
@@ -179,7 +243,8 @@ in a browser, light and dark, at phone width. No real mail client has seen them.
 
 ## 4. Deployment and migration order
 
-Exactly as before, and for the same reason: **migrate first, then push.**
+**Do this before §1 to §3.** Exactly as before, and for the same reason:
+**migrate first, then push.**
 
 Migration **0009** (`0009_one_active_cycle_per_service`) is new and applied
 nowhere. It is a partial unique index — additive, enforcing only, no column
@@ -275,22 +340,46 @@ never delete a business record to make a rollback succeed.**
 
 ---
 
-## 6. What is still unverified, and by whom
+### Publishing `/letting-agents`, when you decide to
 
-Mine to say, and none of it is closed:
+It is **not served** until you say so. An earlier note called it "unpublished"
+because it carried `noindex` and was absent from the sitemap; that was wrong and
+is worth stating plainly — a route that exists is reachable by anyone who types
+it the moment it is deployed, and `noindex` is a request to search engines
+rather than an access control.
 
-- **Anything against a real Postgres.** No disposable database existed. The new
-  unique index, the foreign keys and the real transaction semantics have not run.
-- **The deployed CSV identity/review/commit journey**, end to end, by you.
-- **Automatic outbox retries** against a real provider failure. A first-attempt
-  success exercises none of the retry path, and a failure must not be
-  manufactured against live services to close it.
-- **Actual Outlook and any other real mail client.**
-- **Live calendar, Blob and Redis behaviour.**
-- **The engineer, document and invoice journeys end to end in the browser** —
-  they need a database and a signed-in engineer.
+To publish it: set `BSCJ_AGENCY_PAGE=1` on the deployment and redeploy. To take
+it down again: remove the variable. When it is genuinely launched, also remove
+the `robots` block in the page's metadata and add the route to
+`src/app/sitemap.ts` — until both are done it will not be indexed even while it
+is being served, which is the right state for a soft launch.
 
 ---
+
+## 6. What is still unverified, and by whom
+
+Mine to say:
+
+**Now verified against a real database**, which the previous pack could not
+claim: the renewals query at 520 properties, the certificate release and
+correction path including the race, the outbox's failure-and-recovery cycle, and
+the connected workflow from job request to recorded payment. All of it ran
+against a real PostgreSQL 18.4 with the real migration chain and real
+constraints.
+
+**Still not verified, by me or by anybody:**
+
+- **The pilot's own database.** The integration suite runs against a throwaway
+  server; it cannot and must not touch the pilot. Migration `0009` in particular
+  has been applied only there.
+- **The deployed CSV identity/review/commit journey**, in a browser, by you.
+  Every step of it is covered at the service level; none of it has been clicked.
+- **Real email delivery.** The transport is captured in every test. Resend has
+  never been called.
+- **Actual Outlook, or any real mail client.**
+- **Live calendar, Blob and Redis behaviour.**
+- **The admin and agency screens in a browser.** They need a database and a
+  signed-in session; only the public pages and the email previews were rendered.
 
 ## 7. Owner decisions that actually block real agency use
 
@@ -301,12 +390,22 @@ Mine to say, and none of it is closed:
 3. **Agency pricing figures.** The tiering mechanism exists and carries no
    numbers. `/letting-agents` deliberately quotes none.
 4. **Per-agency landlord-contact policy** — hold the row, or record without
-   contact? It is now a real choice with real consequences (§1.2). Express
-   Properties needs one before their first upload.
-5. **Express Properties' actual export headings.** Still unconfirmed, so their
-   profile is empty and `05-combined-addresses.csv` is illustrative.
-6. **Whether `/letting-agents` should be published.** It is written, reviewed
-   for unsupported claims, and held back behind `noindex`.
+   contact? It is now a real choice with real consequences (§1.2).
+
+   **Not a decision to take for Express Properties yet.** The choice only means
+   something once their export is understood: whether their landlord emails are
+   genuinely absent, or merely in a column nobody has mapped, is exactly what
+   the setup call establishes. Deciding first would be guessing at their data.
+   The **mechanism** is verified on the fictional agencies in §1.2; the
+   **setting** is the last five minutes of the call where you look at their
+   file together.
+5. **Express Properties' actual export headings, and what their columns mean.**
+   Unconfirmed, so their profile is empty and `05-combined-addresses.csv` is an
+   illustration of the shape rather than a model of their file. Nothing in the
+   code is named after them and nothing needs to be.
+6. **Whether `/letting-agents` should be published.** It is written and reviewed
+   for unsupported claims. It is held behind a real switch, not merely a robots
+   hint — see below.
 
 ## 8. Deliberately not built
 
