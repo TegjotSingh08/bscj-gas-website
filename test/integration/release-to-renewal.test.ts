@@ -116,6 +116,21 @@ async function setJobProduct(productId: string) {
   ]);
 }
 
+/**
+ * The outstanding rows, plus the traversal's own claim that it saw everything.
+ *
+ * Asserting on `rows` alone would pass just as happily against a walk that
+ * gave up early, which is the defect this list has already had once. Every
+ * "nothing outstanding" below therefore also asserts that the search reached
+ * the end.
+ */
+async function outstandingRows() {
+  const result = await listOutstandingRenewals();
+  assert.notEqual(result, null, "the records were readable");
+  assert.equal(result!.stoppedBecause, "exhausted", "the search reached the end");
+  return result!.rows;
+}
+
 describe("a first release", () => {
   test("establishes the position from the reviewed dates", async () => {
     const result = await release();
@@ -339,10 +354,10 @@ describe("when the renewal write fails after the certificate is written", () => 
     */
     await withComplianceWritesFailing(() => release());
 
-    const outstanding = await listOutstandingRenewals();
-    assert.equal(outstanding?.length, 1);
-    assert.equal(outstanding?.[0].jobReference, fixture.jobReference);
-    assert.equal(outstanding?.[0].nextDueDate, "2027-09-19");
+    const outstanding = await outstandingRows();
+    assert.equal(outstanding.length, 1);
+    assert.equal(outstanding[0].jobReference, fixture.jobReference);
+    assert.equal(outstanding[0].nextDueDate, "2027-09-19");
 
     const { rows } = await conn.client.query<{ id: string }>(
       "select id from certificate where status = 'issued'",
@@ -362,13 +377,13 @@ describe("when the renewal write fails after the certificate is written", () => 
       certificateId: rows[0].id,
     });
 
-    assert.deepEqual(await listOutstandingRenewals(), []);
+    assert.deepEqual(await outstandingRows(), []);
     assert.equal(await renewalIsOutstanding(rows[0].id), "resolved");
   });
 
   test("an ordinary release is never reported as outstanding", async () => {
     await release();
-    assert.deepEqual(await listOutstandingRenewals(), []);
+    assert.deepEqual(await outstandingRows(), []);
   });
 
   test("a boiler-service release is not outstanding — it is supposed to move nothing", async () => {
@@ -379,7 +394,7 @@ describe("when the renewal write fails after the certificate is written", () => 
     */
     await setJobProduct("boiler-service");
     await release();
-    assert.deepEqual(await listOutstandingRenewals(), []);
+    assert.deepEqual(await outstandingRows(), []);
   });
 
   test("a superseded version is not outstanding — its correction holds the position", async () => {
@@ -393,7 +408,7 @@ describe("when the renewal write fails after the certificate is written", () => 
       "select id from certificate where status = 'superseded'",
     );
     assert.equal(await renewalIsOutstanding(rows[0].id), "resolved");
-    assert.deepEqual(await listOutstandingRenewals(), []);
+    assert.deepEqual(await outstandingRows(), []);
   });
 
   test("and the retry clears it afterwards", async () => {

@@ -8,9 +8,14 @@ import {
   listOutstandingNotifications,
 } from "@/lib/notifications/outbox";
 import { queueStateOf } from "@/lib/notifications/queue-state";
-import { listOutstandingRenewals } from "@/lib/compliance/outstanding";
+import {
+  listOutstandingRenewals,
+  type OutstandingRenewals,
+  type RenewalCursor,
+} from "@/lib/compliance/outstanding";
 import { ReconcileRunner } from "./ReconcileRunner";
 import { MessageQueue, type QueueRow } from "./MessageQueue";
+import { summariseReconcile } from "./summary";
 
 export const metadata: Metadata = {
   title: "Reconciliation",
@@ -32,8 +37,24 @@ export const dynamic = "force-dynamic";
  * idempotency keys are opaque labels; no name, address or contact detail
  * appears on this page.
  */
-export default async function ReconcilePage() {
+export default async function ReconcilePage({
+  searchParams,
+}: {
+  /*
+    Where a previous traversal stopped. The renewals walk is bounded, and a
+    bound that could not be continued past would be a bound that hides work.
+  */
+  searchParams: Promise<{ afterIssuedAt?: string; afterCertificate?: string }>;
+}) {
   await requireAdmin();
+  const params = await searchParams;
+  const after: RenewalCursor | null =
+    params.afterIssuedAt && params.afterCertificate
+      ? {
+          issuedAt: params.afterIssuedAt,
+          certificateId: params.afterCertificate,
+        }
+      : null;
   const queue = await readReconcileQueue();
 
   /*
@@ -47,8 +68,15 @@ export default async function ReconcilePage() {
     survives a refresh, a closed tab and a different administrator tomorrow.
     The release's own response could not.
   */
-  const outstandingRenewals = await listOutstandingRenewals();
+  const renewals = await listOutstandingRenewals(after ? { after } : {});
 
+  /*
+    **Null is not zero.** A failed query used to fall through `?.length ?? 0`
+    into "nothing outstanding", which is the single most dangerous sentence
+    this page can print: it reports the one state it does not know as the one
+    state that needs no action. Unknown gets its own alert, and it withholds
+    the reassurance.
+  */
   const now = new Date();
   const outstanding = await listOutstandingNotifications();
   const messageRows: QueueRow[] = (outstanding ?? []).map((row) => ({
@@ -71,13 +99,18 @@ export default async function ReconcilePage() {
     ),
   }));
 
-  const nothingOutstanding =
-    (outstandingRenewals?.length ?? 0) === 0 &&
-    queue.awaitingCalendarSync.length === 0 &&
-    queue.awaitingCalendarCleanup.length === 0 &&
-    queue.unpersistedBookings.length === 0 &&
-    queue.notifications.pending === 0 &&
-    queue.notifications.failed === 0;
+  const { nothingOutstanding, everythingKnown } = summariseReconcile({
+    renewals,
+    messagesReadable: outstanding !== null,
+    reservationsListed: queue.unpersistedListed,
+    counts: {
+      awaitingCalendarSync: queue.awaitingCalendarSync.length,
+      awaitingCalendarCleanup: queue.awaitingCalendarCleanup.length,
+      unpersistedBookings: queue.unpersistedBookings.length,
+      pendingNotifications: queue.notifications.pending,
+      failedNotifications: queue.notifications.failed,
+    },
+  });
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-10">
@@ -126,9 +159,20 @@ export default async function ReconcilePage() {
         </p>
       )}
 
+      {renewals === null && (
+        <p
+          role="alert"
+          className="mt-6 rounded-2xl border-2 border-flame-500 bg-flame-400/10 px-5 py-4 text-sm font-semibold text-navy-900"
+        >
+          The compliance records could not be read. Certificates released
+          without their renewal are <strong>unknown</strong> rather than none —
+          this page cannot tell you there are no repairs outstanding.
+        </p>
+      )}
+
       {nothingOutstanding ? (
         <p className="mt-6 rounded-2xl border-2 border-navy-200 bg-white px-5 py-4 text-sm font-semibold text-navy-900">
-          {queue.unpersistedListed
+          {everythingKnown
             ? "Nothing outstanding."
             : "Nothing outstanding that this page can see."}
         </p>
@@ -149,7 +193,7 @@ export default async function ReconcilePage() {
             note="The appointment exists in the calendar and the customer has their confirmation. Only our own record is missing."
             rows={queue.unpersistedBookings}
           />
-          <OutstandingRenewals rows={outstandingRenewals ?? []} />
+          {renewals && <OutstandingRenewals renewals={renewals} />}
           <MessageQueue rows={messageRows} />
         </div>
       )}
@@ -171,27 +215,25 @@ export default async function ReconcilePage() {
  * is inserted — so this state is genuinely reachable. It is derived from the
  * rows rather than remembered, which is what makes it still here after a
  * refresh, and the fix is on the job: one idempotent button.
+ *
+ * **It renders when the answer is incomplete, not only when it is non-empty.**
+ * The traversal behind it is bounded, and a bound reached in silence would
+ * hide exactly what this section exists to show. So an incomplete answer says
+ * so and offers the continuation, even with nothing to list.
  */
-function OutstandingRenewals({
-  rows,
-}: {
-  rows: {
-    certificateId: string;
-    version: number;
-    certificateNumber: string;
-    jobId: string;
-    jobReference: string;
-    houseOrName: string;
-    postcode: string;
-    nextDueDate: string;
-  }[];
-}) {
-  if (rows.length === 0) return null;
+function OutstandingRenewals({ renewals }: { renewals: OutstandingRenewals }) {
+  const { rows, stoppedBecause, cursor, examined } = renewals;
+  if (rows.length === 0 && stoppedBecause === "exhausted") return null;
+
+  const continueHref = cursor
+    ? `/admin/reconcile?afterIssuedAt=${encodeURIComponent(cursor.issuedAt)}&afterCertificate=${encodeURIComponent(cursor.certificateId)}`
+    : null;
 
   return (
     <section className="rounded-2xl border-2 border-flame-500 bg-flame-400/5 p-5">
       <h2 className="text-sm font-extrabold text-navy-900">
-        Certificates released without their renewal ({rows.length})
+        Certificates released without their renewal ({rows.length}
+        {stoppedBecause === "exhausted" ? "" : " so far"})
       </h2>
       <p className="mt-1 text-xs leading-relaxed text-navy-700">
         Each of these is a released certificate whose property&rsquo;s next-due
@@ -200,23 +242,44 @@ function OutstandingRenewals({
         <span className="font-bold"> Update the renewal from this certificate</span>,
         which is safe to press at any time.
       </p>
-      <ul className="mt-3 space-y-2">
-        {rows.map((row) => (
-          <li key={row.certificateId} className="text-sm">
-            <Link
-              href={`/admin/jobs/${row.jobId}`}
-              className="font-bold text-navy-900 underline"
-            >
-              {row.jobReference}
-            </Link>
-            <span className="text-navy-700">
-              {" "}
-              — {row.houseOrName}, {row.postcode} · certificate{" "}
-              {row.certificateNumber} v{row.version}, due {row.nextDueDate}
-            </span>
-          </li>
-        ))}
-      </ul>
+
+      {rows.length > 0 && (
+        <ul className="mt-3 space-y-2">
+          {rows.map((row) => (
+            <li key={row.certificateId} className="text-sm">
+              <Link
+                href={`/admin/jobs/${row.jobId}`}
+                className="font-bold text-navy-900 underline"
+              >
+                {row.jobReference}
+              </Link>
+              <span className="text-navy-700">
+                {" "}
+                — {row.houseOrName}, {row.postcode} · certificate{" "}
+                {row.certificateNumber} v{row.version}, due {row.nextDueDate}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {stoppedBecause !== "exhausted" && continueHref && (
+        <p
+          role="status"
+          className="mt-4 rounded-xl border-2 border-navy-200 bg-white px-4 py-3 text-xs leading-relaxed text-navy-800"
+        >
+          {stoppedBecause === "limit"
+            ? `This is a full page of repairs. ${examined.toLocaleString("en-GB")} certificates were examined to find them, and there may be more behind these.`
+            : `The search stopped after examining ${examined.toLocaleString("en-GB")} certificates, before reaching the end. There may be more repairs beyond this point — this section has not ruled them out.`}{" "}
+          <Link
+            href={continueHref}
+            className="font-bold text-flame-600 underline"
+          >
+            Continue from here
+          </Link>
+          .
+        </p>
+      )}
     </section>
   );
 }

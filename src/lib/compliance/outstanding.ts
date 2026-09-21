@@ -223,57 +223,165 @@ function needsApplying(
 }
 
 /**
+ * Where a traversal stopped, so a later call can continue from exactly there.
+ *
+ * `(issuedAt, certificateId)` rather than an offset. An offset over a set that
+ * shrinks as repairs are made would skip rows; a keyset names a position in
+ * the ordering itself, and that position means the same thing on the next
+ * request whatever happened in between.
+ */
+export type RenewalCursor = { issuedAt: string; certificateId: string };
+
+/**
+ * Why a traversal stopped. The caller has to be able to tell these apart.
+ *
+ * - `exhausted` — every remaining candidate was examined. An empty `rows` here
+ *   genuinely means nothing is outstanding.
+ * - `limit` — the caller's row limit was filled. There may be more.
+ * - `bound` — the examination bound was reached first. **The answer is
+ *   incomplete**, and an empty `rows` proves nothing at all.
+ */
+export type RenewalStop = "exhausted" | "limit" | "bound";
+
+export type OutstandingRenewals = {
+  rows: OutstandingRenewal[];
+  stoppedBecause: RenewalStop;
+  /** Null when exhausted; otherwise exactly where a continuation begins. */
+  cursor: RenewalCursor | null;
+  /** How many candidates the rules were applied to in this call. */
+  examined: number;
+};
+
+/**
+ * How many candidates are fetched per round trip.
+ *
+ * Nothing about correctness depends on it — only on how many round trips a
+ * long run of history costs.
+ */
+const PAGE_SIZE = 200;
+
+/**
+ * The most candidates one call will judge before it stops and says so.
+ *
+ * **A bound is still needed.** A portfolio with years of certificates must not
+ * be able to turn a page render into a full scan. But a bound that silently
+ * truncates is worse than no list: the thing it hides is precisely the genuine
+ * failure sitting behind a long run of ordinary history. So the bound is on
+ * the *work*, the traversal is stable, and reaching it is reported as
+ * `bound` with a cursor — never as an empty list.
+ */
+const EXAMINATION_LIMIT = 2_000;
+
+/** Candidates strictly after this position in the `(issuedAt, id)` ordering. */
+function afterCursor(cursor: RenewalCursor) {
+  return sql`(${certificates.issuedAt}, ${certificates.id}) > (${cursor.issuedAt}::timestamptz, ${cursor.certificateId}::uuid)`;
+}
+
+/**
+ * The candidate, with the two fields only the decision needed dropped.
+ *
+ * Explicitly rather than by destructuring, so what the caller receives is
+ * written down.
+ */
+function asOutstanding(candidate: Candidate): OutstandingRenewal {
+  return {
+    certificateId: candidate.certificateId,
+    version: candidate.version,
+    certificateNumber: candidate.certificateNumber,
+    jobId: candidate.jobId,
+    jobReference: candidate.jobReference,
+    propertyId: candidate.propertyId,
+    houseOrName: candidate.houseOrName,
+    postcode: candidate.postcode,
+    organisationId: candidate.organisationId,
+    nextDueDate: candidate.nextDueDate,
+    issuedAt: candidate.issuedAt,
+  };
+}
+
+/**
  * Every certificate whose renewal did not land, oldest first.
  *
- * Oldest first because the one outstanding longest is the one worth looking at.
- * Null means the records could not be read — which the caller must report as
- * unknown rather than as an empty list.
+ * Oldest first because the one outstanding longest is the one worth looking
+ * at. Null means the records could not be read — which the caller must report
+ * as unknown rather than as an empty list.
+ *
+ * ---
+ *
+ * **Why this walks rather than slicing.** The rules that decide what is a
+ * repair cannot be expressed in the candidate query: `decidePosition` compares
+ * a certificate against whatever position its property currently holds, per
+ * service, and that is a per-row judgement. So candidates are fetched and then
+ * filtered.
+ *
+ * The first version fetched **one** window — `max(limit * 4, 200)` rows — and
+ * filtered inside it. That is only correct if the repairs are near the front
+ * of the ordering, and they are not: the ordering is oldest-issued-first and
+ * the overwhelming majority of old certificates are ordinary history that a
+ * later visit replaced. Two hundred of those and the genuine failure behind
+ * them was invisible, on a page whose entire purpose is to make it visible.
+ * Raising the multiplier only moves the number at which it fails.
+ *
+ * So it walks the ordering in stable keyset pages until it has the rows the
+ * caller asked for or the candidates run out. A bound on the work remains —
+ * but reaching it is an answer (`bound`, with a cursor to continue from),
+ * not an empty list.
  */
 export async function listOutstandingRenewals(
-  limit = 50,
-): Promise<OutstandingRenewal[] | null> {
+  options: { limit?: number; after?: RenewalCursor | null } = {},
+): Promise<OutstandingRenewals | null> {
+  const limit = Math.max(1, options.limit ?? 50);
   const db = getDb();
   if (!db) return null;
 
   try {
-    const candidates = (await candidateQuery(db)
-      .where(candidateWhere())
-      .orderBy(asc(certificates.issuedAt))
-      /*
-        A wider slice than the caller asked for, because the rules below remove
-        the ones that are merely history. Bounded so a portfolio with years of
-        certificates cannot turn this into a full scan.
-      */
-      .limit(Math.max(limit * 4, 200))) as Candidate[];
+    const rows: OutstandingRenewal[] = [];
+    let cursor: RenewalCursor | null = options.after ?? null;
+    let examined = 0;
 
-    if (candidates.length === 0) return [];
+    for (;;) {
+      const page = (await candidateQuery(db)
+        .where(
+          cursor ? and(candidateWhere(), afterCursor(cursor)) : candidateWhere(),
+        )
+        /*
+          The id breaks ties on `issued_at`. Two certificates released in the
+          same millisecond would otherwise have no defined order between them,
+          and a keyset over an undefined order can repeat a row or skip one.
+        */
+        .orderBy(asc(certificates.issuedAt), asc(certificates.id))
+        .limit(PAGE_SIZE)) as Candidate[];
 
-    const positions = await activePositionsFor(
-      db,
-      [...new Set(candidates.map((candidate) => candidate.propertyId))],
-    );
+      if (page.length === 0) {
+        return { rows, stoppedBecause: "exhausted", cursor: null, examined };
+      }
 
-    return candidates
-      .filter((candidate) => needsApplying(candidate, positions))
-      .slice(0, limit)
-      /*
-        The candidate carries two fields only the decision needed — the job's
-        product and the inspection date. They are dropped explicitly rather
-        than by destructuring, so what the caller receives is written down.
-      */
-      .map((candidate) => ({
-        certificateId: candidate.certificateId,
-        version: candidate.version,
-        certificateNumber: candidate.certificateNumber,
-        jobId: candidate.jobId,
-        jobReference: candidate.jobReference,
-        propertyId: candidate.propertyId,
-        houseOrName: candidate.houseOrName,
-        postcode: candidate.postcode,
-        organisationId: candidate.organisationId,
-        nextDueDate: candidate.nextDueDate,
-        issuedAt: candidate.issuedAt,
-      }));
+      const positions = await activePositionsFor(db, [
+        ...new Set(page.map((candidate) => candidate.propertyId)),
+      ]);
+
+      for (const candidate of page) {
+        examined += 1;
+        cursor = {
+          issuedAt: candidate.issuedAt.toISOString(),
+          certificateId: candidate.certificateId,
+        };
+        if (!needsApplying(candidate, positions)) continue;
+
+        rows.push(asOutstanding(candidate));
+        if (rows.length >= limit) {
+          return { rows, stoppedBecause: "limit", cursor, examined };
+        }
+      }
+
+      // A short page is the end of the ordering, so nothing follows it.
+      if (page.length < PAGE_SIZE) {
+        return { rows, stoppedBecause: "exhausted", cursor: null, examined };
+      }
+      if (examined >= EXAMINATION_LIMIT) {
+        return { rows, stoppedBecause: "bound", cursor, examined };
+      }
+    }
   } catch {
     return null;
   }
