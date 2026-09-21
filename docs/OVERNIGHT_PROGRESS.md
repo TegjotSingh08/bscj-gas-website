@@ -16,21 +16,38 @@ from "Next action".
 
 ---
 
-## The one limitation that shapes everything
+## The limitation that shaped the previous pass — now closed
 
-**No disposable database could be established.** Checked at session start:
-`docker`, `podman`, `psql`, `postgres`, `pg_ctl` and `initdb` are all absent,
-Docker is not running, and neither PGlite nor any embedded Postgres is in
-`node_modules`. Installing a database engine, or wiring a second driver into
-production code to fake one, is explicitly out of scope for an unattended
-night.
+**Superseded 22 September.** The earlier passes recorded that no disposable
+database could be established, and every integration claim was made against a
+fake at the database boundary. A real one now exists.
 
-The development and pilot databases are **not** disposable and are not touched.
+`embedded-postgres` runs a genuine **PostgreSQL 18.4** from `node_modules` on
+loopback port 55433, project-local, with a temporary data directory deleted on
+stop. The real migration chain `0000`–`0009` is applied by Drizzle's own
+migrator. Two connections are genuinely two backends (distinct
+`pg_backend_pid()`), so a race between them means something.
 
-So the verification ladder used throughout is:
+It fails closed: no env file is read, inherited `DATABASE_URL*` is deleted from
+the process before any connection opens, and `assertDisposable` is a whitelist
+of exact values — loopback, that port, that database name, that fictional user,
+and a marker the harness itself set. Development and pilot databases are
+untouched.
+
+**The verification ladder now reads:**
 
 | Level | What it means | Used for |
 | --- | --- | --- |
+| **unit** | A pure function, called directly. | Rules, dates, address splitting, renewal arithmetic. |
+| **postgres** | Production service code against the **real disposable PostgreSQL**, with real constraints, transactions and independent connections. | The renewals query, the certificate race, the connected journey. |
+| **service** | Production code with external adapters captured; the database is real. | Email, calendar and storage effects. |
+| **browser** | A real page rendered and driven. | Public pages and email previews. |
+| **live** | Against real services. | **Nothing.** Owner-observed results are recorded as theirs. |
+
+`npm test` is the fast unit suite; `npm run test:integration` is the PostgreSQL
+one.
+
+--- | --- | --- |
 | **unit** | A pure function, called directly. | Rules, dates, address splitting, renewal arithmetic. |
 | **service** | Real production service and server-action code, with recording fakes at the **database and external-adapter boundary only**. Permissions, envelope signing, idempotency, recipient selection and ordering are genuinely exercised. | Most of tonight's work. |
 | **browser** | A real page rendered and driven in a browser. | Public pages and email previews only — everything behind sign-in needs a database. |
@@ -67,6 +84,11 @@ is never described as one.
 | `f3aee35` | Let a released certificate move the renewal it proves |
 | `338d268` | Show BSCJ what the queue is actually doing |
 | `4b15579` | Offer agencies the service we actually run, and leave a morning pack |
+| `9c3ae3e` | Leave the record straight for the morning |
+| `ccbaca2` | Give the tests a real Postgres to be wrong against |
+| `16fc473` | Type the disposable handle by what it is, not by the pool overload |
+| `ff1b3e7` | Count renewals once, and only against the service they are for |
+| `e2c4841` | Stop a superseded certificate displacing its own correction |
 
 Working tree: clean.
 
@@ -94,6 +116,10 @@ Working tree: clean.
 | final | `npm run lint` | 1 pre-existing warning (`invitationRow`, unrelated) |
 | final | `npm run build` | clean |
 | final | diff scan | no secrets, no real addresses, migrations additive and paired |
+| **22 Sep** | `npm run test:integration` | **70 pass, 0 fail** against real PostgreSQL 18.4 |
+| 22 Sep | `npm test` | 2228 pass, 0 fail |
+| 22 Sep | `npm run typecheck` | clean |
+| 22 Sep | `npm run lint` | 1 pre-existing warning |
 
 ---
 
@@ -107,8 +133,19 @@ disturbed) and has been stopped. It used no external service.
 
 ## Next action after interruption
 
-**The defined package is complete.** Nothing is in progress and nothing is
-blocked that independent work could unblock.
+**Second pass, 22 September — in progress.**
+
+Done: disposable PostgreSQL (objective 1), renewals query (finding 2),
+certificate correction race and durable recovery (finding 3).
+
+Next: **finding 4** — email retry guarantees. `retryFailedNotification`
+currently promises the provider will not send twice, and `retry.test.ts`
+asserts that promise. Verify Resend's actual idempotency guarantee (24-hour
+retention, matching payload), trace each message kind for attempt-derived keys
+and regenerated credentials, then fix behaviour and wording together.
+
+Then finding 5 (connected journey against PostgreSQL) and finding 6 (acceptance
+pack corrections).
 
 If resuming, the most valuable remaining work, in order:
 
