@@ -3,7 +3,7 @@
 **Read this first.** It exists so a new session does not have to re-audit the
 repository. Update it at the end of every piece of work.
 
-Last updated: 21 September 2026 (release-readiness pass; migration 0008 outstanding).
+Last updated: 22 September 2026 (overnight pass; migration 0009 outstanding).
 
 ---
 
@@ -927,6 +927,130 @@ migration count and which are applied, and the "branch is unpushed" claim.
 
 ---
 
+## Overnight pass — 22 September 2026
+
+**Four confidence levels, kept apart.** Conflating them is how a pilot is
+declared ready and then does not work.
+
+| Level | Meaning |
+| --- | --- |
+| **Historical** | Recorded at an earlier checkpoint. May have been superseded. |
+| **Deployed, owner-observed** | The owner saw it happen against the pilot. Not independently verified from this machine, which holds no pilot credentials. |
+| **Verified locally** | Tests run here, at the level stated. Unit, service or browser — never live. |
+| **Unverified** | Nobody has seen it work. Said so plainly. |
+
+**No disposable database exists on this machine** — no Docker, no Postgres, no
+embedded engine — and development and pilot are not disposable. So everything
+below marked *verified locally (service)* exercises the real production code
+with the **database and external adapters faked at their boundary**. Permissions,
+signing, idempotency, ordering, recipient selection and error handling are
+genuinely run; the unique indexes, the foreign keys and the real transaction
+semantics are not. Nothing here is a live-database or live-delivery pass.
+
+### The import's hold policy was not holding — fixed
+
+*Verified locally (service).* `landlordMatch: reject_row` is labelled "hold the
+row for review — nothing is written", and the importer consulted it **only on
+the way into the name-matching branch**. Harmless while `customer.email` was
+`NOT NULL`; from migration 0008 onwards a contactless row under `reject_row`
+fell straight past it and was created. An agency configured for "do not import
+it" was importing it, attached to a landlord nobody could contact.
+
+There are now three options and each does what its label says — hold the row,
+record without contact, or record without contact and ask about matching names.
+None invents an address or a number. The policy sits inside the create branch,
+so a property already held is never held for want of an address it would not
+have written anyway. Preview wording separates rows *held by policy* from rows
+that genuinely could not be read, and counts the properties that will carry an
+uncontactable landlord. No profile shape change; `version` stays 2 and
+`reject_row` now writes strictly less than before.
+
+### Releasing a certificate now moves the renewal
+
+*Verified locally (service).* `releaseCertificate` wrote a `certificate` row and
+stopped, while every screen showing a due date reads `compliance_cycle`. A
+reviewed CP12 could be released and the property would still show the old date,
+or none.
+
+Release now establishes the position **from the dates the administrator read off
+the certificate** — `renewal.ts` is deliberately not applied. A CP12 job moves
+the CP12 position; a combined job moves the CP12 and nothing else, because no
+certificate attests to a boiler service; a boiler-service job moves nothing.
+Older evidence never displaces newer: releasing or correcting an older job
+leaves a later position alone, records that it did, and says so with the date it
+kept. A correction to the certificate that established the current position
+always applies, in either direction.
+
+`setCompliancePosition` hardcoded `cp12` **and superseded every active cycle**,
+so recording a CP12 position would have cancelled a boiler-service one. Now
+scoped to the one service.
+
+The certificate row and the cycle cannot be one statement — the cycle must point
+at the certificate's id — so "released, renewal not moved" is reachable. It is
+reported in the release message and cleared by an idempotent **Update the
+renewal from this certificate** button that refuses a superseded version.
+
+### `/admin/due` — the weekly operational question
+
+*Verified locally (unit + build).* Overdue, due within a range the operator
+chooses and which is shown back to them, and properties with no date on file. No
+threshold, cadence or escalation is invented, and **nothing is contacted**. A
+property with an open job carries its reference and status so nobody chases work
+already in hand.
+
+Deliberately **not** built: admin-initiated job requests. Work is requested by
+the agency from their own portal; the page links to the agency and says so
+rather than offering a control that would need an impersonation system.
+
+### The message queue is legible and recoverable
+
+*Verified locally (unit + service).* The pilot's failure was a green dashboard
+over an undrained queue: counts, no reasons, and a browser console as the only
+diagnostic. The queue is now row-by-row, with two distinctions the stored states
+cannot make — *queued and never attempted* versus *attempted and waiting*, and
+*failed* versus *cannot go until somebody supplies an address*. Both are derived
+from the attempt count, the lease and the last reason, so nothing new is stored
+and no second queue exists.
+
+`sent` is reported as **accepted by the email provider** everywhere, and the
+wording is asserted. A retry is offered only for a message that has genuinely
+given up; it resets the bounded attempt count, is safe because the send carries
+a stable provider idempotency key, is conditional in the `WHERE` so two
+administrators produce one retry, and is audited with the previous reason.
+
+The cron interval, the lease, the attempt bound and the drain are unchanged.
+
+### `/letting-agents` — written, not published
+
+*Verified locally (browser, desktop and 375px).* Describes only what exists. No
+agency pricing, no compliance guarantee, no customer numbers or reviews, no
+claim of automatic reminders. `noindex`, absent from the sitemap, unlinked.
+Needs the owner's sign-off.
+
+### Migration 0009 — prepared, applied nowhere
+
+A partial unique index making one active compliance position per property per
+service impossible in the database rather than only in the application. Two
+requests arriving together can each read "nothing active" and each insert.
+Additive and enforcing only; no column added or dropped, no data rewritten. The
+pre-check query is in its header and in the acceptance pack. Rolls back freely —
+dropping an index touches no data.
+
+### What this pass did **not** verify
+
+- Anything against a real Postgres.
+- The deployed CSV identity/review/commit journey, which is the owner's to run.
+- Automatic outbox retries against a real provider failure.
+- Actual Outlook or any real mail client.
+- Live calendar, Blob and Redis behaviour.
+- The engineer, document and invoice journeys end to end in a browser — they
+  need a database and a signed-in engineer.
+
+Morning acceptance pack: `docs/acceptance/README.md`. Night's log:
+`docs/OVERNIGHT_PROGRESS.md`.
+
+---
+
 ## First tenant journey — 21 September 2026, owner-observed
 
 Invitation received **02:30**, tenant booked **02:39**, confirmation received
@@ -1012,10 +1136,11 @@ full list, not the pilot subset.
     ever sent: no tenant invitation, no certificate, no invoice, and **no
     account invitation or password reset**. An agency invited with no schedule
     running simply never hears from us.
-16. **Migration 0008 must be applied** to any database the current commit is
-    deployed against. `0000`–`0007` are applied to development and to the
-    pilot; **`0008` is applied nowhere.** Order matters and is documented in
-    `PILOT_RUNBOOK.md` §2E: migrate first, then deploy.
+16. **Migration 0009 must be applied** to any database the current commit is
+    deployed against. `0000`–`0008` are applied to the pilot (owner-observed,
+    9/9, 24 tables, 22 enums); **`0009` is applied nowhere.** Order matters and
+    is documented in `PILOT_RUNBOOK.md` §2E and `docs/acceptance/README.md` §4:
+    check the pre-condition, migrate, verify, *then* push.
 
 ### Known issues
 

@@ -49,12 +49,12 @@ is never described as one.
 | 1b | Policy explanation | `PROFILE_CHOICES`, `ImportWizard` | "Never creates a landlord" is false for a policy that records a contactless one; nothing says what is still owed later. | Each option states what is recorded and what later refuses. | **done** |
 | 1c | Profile compatibility | `parseProfile`, `profileDigest` | A third policy value must not misread saved v2 profiles. | Saved profiles keep working; digest still invalidates stale previews. | **done** |
 | 1d | End-to-end exercise | `previewImportAction` / `confirmImportAction` | Never run as one path outside the deployed app. | A harness drives the real actions over fictional CSVs. | **done** |
-| 2 | Work journey | jobs, scheduling, documents, invoices | Not exercised as one path; defects unknown. | Service-level pass with defects fixed. | not started |
+| 2 | Work journey | jobs, scheduling, documents, invoices | Not exercised as one path; defects unknown. | Service-level pass with defects fixed. | **done** |
 | 3 | Certificate → renewal | `releaseCertificate`, `setCompliancePosition` | `releaseCertificate` **never writes `compliance_cycle`**; `setCompliancePosition` hardcodes `cp12` and supersedes every product. | Release updates the right service's position, preserving history. | **done** |
 | 3b | Due-work view | admin list patterns | No overdue/due-soon/unknown view. | Admin can see and act without developer help. | **done** |
 | 4 | Failure visibility | outbox, `admin/reconcile` | States exist; surfacing and recovery need checking. | Operator-visible states and a safe recovery action. | **done** |
-| 5 | Polish + acceptance pack | site components, email theme | — | Morning pack exists and is honest. | not started |
-| 6 | Agency page | public site | Absent. | Local-only, no unsupported claims. | not started |
+| 5 | Polish + acceptance pack | site components, email theme | — | Morning pack exists and is honest. | **done** |
+| 6 | Agency page | public site | Absent. | Local-only, no unsupported claims. | **done** |
 
 ---
 
@@ -66,6 +66,7 @@ is never described as one.
 | `5725d2e` | Make the import's hold policy actually hold |
 | `f3aee35` | Let a released certificate move the renewal it proves |
 | `338d268` | Show BSCJ what the queue is actually doing |
+| `4b15579` | Offer agencies the service we actually run, and leave a morning pack |
 
 Working tree: clean.
 
@@ -85,22 +86,41 @@ Working tree: clean.
 | P4 | `npm test` | 2243 pass, 0 fail |
 | P4 | `npm run typecheck` | clean |
 | P4 | `npm run build` | clean |
+| P5 | browser, desktop + 375px | `/letting-agents` and `/book` render; no console errors; no overflow |
+| P5 | browser | `previews/index.html` light and dark; test PDF renders with its watermark |
+| P5 | `checkPdf` on the test PDF | accepted, 2,731 bytes |
+| final | `npm test` | **2243 pass, 0 fail**, 453 suites |
+| final | `npm run typecheck` | clean |
+| final | `npm run lint` | 1 pre-existing warning (`invitationRow`, unrelated) |
+| final | `npm run build` | clean |
+| final | diff scan | no secrets, no real addresses, migrations additive and paired |
 
 ---
 
 ## Running processes
 
-None.
+**None left running.** A production server was run briefly on port 3210 to
+inspect public pages (another chat holds the dev server on 3100 and was not
+disturbed) and has been stopped. It used no external service.
 
 ---
 
 ## Next action after interruption
 
-Begin **Priority 5**: browser-inspect the public pages and the tenant booking
-flow at desktop and mobile widths (admin/agency screens cannot be inspected —
-they need a database), recheck the later-date wording, then write the morning
-acceptance pack under `docs/acceptance/`. The fictional CSVs are already there.
-Then the lower-priority agency page.
+**The defined package is complete.** Nothing is in progress and nothing is
+blocked that independent work could unblock.
+
+If resuming, the most valuable remaining work, in order:
+
+1. **Run the acceptance pack against the pilot** — `docs/acceptance/README.md`.
+   That is the owner's, and it is what turns tonight's service-level passes into
+   live evidence.
+2. **A disposable database**, so the journey can be exercised for real. PGlite
+   as a devDependency plus a second drizzle driver behind a flag is the smallest
+   route, and it is a deliberate decision rather than something to do unattended.
+3. **Admin-initiated job requests**, if BSCJ should be able to raise work
+   without waiting for the agency to click. Deliberately not built — it needs a
+   product decision about who may act for whom.
 
 *(Superseded note — Priority 3 is done.)* `releaseCertificate` in
 `src/lib/documents/certificates.ts` writes a `certificates` row but never

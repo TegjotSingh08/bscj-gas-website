@@ -691,8 +691,15 @@ to close it.
 
 ## 2E. Releasing the current commit — migration before deploy
 
-The pilot is running an **earlier** commit. Four commits have landed locally
-since, and they go out as **one release**. Nothing here is optional ordering.
+> **0008 is applied — owner-observed, 21 September 2026.** `db:status` reported
+> 9 of 9, 24 tables, 22 enums, and `d4d3c82` was pushed and deployed. The
+> reasoning below is kept because it is the same reasoning for **0009**, which
+> is now the outstanding one. Substitute `0009_one_active_cycle_per_service`
+> wherever `0008` is named, expect `10` on disk and `9` applied, and read
+> §2E.5 first — 0009 has a pre-condition that 0008 did not.
+
+The pilot is running an **earlier** commit. Commits land locally and go out as
+**one release**. Nothing here is optional ordering.
 
 ### 2E.1 There is nothing to choose between
 
@@ -786,7 +793,42 @@ it against an existing address resets the password, increments
   behaviour, not a fault.
 - Nothing about the tenant journey in §2D should change.
 
-### 2E.5 Rolling back, and its one hard limit
+### 2E.5 Migration 0009 has a pre-condition — check it first
+
+`0009_one_active_cycle_per_service` creates a **partial unique index**: one
+active `compliance_cycle` per property, per service. Additive and enforcing
+only — no column added or dropped, no data rewritten.
+
+Unlike 0008, **it can fail on existing data.** Creating a unique index over rows
+that already violate it is refused by Postgres, and that refusal is the correct
+outcome: it means two active positions exist for one service and a person has to
+decide which is right.
+
+Run this against the pilot **before** applying. It must return **no rows**:
+
+```sql
+SELECT property_id, product_id, count(*)
+FROM compliance_cycle
+WHERE status = 'active'
+GROUP BY property_id, product_id
+HAVING count(*) > 1;
+```
+
+If it returns any, supersede the wrong ones by hand — `UPDATE compliance_cycle
+SET status = 'superseded', superseded_at = now() WHERE id = '<the wrong one>'`.
+**Do not delete a compliance cycle**: it is the property's history and a job,
+certificate or invoice may reference it.
+
+Expect `Migrations on disk : 10` and `Migrations applied : 9` before, and
+`10` / `10` after, with **still 24 tables and 22 enums** — an index is neither.
+
+**Rolling 0009 back is free**, unlike 0008. Dropping an index removes a
+guarantee and touches no data:
+`drizzle/down/0009_one_active_cycle_per_service.down.sql`. The application keeps
+working; it simply goes back to being the only thing preventing two active
+positions.
+
+### 2E.6 Rolling back, and its one hard limit
 
 The code rolls back freely: an Instant Rollback to the previous deployment
 restores it, and the older code works against the migrated schema for the
