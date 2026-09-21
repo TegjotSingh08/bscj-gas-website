@@ -12,6 +12,7 @@ import { HOLD_WARNING_SECONDS } from "@/lib/booking/holds";
 import type { Product, ProductId } from "@/lib/booking/products";
 import { SCHEDULING_CONFIRM_PATH } from "@/lib/scheduling/paths";
 import type { DeadlineNotice } from "@/lib/scheduling/deadline";
+import { business } from "@/lib/business";
 
 /**
  * The tenant's picker.
@@ -151,6 +152,25 @@ export function TenantScheduler({
 
   /** Whether anything at all meets the cutoff, for the empty-state wording. */
   const hasCompliantSlot = days.some((day) => day.slots.some(withinDeadline));
+
+  /**
+   * Whether there is anything to *show* after the deadline.
+   *
+   * **The bug this closes:** the booking window is a fixed number of days
+   * ahead, and a deadline can sit at or beyond the end of it. When it does,
+   * every slot the server offers is already before the deadline — so "show me
+   * later dates" revealed exactly the same list while announcing "you are now
+   * choosing from times after <date>", which was false, and left no way back.
+   *
+   * Offering the choice only when later times genuinely exist means the button
+   * always does what it says. Where they do not, the page says so plainly
+   * instead of pretending; the horizon itself is **not** widened, because how
+   * far ahead BSCJ takes bookings is a business rule and not something a
+   * tenant's frustration should change.
+   */
+  const laterSlotsExist = days.some((day) =>
+    day.slots.some((slot) => !withinDeadline(slot)),
+  );
 
   const availableDates = visibleDays
     .filter((day) => day.slots.length > 0)
@@ -385,15 +405,34 @@ export function TenantScheduler({
         widening of the list: choosing a later time is a decision the tenant
         makes, not one the page makes for them.
       */}
-      {deadline && !showingLate && (!reservation || changingTime) && (
-        <button
-          type="button"
-          onClick={() => setShowingLate(true)}
-          className="mb-4 w-full rounded-xl border-2 border-navy-300 bg-white px-4 py-3 text-sm font-bold text-navy-900 hover:border-flame-500"
-        >
-          None of these times work — show me later dates
-        </button>
-      )}
+      {deadline &&
+        !showingLate &&
+        laterSlotsExist &&
+        (!reservation || changingTime) && (
+          <button
+            type="button"
+            onClick={() => setShowingLate(true)}
+            className="mb-4 w-full rounded-xl border-2 border-navy-300 bg-white px-4 py-3 text-sm font-bold text-navy-900 hover:border-flame-500"
+          >
+            None of these times work — show me later dates
+          </button>
+        )}
+
+      {/*
+        The honest version of the same situation. The diary simply does not go
+        past the deadline yet, so there is nothing later to offer and saying so
+        is better than a button that changes nothing.
+      */}
+      {deadline &&
+        !showingLate &&
+        !laterSlotsExist &&
+        (!reservation || changingTime) && (
+          <p className="mb-4 rounded-xl border-2 border-navy-200 bg-white px-4 py-3 text-sm text-navy-700">
+            {hasCompliantSlot
+              ? `Every time we can currently offer is before ${longDate(deadline.date)}, so there are no later dates to show. We open more dates as they get closer.`
+              : `We have no times to offer before ${longDate(deadline.date)}, and the diary does not go past it yet. Call or WhatsApp ${business.phoneDisplay} and we will sort something out.`}
+          </p>
+        )}
 
       {deadline && showingLate && (
         <div
@@ -412,6 +451,35 @@ export function TenantScheduler({
             {existingStart === null ? "the person who arranged this" : "them"}{" "}
             and BSCJ know that the appointment is after the date.
           </p>
+
+          {/*
+            The way back, which was missing entirely: a tenant who pressed the
+            button to look, and then found something earlier after all, had no
+            route to it short of reloading. Offered only when there is
+            something to go back *to* — an overdue job has no compliant times
+            by definition, and a dead control is worse than none.
+          */}
+          {!deadlineOverdue && hasCompliantSlot && (
+            <button
+              type="button"
+              onClick={() => {
+                setShowingLate(false);
+                setAcknowledged(false);
+                /*
+                  The chosen date may only exist in the later list. Clearing it
+                  drops the tenant back to the date picker rather than onto an
+                  empty set of times with no explanation. A reservation is left
+                  alone — it is a server-side hold, and releasing it silently
+                  because somebody changed their mind about a filter would lose
+                  a slot they still hold.
+                */
+                setSelectedDate(null);
+              }}
+              className="mt-3 w-full rounded-xl border-2 border-navy-300 bg-white px-4 py-2.5 text-sm font-bold text-navy-900 hover:border-navy-600"
+            >
+              Back to times before {longDate(deadline.date)}
+            </button>
+          )}
         </div>
       )}
 
