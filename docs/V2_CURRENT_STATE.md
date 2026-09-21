@@ -979,11 +979,26 @@ import, renewals filtering and pagination, service-correct job matching, agency
 isolation, failed-message retry persisting across a refresh, a validation error,
 and 375px layout.
 
-**Blocked, exactly:** certificate release in a browser. The local document store
-refuses under `NODE_ENV=production`, `next start` forces production, `next dev`
-could not run because another process held the directory, and Blob is a live
-service. The control is correctly disabled in that state; the path is covered
-against real PostgreSQL instead.
+**Was blocked, now closed.** Certificate release in a browser was recorded here
+as blocked: "the local document store refuses under `NODE_ENV=production`,
+`next start` forces production, `next dev` could not run because another
+process held the directory."
+
+The diagnosis was half wrong. The Next CLI *does* honour an already-set
+`NODE_ENV` — `process.env.NODE_ENV = process.env.NODE_ENV || defaultEnv`. What
+actually defeats it is that a production **build** folds
+`process.env.NODE_ENV === "production"` away at compile time; the compiled
+check in `.next/server` reads `"local" == driver ? { ready: false, … }` with
+the comparison gone, so no runtime variable can reach it.
+
+So the harness runs `next dev` — the only configuration the local store
+permits, which honours the safeguard rather than working around it — from a
+**separate checkout** at the tested revision, so it cannot take a `.next`
+another process is holding. Upload, review, release, the renewal moving and
+the recovery button were all driven by clicking. See the acceptance pack §0.
+
+What remains unverified is the **Blob driver**, which is a live service. The
+screens are the same; the driver underneath them is not.
 
 ### Two defects the browser found
 

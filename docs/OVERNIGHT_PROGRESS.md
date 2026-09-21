@@ -2,7 +2,7 @@
 
 **Live checkpoint.** Updated after each milestone so an interrupted session can
 resume without re-discovering anything. Read this, then `git log`, then carry on
-from "Next action".
+from "Third pass" below, which is the most recent state.
 
 ---
 
@@ -47,14 +47,12 @@ untouched.
 `npm test` is the fast unit suite; `npm run test:integration` is the PostgreSQL
 one.
 
---- | --- | --- |
-| **unit** | A pure function, called directly. | Rules, dates, address splitting, renewal arithmetic. |
-| **service** | Real production service and server-action code, with recording fakes at the **database and external-adapter boundary only**. Permissions, envelope signing, idempotency, recipient selection and ordering are genuinely exercised. | Most of tonight's work. |
-| **browser** | A real page rendered and driven in a browser. | Public pages and email previews only — everything behind sign-in needs a database. |
-| **live** | Against real services. | **Nothing tonight.** Owner-observed results are recorded as such and are not mine. |
+---
 
-A service-level pass is **not** live-delivery or live-database verification and
-is never described as one.
+**Note.** A service-level pass is not live-delivery or live-database
+verification and is never described as one.
+
+
 
 ---
 
@@ -95,6 +93,9 @@ is never described as one.
 | `582d6ea` | Report a renewal repair only where one is actually possible |
 | `f95887a` | Say only what the stored evidence supports about a retry |
 | `b86bc35` | Drive the signed-in application in a browser, on a throwaway database |
+| `7e9560e` | Separate the four kinds of evidence in the acceptance pack |
+| `5bf454b` | Find a repair that history is standing in front of |
+| `0adbc05` | Verify the boundaries by being the person they refuse |
 
 Working tree: clean.
 
@@ -145,48 +146,49 @@ disturbed) and has been stopped. It used no external service.
 
 ---
 
-## Next action after interruption
+## Third pass — 21/22 September 2026
 
-**Second pass, 22 September — complete.** All six objectives done:
+**Complete.** Four priorities, each reproduced before it was fixed.
 
-| | |
+| | What was wrong | What was done |
+| --- | --- | --- |
+| 1 | `listOutstandingRenewals` fetched one window of `max(limit * 4, 200)` candidates **before** the rules judged them. Old certificates are overwhelmingly not repairs, so 200 of them hid a genuine failure behind them — on the page whose only job is to show it. | Stable keyset walk over `(issued_at, id)` until the rows asked for are found or candidates run out. The bound stays, but reaching it is `bound` with a cursor and a **Continue from here** link, never an empty list. `decidePosition` is still the only rule. |
+| 1b | `/admin/reconcile` turned a failed query into "Nothing outstanding." via `(renewals?.length ?? 0) === 0`. | The rule is one tested function: reassurance requires knowledge. Unknown gets its own alert and withholds the claim. |
+| 2 | The access-boundary tests exercised no boundary — `assertCan` with role strings, and a source scan for `requireAdmin()`. | Real server, real sign-ins, real requests as each role. Both old checks kept, renamed for what they are. |
+| 2b | **Found by doing that:** `/admin/login` redirected *any* session to `/admin`, which sends non-admins back — an infinite loop. An engineer who typed the right password could not sign in at all. | Each session goes where it is allowed; an agency user is left on the page and told why. Tests follow the whole chain, because every first hop was already correct. |
+| 3 | The disposable driver's `batch` was not atomic: `pool.query` returns the connection per statement, so a concurrent request's write landed inside the transaction and died in an unrelated rollback. | A lock around the handle's work; `max: 1` only ever made it the same session. Reproduced first — the bystander's row vanished. |
+| 3b | `browser-server.ts` claimed setting `NODE_ENV` made the local store work under `next start`. | It does not: a production build folds the check away at compile time (evidenced in `.next/server`). It runs `next dev`, from a separate checkout, and says so. |
+
+### Verified in a browser this pass, signed in
+
+Upload → review → release → renewal moved to 19 September 2027 → position
+removed → Reconciliation listed it → **Update the renewal from this
+certificate** cleared it → empty on reload. Plus the agency-user and engineer
+redirect behaviour above. The document was served back at
+`/api/documents/<id>` with 200 from the local store.
+
+Two limitations, stated: the server was `next dev` (the only configuration the
+local store permits), and the PDF was attached to the real file input
+programmatically because the browser tool cannot open a native file dialog.
+Every other interaction was a click on the real control.
+
+### Gates on this release
+
+| Command | Result |
 | --- | --- |
-| 1 | Disposable PostgreSQL 18.4, project-local, fail-closed |
-| 2 | Renewals query: row multiplication, service matching, totals, pagination |
-| 3 | Certificate correction race + durable, discoverable recovery |
-| 4 | Email retry guarantees corrected in behaviour **and** wording |
-| 5 | Connected workflow through the application against PostgreSQL |
-| 6 | Acceptance pack: fresh state per scenario, correct order, real publication gate |
+| `npm run test:integration` | **156 pass, 47 suites, 0 fail** |
+| `npm test` | **2251 pass, 454 suites, 0 fail** |
+| `npx tsc --noEmit` | clean |
+| `npm run lint` | see below |
+| `npm run build` | see below |
 
-**Nothing is in progress and nothing is blocked.** The next step is the owner's:
-work through `docs/acceptance/README.md` in the order it now states — review,
-migrate, deploy, *then* test.
+### Still the owner's, and not done here
 
-The one thing a further session would add is **browser coverage of the
-signed-in screens**. They need a database and a session; the disposable
-PostgreSQL now makes that possible for the first time, but it was not attempted
-this pass and is not claimed.
-
-If resuming, the most valuable remaining work, in order:
-
-1. **Run the acceptance pack against the pilot** — `docs/acceptance/README.md`.
-   That is the owner's, and it is what turns tonight's service-level passes into
-   live evidence.
-2. **A disposable database**, so the journey can be exercised for real. PGlite
-   as a devDependency plus a second drizzle driver behind a flag is the smallest
-   route, and it is a deliberate decision rather than something to do unattended.
-3. **Admin-initiated job requests**, if BSCJ should be able to raise work
-   without waiting for the agency to click. Deliberately not built — it needs a
-   product decision about who may act for whom.
-
-*(Superseded note — Priority 3 is done.)* `releaseCertificate` in
-`src/lib/documents/certificates.ts` writes a `certificates` row but never
-touches `compliance_cycle`, so a released certificate does not move the
-property's due date. `setCompliancePosition` in `src/lib/portfolio/mutations.ts`
-also hardcodes `productId: "cp12"` and supersedes every product's active cycle.
-
-Priority 2 is folded into the same work: the journey is exercised at service
-level as each slice lands, since no disposable database exists.
+The six-step checklist at the top of `docs/acceptance/README.md`. Nothing was
+pushed, deployed, migrated or sent. **The Blob document driver is the one part
+of the certificate path with no evidence at all** — the screens are
+browser-verified against the local store; the driver underneath them has never
+been called.
 
 ---
 

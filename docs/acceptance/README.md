@@ -20,6 +20,23 @@ last, which asked you to test fixes that were not on the pilot yet. Corrected:
 
 §5 is the stop conditions and rollback limits. Read it before step 3.
 
+### The short version, in six steps
+
+Each one links to the section that says how. Nothing here has been done for
+you: every step below touches something live, and none of them was performed.
+
+| # | Step | Where |
+| --- | --- | --- |
+| 1 | **Confirm the revision and the target.** The release is the head of `v2-compliance-platform`; the target is the **pilot** project, not the live one. | this section, and §4.2 |
+| 2 | **Run the duplicate-active-cycle precheck.** Read-only. It must return no rows, or `0009` will stop part-way. | §4.1 |
+| 3 | **Confirm 10 migrations on disk and 9 applied**, with `0009` the only one not applied and nothing differing from disk. | §4.2 |
+| 4 | **Apply `0009` and verify** — 10 of 10, still 24 tables and 22 enum types. | §4.3, §4.4 |
+| 5 | **Push the branch.** The pilot builds it, so the push is the deploy. Then confirm the cron job is still `*/15 * * * *`. | §4.5 |
+| 6 | **Work the supervised acceptance sequence** — the CSV scenarios, the certificate through **Blob**, and the delivery evidence only a real provider can give. | §1, §2, §6 |
+
+**Do not re-run `admin:create`. Do not regenerate `CRON_SECRET`. Do not change
+the cron interval.**
+
 ---
 
 ---
@@ -31,10 +48,11 @@ then does not work.
 
 ### Automated, against a real database
 
-`npm run test:integration` — **122 tests** against a real **PostgreSQL 18.4**
+`npm run test:integration` — **156 tests** against a real **PostgreSQL 18.4**
 started by the test run from `node_modules`, with the real migration chain
 `0000`–`0009` applied and real constraints, transactions and independent
-connections. `npm test` — **2242** unit tests.
+connections. `npm test` — **2251** unit tests. Both were run on this release
+and both pass.
 
 **Neither touches the development or pilot database.** The harness deletes any
 inherited `DATABASE_URL` from its process and refuses any connection string
@@ -57,6 +75,28 @@ The real application, driven by clicking. Verified this way:
 | Failed message | reason shown, retry pressed, still queued **after a refresh** |
 | Mistyped spreadsheet | validation error naming what to fix |
 | Renewals at 375px | no horizontal overflow |
+
+Added on this release, signed in as each role against the same throwaway
+database, with the real Next server running from a **separate checkout** so
+nothing held another process's build directory:
+
+| | |
+| --- | --- |
+| Engineer screen, upload | the specimen PDF uploaded through the real form; "Uploaded. It is not released until an administrator has reviewed it." |
+| The stored file | served back at `/api/documents/<id>` with **200** from the local store |
+| Review gate | the release button stays disabled until the PDF has actually been opened |
+| Admin release | released through the form with the PDF's own number and dates |
+| The renewal | moved to **19 September 2027**, written from the certificate, visible as *due later* on Renewals due |
+| Recovery, after the position was removed | Reconciliation listed the certificate, the job's **Update the renewal from this certificate** cleared it, and the list was empty on reload |
+| Agency user asking for an admin page | staff sign-in page, with a line saying they are signed in as an agency user and a link to their portal — **it was an infinite redirect loop before this release** |
+| Engineer signing in at the staff form | lands on their own day — **they could not sign in at all before this release** |
+
+Two things about that run, stated rather than glossed: the server was
+`next dev` (see §6 — a production build refuses the local document store, and
+that is the store's rule working, not a workaround), and the PDF was attached
+to the real file input programmatically because the browser tool cannot open a
+native file dialog. Everything after the attachment — the submit, the review
+gate, the release, the recovery — was a real click on the real control.
 
 ### Owner-observed, live — **preserved from earlier, still the only live evidence**
 
@@ -248,6 +288,7 @@ PDF structure) so the upload and review screens can be exercised.
 | --- | --- |
 | **Admin → Renewals due** (`/admin/due`) | New. Overdue, due in a range **you choose and it shows back to you**, and properties with no date at all. A property with a job already open says so with its reference, so nobody chases work already in hand. |
 | **Admin → Reconciliation** (`/admin/reconcile`) | The message queue is now row-by-row instead of three counts: what it is, which job, how many attempts, what the last reason was in plain words, and a **Try sending it again** button on messages that have genuinely given up. |
+| **Admin → Reconciliation**, the renewals section | It now says when it has **not** finished looking. The search over released certificates is bounded so a page render cannot become a full scan; if it stops at that bound it says how many it examined and offers **Continue from here** rather than printing an empty list. A failed read says the records are *unknown*, and "Nothing outstanding." is withheld until every source has actually answered. |
 | **Admin → Agencies → Import settings** | The landlord-contact setting now has **three** options, each stating what is recorded and what still refuses afterwards. |
 | **Portfolio → Import** preview (agency) | Held rows are separated from unreadable rows; contactless landlords are counted and explained; same-name landlords are asked about. |
 | **Admin → job → issued certificate** | New **Update the renewal from this certificate** button. Safe to press at any time. |
@@ -393,19 +434,29 @@ is being served, which is the right state for a soft launch.
 version race, the outstanding-renewal rules, the outbox failure-and-recovery
 cycle, and the connected workflow from job request to recorded payment.
 
-**Now verified in a browser, signed in:** everything in §0's browser table.
+**Now verified in a browser, signed in:** everything in §0's browser table,
+including the whole certificate path and both access boundaries that were
+previously asserted only against a lookup table.
 
 **Still not verified, by me or by anybody:**
 
 - **The pilot's own database.** The suites run against a throwaway server and
   must not touch the pilot. Migration `0009` has been applied only there.
-- **Certificate release in a browser.** The local document store refuses under
-  `NODE_ENV=production`; `next start` forces production; `next dev` could not
-  run because another process held the directory; and Blob is a live service.
-  The release control is *correctly* disabled in that state. The path is
-  covered against real PostgreSQL instead — release, correction, the version
-  race, the genuine outstanding state and its recovery — so it is
-  integration-verified, not browser-verified.
+- **The Blob document driver.** Certificate upload, review, release and
+  recovery are now **browser-verified** (§0) — but against the **local**
+  document store. The pilot uses Vercel Blob, which is a live service and was
+  not called. Nothing about the screens changes between the two; what is
+  unverified is the driver underneath them, and it is the one thing in the
+  certificate path that only the pilot can show.
+
+  The earlier note here said the browser run was blocked because `next start`
+  forces production and the local store refuses there. Half of that was wrong
+  and worth correcting: the Next CLI does honour an already-set `NODE_ENV`.
+  The real reason is that a production **build** folds
+  `process.env.NODE_ENV === "production"` away at compile time, so the check
+  cannot be influenced at run time at all. The harness therefore runs
+  `next dev`, which is the only configuration the store permits — the
+  safeguard is honoured rather than worked around.
 - **Real email delivery.** The transport is captured in every test; Resend has
   never been called from here.
 - **Automatic retries against a real provider failure.** A first-attempt

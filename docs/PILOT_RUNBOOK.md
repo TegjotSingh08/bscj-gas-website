@@ -80,7 +80,17 @@ to send.
 
 **Blob storage**
 - Attach a Vercel Blob store; `BLOB_READ_WRITE_TOKEN` is injected and nothing
-  else is needed. The local driver refuses to run when `NODE_ENV=production`.
+  else is needed. The local driver refuses to run when `NODE_ENV=production`,
+  and on a deployment that refusal cannot be talked out of: a production build
+  folds the check away at compile time, so setting `NODE_ENV` in the project's
+  environment changes nothing. Blob is the only document store a deployment
+  has.
+- **Certificates are the one part of the release still unproven against a live
+  service.** Upload, review, release, the renewal moving and the recovery
+  button are all browser-verified against the *local* store (acceptance pack
+  §0). The screens are identical on Blob; the driver underneath them has never
+  been called from here. Exercise it once, on the pilot, with the
+  `TEST-NOT-VALID` specimen.
 
 **Scheduled processing**
 - `CRON_SECRET`, at least 24 characters. Vercel sends it automatically as an
