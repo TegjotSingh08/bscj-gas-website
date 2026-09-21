@@ -3,7 +3,7 @@ import "server-only";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 import type { ImportRecord } from "./rows";
-import type { PlannedRow, Resolution } from "./plan";
+import type { LandlordChoice, PlannedRow, Resolution } from "./plan";
 
 /**
  * Carrying a reviewed plan from the preview to the confirmation.
@@ -65,12 +65,19 @@ export type PlannedWrite = {
   /** Set for `conflict`: the property already held. */
   existingPropertyId?: string;
   /**
-   * Set for `create` when a contactless landlord was resolved by name.
+   * Set for `create` when a contactless landlord's name matched one on file.
    *
-   * Inside the signature, so the browser cannot claim a match that the preview
-   * did not make — attaching a property to a landlord is who gets billed.
+   * A **suggestion**, and inside the signature so the browser can only accept
+   * or decline it, never name a different landlord — attaching a property to a
+   * landlord decides who gets billed. Whether it is accepted comes from the
+   * agent's recorded choice at confirmation, not from here.
    */
-  matchedLandlordId?: string;
+  suggestedLandlordId?: string;
+  /**
+   * Set for `create` when the row cannot be written until somebody says who
+   * the landlord is. An unanswered row is held rather than guessed at.
+   */
+  landlordChoiceRequired?: boolean;
   /**
    * Set for `conflict`: whether an import may apply this row at all.
    *
@@ -137,7 +144,8 @@ export function envelopeFor(input: {
         line: row.line,
         action: "create",
         record: row.record,
-        matchedLandlordId: row.matchedLandlordId,
+        suggestedLandlordId: row.suggestedLandlordId,
+        landlordChoiceRequired: row.landlordChoiceRequired,
       });
     } else if (row.action === "conflict") {
       writes.push({
@@ -261,6 +269,14 @@ export function openEnvelope(
 export function digestFor(
   envelope: ImportEnvelope,
   resolutions: Map<number, Resolution>,
+  /**
+   * Who the agent said each contactless landlord is.
+   *
+   * Part of what was decided, exactly as a resolution is: coming back and
+   * answering "this is a different person of the same name" must be allowed to
+   * run, not refused as a repeat of the submission that left it unanswered.
+   */
+  identities: Map<number, LandlordChoice> = new Map(),
 ): string {
   const canonical = [
     envelope.organisationId,
@@ -270,7 +286,7 @@ export function digestFor(
       (write) =>
         `${write.line}:${write.action}:${write.record.key}:${
           resolutions.get(write.line) ?? "skip"
-        }`,
+        }:${identities.get(write.line) ?? "unanswered"}`,
     ),
   ].join("|");
 

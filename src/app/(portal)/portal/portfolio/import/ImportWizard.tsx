@@ -286,6 +286,14 @@ function Review({
   const { counts } = plan;
   const conflicts = plan.rows.filter((row) => row.action === "conflict");
   const errors = plan.rows.filter((row) => row.action === "error");
+  /*
+    Rows that cannot be written until somebody says who the landlord is. A
+    unique matching name is evidence, not identity — two landlords can share
+    one — so the import suggests and a person decides.
+  */
+  const identities = plan.rows.filter(
+    (row) => row.landlordChoiceRequired === true,
+  );
 
   return (
     <form action={action} className="mt-4">
@@ -366,6 +374,27 @@ function Review({
           </div>
         )}
 
+        {identities.length > 0 && (
+          <div className="mt-5">
+            <h3 className="text-sm font-extrabold text-navy-900">
+              {identities.length} propert{identities.length === 1 ? "y" : "ies"}{" "}
+              where we need to know which landlord this is
+            </h3>
+            <p className="mt-1 text-xs text-navy-700">
+              These rows have no landlord email, and the name already appears in
+              your portfolio. A name is not proof it is the same person, so
+              nothing is attached until you say. Rows you leave unanswered are
+              not imported.
+            </p>
+
+            <ul className="mt-3 space-y-3">
+              {identities.map((row) => (
+                <IdentityRow key={row.line} row={row} />
+              ))}
+            </ul>
+          </div>
+        )}
+
         {conflicts.length > 0 && (
           <div className="mt-5">
             <h3 className="text-sm font-extrabold text-navy-900">
@@ -418,7 +447,12 @@ function Review({
                       {row.record?.landlord.name ?? "—"}
                       {row.landlordExisting && (
                         <span className="block text-xs text-navy-600">
-                          Already on file — will be reused
+                          Same email as one on file — will be reused
+                        </span>
+                      )}
+                      {row.landlordChoiceRequired && (
+                        <span className="block text-xs font-bold text-navy-700">
+                          Needs a decision — see above
                         </span>
                       )}
                     </td>
@@ -439,10 +473,16 @@ function Review({
       <section className="mt-4 rounded-2xl border-2 border-navy-200 bg-white p-5">
         <h2 className="text-sm font-extrabold text-navy-900">4. Confirm</h2>
         <p className="mt-2 text-sm text-navy-700">
-          This adds <span className="font-bold">{counts.create}</span>{" "}
+          This adds up to <span className="font-bold">{counts.create}</span>{" "}
           propert{counts.create === 1 ? "y" : "ies"}, plus any differences you
           ticked above. No work is booked and no tenant is contacted.
         </p>
+        {identities.length > 0 && (
+          <p className="mt-2 text-sm font-bold text-navy-900">
+            {identities.length} of them need a landlord chosen above. Any you
+            leave unanswered are left out, and you can import them again.
+          </p>
+        )}
         <button
           type="submit"
           disabled={pending || counts.create + conflicts.length === 0}
@@ -458,6 +498,76 @@ function Review({
         )}
       </section>
     </form>
+  );
+}
+
+/**
+ * One property whose landlord has to be identified before it can be written.
+ *
+ * Neither option is preselected and there is no default: a radio group nobody
+ * touched submits nothing, and the server reads that as "unanswered" and holds
+ * the row. Attaching a property — and the invoices that follow it — to whoever
+ * shares a name is the outcome this exists to prevent, and the second option
+ * exists because distinct people genuinely do share names. Nobody is told to
+ * merge two records on that evidence.
+ */
+function IdentityRow({ row }: { row: PlannedRow }) {
+  const [choice, setChoice] = useState<"existing" | "new" | null>(null);
+  const name = row.record?.landlord.name ?? "";
+
+  return (
+    <li className="rounded-xl border-2 border-navy-300 bg-navy-50 p-4">
+      <p className="text-sm font-bold text-navy-900">
+        Row {row.line} — {row.address}
+      </p>
+      <p className="mt-1 text-sm text-navy-700">
+        Your file says the landlord is{" "}
+        <span className="font-bold text-navy-900">{name}</span>, with no email.
+        You already have a landlord called{" "}
+        <span className="font-bold text-navy-900">
+          {row.suggestedLandlordName ?? name}
+        </span>
+        .
+      </p>
+
+      <div className="mt-3 space-y-2">
+        <label className="flex items-start gap-2 text-sm text-navy-900">
+          <input
+            type="radio"
+            name={`landlord-${row.line}`}
+            value="existing"
+            checked={choice === "existing"}
+            onChange={() => setChoice("existing")}
+            className="mt-0.5 h-4 w-4"
+          />
+          <span>
+            <span className="font-bold">It is the same person.</span> Add this
+            property to the landlord you already have.
+          </span>
+        </label>
+
+        <label className="flex items-start gap-2 text-sm text-navy-900">
+          <input
+            type="radio"
+            name={`landlord-${row.line}`}
+            value="new"
+            checked={choice === "new"}
+            onChange={() => setChoice("new")}
+            className="mt-0.5 h-4 w-4"
+          />
+          <span>
+            <span className="font-bold">It is a different person</span> who
+            happens to have the same name. Record them separately.
+          </span>
+        </label>
+      </div>
+
+      {choice === null && (
+        <p className="mt-2 text-xs font-bold text-navy-700">
+          Not answered — this row will not be imported.
+        </p>
+      )}
+    </li>
   );
 }
 

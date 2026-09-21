@@ -107,23 +107,31 @@ describe("two contactless landlords are two landlords", () => {
 });
 
 describe("matching a contactless landlord by name", () => {
+  /*
+    Only the lookup itself is covered here — whether a name is consulted at
+    all, and what an ambiguous one does. **What a match may then be used for**
+    is `identity.test.ts`: a unique name is a suggestion requiring an explicit
+    choice, never an attachment.
+  */
   test("off by default — a name alone does not establish identity", () => {
     const result = plan([row(2)], {
       byName: { "ada fixture": { outcome: "one", id: "c-1", name: "Ada Fixture" } },
     });
     assert.equal(result.rows[0].landlordMatch, undefined);
-    assert.equal(result.rows[0].matchedLandlordId, undefined);
+    assert.equal(result.rows[0].suggestedLandlordId, undefined);
   });
 
-  test("exactly one match attaches the property to that landlord", () => {
+  test("exactly one match is suggested, and the row waits for a person", () => {
     const result = plan([row(2)], {
       landlordMatch: "match_existing_by_name",
       byName: { "ada fixture": { outcome: "one", id: "c-1", name: "Ada Fixture" } },
     });
     assert.equal(result.counts.create, 1);
     assert.equal(result.rows[0].landlordMatch, "one");
-    assert.equal(result.rows[0].matchedLandlordId, "c-1");
-    assert.equal(result.rows[0].landlordExisting, true);
+    assert.equal(result.rows[0].suggestedLandlordId, "c-1");
+    assert.equal(result.rows[0].landlordChoiceRequired, true);
+    // A name match is not "already on file". That claim needs an address.
+    assert.equal(result.rows[0].landlordExisting, false);
   });
 
   test("AMBIGUOUS holds the row and says how to resolve it", () => {
@@ -140,7 +148,7 @@ describe("matching a contactless landlord by name", () => {
     assert.equal(result.counts.create, 0);
     const message = result.rows[0].errors?.[0]?.message ?? "";
     assert.match(message, /more than one landlord/i);
-    assert.match(message, /add an email|merge/i);
+    assert.match(message, /add an email/i);
   });
 
   test("no match creates a new contactless landlord, which is what the file says", () => {
@@ -149,7 +157,8 @@ describe("matching a contactless landlord by name", () => {
       byName: { "ada fixture": { outcome: "none" } },
     });
     assert.equal(result.counts.create, 1);
-    assert.equal(result.rows[0].matchedLandlordId, undefined);
+    assert.equal(result.rows[0].suggestedLandlordId, undefined);
+    assert.equal(result.rows[0].landlordChoiceRequired, undefined);
   });
 
   test("a row that HAS an email never uses the weaker name match", () => {
@@ -168,7 +177,7 @@ describe("matching a contactless landlord by name", () => {
       landlordMatch: "match_existing_by_name",
       byName: { "ada fixture": { outcome: "one", id: "c-1", name: "Ada Fixture" } },
     });
-    assert.equal(result.rows[0].matchedLandlordId, "c-1");
+    assert.equal(result.rows[0].suggestedLandlordId, "c-1");
   });
 });
 
@@ -211,7 +220,12 @@ describe("repeat-import safety is unchanged", () => {
       held: [held()],
     });
     assert.equal(result.counts.conflict, 1);
-    // Reported as landlord details, and it defaults to leaving things alone.
+    /*
+      Reported, and **not** offered for applying: there is no email on the
+      record's side, so nothing establishes that this is the same landlord.
+      The preview says so rather than promising a write the commit would skip.
+    */
+    assert.equal(result.rows[0].conflicts?.[0]?.applicable, false);
     assert.equal(result.wouldWrite, 0);
   });
 

@@ -49,6 +49,21 @@ export type RowAction =
  */
 export type Resolution = "skip" | "update";
 
+/**
+ * Who the agent said a contactless landlord is.
+ *
+ * `unanswered` is the default and is applied to any row that needed a choice
+ * and did not get one. It **holds** the row: a lost radio button must not
+ * become permission to attach a property — and the invoices that follow it —
+ * to somebody who merely shares a name.
+ *
+ * `existing` accepts the suggestion carried in the signed envelope.
+ * `new` records a second landlord of that name, which is the case a name match
+ * cannot distinguish from the first: distinct people do share names, and
+ * nobody should be told to merge two records because of one.
+ */
+export type LandlordChoice = "unanswered" | "existing" | "new";
+
 /** One difference between the file and what is already held. */
 export type Conflict = {
   /** What differs, in the agent's words. */
@@ -110,16 +125,40 @@ export type PlannedRow = {
    * nothing it was judged against.
    */
   observed?: string;
-  /** For `create`: whether the landlord is one the agency already has. */
+  /**
+   * For `create`: whether the landlord is one the agency already has.
+   *
+   * Only ever set from a **matching email address**, which identifies a
+   * person. A matching name does not, so it is a suggestion — see below — and
+   * never reported here as an established fact.
+   */
   landlordExisting?: boolean;
   /**
-   * How a contactless landlord was resolved, when the profile allows matching
+   * How a contactless landlord was looked up, when the profile allows matching
    * by name. `ambiguous` holds the row: two landlords of one name must be
    * chosen between by a person, never by whichever came first.
    */
   landlordMatch?: NameMatch["outcome"];
-  /** For `landlordMatch: "one"`: the landlord this row will attach to. */
-  matchedLandlordId?: string;
+  /**
+   * For `landlordMatch: "one"`: the landlord this row **could** attach to.
+   *
+   * A suggestion, not a decision. A unique matching name is not proof of
+   * identity — two landlords can share one, and the second has simply not been
+   * recorded yet — so nothing attaches until a person says which it is. The id
+   * travels inside the signed envelope so the browser can only accept or
+   * decline the suggestion, never name a different landlord.
+   */
+  suggestedLandlordId?: string;
+  /** The name as it is held on file, so the agent can see what they are choosing. */
+  suggestedLandlordName?: string;
+  /**
+   * Whether this row cannot be written until somebody says who the landlord is.
+   *
+   * Unanswered rows are **held**, not guessed at: attaching a property to the
+   * wrong person of the same name puts it, and eventually an invoice, in front
+   * of a stranger, and nothing downstream would notice.
+   */
+  landlordChoiceRequired?: boolean;
   /** Dates, written out long, so a misread ordering is visible. */
   dueDateLong?: string;
   tenancyStartedLong?: string;
@@ -243,20 +282,39 @@ function conflictsBetween(
 ): Conflict[] {
   const conflicts: Conflict[] = [];
 
-  if (!same(record.landlord.email, existing.landlordEmail)) {
+  /*
+    **The landlord, and what an import may do to their record.**
+
+    Three cases, and the line between them is whether the file identifies the
+    landlord at all. An email does; a name does not. So an update to a
+    landlord's own record — which affects every property they own — is offered
+    only when the file and the record carry the **same, non-empty** email.
+
+    That is exactly the condition `commitImport` writes under. The two used to
+    disagree: a row with no email on either side fell through to "Landlord
+    details", was offered as applicable, and the commit then skipped the
+    landlord because it had nothing to identify them by. The agent ticked a box
+    and nothing happened. A preview is a promise about what confirming will
+    write, so the promise is now the narrower, true one.
+  */
+  const fileEmail = (record.landlord.email ?? "").trim();
+  const heldEmail = (existing.landlordEmail ?? "").trim();
+  const bothIdentified = fileEmail !== "" && heldEmail !== "";
+  const landlordDetailsDiffer =
+    !same(record.landlord.name, existing.landlordName) ||
+    !samePhone(record.landlord.phone, existing.landlordPhone) ||
+    !same(record.landlord.company, existing.landlordCompany);
+
+  if (bothIdentified && !same(fileEmail, heldEmail)) {
     conflicts.push({
       field: "Landlord",
-      current: `${existing.landlordName} (${existing.landlordEmail})`,
-      incoming: `${record.landlord.name} (${record.landlord.email})`,
+      current: `${existing.landlordName} (${shown(existing.landlordEmail)})`,
+      incoming: `${record.landlord.name} (${shown(record.landlord.email)})`,
       effect:
         "An import will not move a property to a different landlord — that re-parents its billing, certificates and history. Change it on the property, where you can see what it affects.",
       applicable: false,
     });
-  } else if (
-    !same(record.landlord.name, existing.landlordName) ||
-    !samePhone(record.landlord.phone, existing.landlordPhone) ||
-    !same(record.landlord.company, existing.landlordCompany)
-  ) {
+  } else if (bothIdentified && landlordDetailsDiffer) {
     conflicts.push({
       field: "Landlord details",
       current: `${existing.landlordName}, ${shown(existing.landlordPhone)}`,
@@ -264,6 +322,23 @@ function conflictsBetween(
       effect:
         "Applying updates the landlord's name, company and phone number on their own record — which affects every property they own, not only this one.",
       applicable: true,
+    });
+  } else if (!bothIdentified && (landlordDetailsDiffer || fileEmail !== "")) {
+    /*
+      One side has no email, so there is nothing that establishes these are the
+      same person — and a name will not do it. Reported, because an agent
+      should see that their file and their record disagree, and **never
+      applied**: editing the landlord this property happens to be attached to,
+      on the strength of a spreadsheet cell, is how one landlord's details end
+      up on another's record.
+    */
+    conflicts.push({
+      field: "Landlord details",
+      current: `${existing.landlordName}, ${shown(existing.landlordEmail)}, ${shown(existing.landlordPhone)}`,
+      incoming: `${record.landlord.name}, ${shown(record.landlord.email)}, ${shown(record.landlord.phone)}`,
+      effect:
+        "There is no email on one side of this, so an import cannot tell whether it is the same landlord. Nothing on their record is changed — open the landlord and update them there.",
+      applicable: false,
     });
   }
 
@@ -399,22 +474,34 @@ export function buildImportPlan(input: {
       **A landlord with no contact details, where the profile says names are
       reliable.**
 
-      Resolved explicitly, and an ambiguous name holds the row. Silently
-      attaching a property to whichever J. Smith came first puts it — and
-      eventually an invoice — in front of the wrong person, and nothing
-      downstream would notice. A name that matches nothing is not an error: a
-      new landlord is created from it, with no contact, which is exactly what
+      A unique matching name is **evidence, not identity**. Two landlords can
+      share a name and the second may simply not be on file yet, so the match
+      is offered as a suggestion and the row is held until somebody chooses.
+      Silently attaching a property to whichever J. Smith came first puts it —
+      and eventually an invoice — in front of the wrong person, and nothing
+      downstream would notice. An ambiguous name is held outright: there is
+      nothing sensible to suggest. A name that matches nothing is not an error;
+      a new landlord is created from it, with no contact, which is exactly what
       the file says.
     */
     let landlordMatch: NameMatch["outcome"] | undefined;
-    let matchedLandlordId: string | undefined;
+    let suggestedLandlordId: string | undefined;
+    let suggestedLandlordName: string | undefined;
 
     if (!record.landlord.email && profile.landlordMatch === "match_existing_by_name") {
+      /*
+        The same normalisation `matchLandlordsByName` keyed the map with.
+        Inlined rather than imported: `lookup.ts` is `server-only` and reaches
+        the database, and this module is deliberately pure.
+      */
       const found = input.landlordsByName?.get(
         record.landlord.name.replace(/\s+/g, " ").trim().toLowerCase(),
       );
       landlordMatch = found?.outcome ?? "none";
-      if (found?.outcome === "one") matchedLandlordId = found.id;
+      if (found?.outcome === "one") {
+        suggestedLandlordId = found.id;
+        suggestedLandlordName = found.name;
+      }
 
       if (landlordMatch === "ambiguous") {
         counts.error += 1;
@@ -425,7 +512,7 @@ export function buildImportPlan(input: {
           errors: [
             {
               column: "landlord_name",
-              message: `More than one landlord of this name is already on file, and this row has no email to tell them apart. Add an email to the row, or merge the duplicates first.`,
+              message: `More than one landlord of this name is already on file, and this row has no email to tell them apart. Add an email to the row so we know which one it is.`,
             },
           ],
         });
@@ -449,9 +536,11 @@ export function buildImportPlan(input: {
         */
         landlordExisting: record.landlord.email
           ? input.existingLandlordEmails.has(record.landlord.email.toLowerCase())
-          : landlordMatch === "one",
+          : false,
         landlordMatch,
-        matchedLandlordId,
+        suggestedLandlordId,
+        suggestedLandlordName,
+        landlordChoiceRequired: suggestedLandlordId ? true : undefined,
         dueDateLong,
         tenancyStartedLong,
       });

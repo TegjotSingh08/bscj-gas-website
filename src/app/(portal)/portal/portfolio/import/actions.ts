@@ -17,6 +17,7 @@ import {
 import {
   buildImportPlan,
   type ImportPlan,
+  type LandlordChoice,
   type Resolution,
 } from "@/lib/portfolio/import/plan";
 import {
@@ -347,12 +348,31 @@ export async function confirmImportAction(
     changing nothing.
   */
   const resolutions = new Map<number, Resolution>();
+  /*
+    Who the agent said each contactless landlord is, read the same way: an
+    allow-list of two answers, and anything else — missing, malformed, a radio
+    nobody touched — is `unanswered`, which **holds** the row. A lost control
+    must never become permission to attach a property, and the invoices that
+    follow it, to somebody who merely shares a name.
+
+    Note what is *not* read here: no landlord id. The only id in play is the
+    one inside the signed envelope, so the browser can accept or decline the
+    suggestion the preview made and cannot name a different landlord.
+    `createProperty` then re-checks that the landlord belongs to this agency.
+  */
+  const identities = new Map<number, LandlordChoice>();
   for (const write of envelope.writes) {
     const chosen = form.get(`resolution-${write.line}`);
     resolutions.set(write.line, chosen === "update" ? "update" : "skip");
+
+    const identity = form.get(`landlord-${write.line}`);
+    identities.set(
+      write.line,
+      identity === "existing" ? "existing" : identity === "new" ? "new" : "unanswered",
+    );
   }
 
-  const digest = digestFor(envelope, resolutions);
+  const digest = digestFor(envelope, resolutions, identities);
 
   const result = await commitImport({
     organisationId: session.organisationId,
@@ -360,6 +380,7 @@ export async function confirmImportAction(
     envelope,
     planDigest: digest,
     resolutions,
+    identities,
   });
 
   if (result.status === "not_configured") {

@@ -49,7 +49,7 @@ Four things a heading cannot tell us, each defaulting to the cautious reading:
 | `occupierRole` | A second name column may be the tenant, a caretaker or the managing contact. **Default `unknown`, which creates no tenancy** — a tenancy asserts somebody lives there and is who a scheduling link is sent to. The name is kept as an access note instead: visible to the engineer, asserting nothing, contacting nobody. |
 | `addressMode` | Whether to trust the combined cell, the separate columns, or whichever exists. |
 | `dateOrder` | `uk` (day first) or `iso_only`, which refuses anything else — for an export known to mix conventions. |
-| `landlordMatch` | What to do when landlord contact details are missing: hold the row (default), or attach to an existing landlord when **exactly one** of that name exists for this agency. Never creates a landlord, never invents contact details. |
+| `landlordMatch` | What to do when landlord contact details are missing: hold the row (default), or **suggest** an existing landlord when exactly one of that name exists for this agency. A suggestion is not an attachment — see "A name is not an identity" below. Never invents contact details. |
 
 ### The one asymmetry, and why
 
@@ -123,24 +123,73 @@ building. A unit word with no building number (`Flat 2, Example Street`) is
 4. **Landlord contact details may be absent entirely.** This is the open
    blocker — see below.
 
-### Open question for BSCJ
+### The blocker, and how it was closed
 
-`customer.email` and `customer.phone` are `NOT NULL`, and `property.customer_id`
-is `NOT NULL`. So **a property cannot be recorded at all without a landlord
-carrying both an email and a phone number.** If an agency's export has no
-landlord email, no property from it can be imported, and the only alternatives
-are inventing contact details — which we will not do — or holding every row.
+**`customer.email` and `customer.phone` are now nullable** —
+`drizzle/0008_landlord_contact_optional.sql`, prepared 21 September 2026 and
+**not yet applied to any database**. `property.customer_id` stays `NOT NULL`: a
+property still belongs to an identified owner, and this relaxes what is known
+*about* the owner rather than whether there is one.
 
-Today the importer holds such rows and says precisely why, and
-`landlordMatch: match_existing_by_name` recovers the case where the landlord is
-already on file. Neither helps a first import of an export that carries no
-landlord contact.
+Before it, a property could not be recorded at all without a landlord carrying
+both an email and a phone, so an export with no landlord contact imported
+nothing. The only alternatives were inventing contact details — which puts a
+fiction in front of a landlord and eventually onto an invoice — or holding
+every row.
 
-Closing it properly needs **migration 0008** relaxing those columns to
-nullable, plus requiring the detail at the operation that needs it — issuing an
-invoice, releasing a certificate, requesting a remedial — rather than at import.
-That preserves payer identity and recipient selection: the landlord record is
-still the payer and still the recipient; it simply may not be contactable yet,
-and the operations that need to contact them refuse until it is.
+The requirement moved rather than disappeared: it now sits at the operation
+that has to **reach** somebody — issuing a certificate, delivering an invoice,
+requesting a remedial — which refuses by name when there is no address for the
+recipient it chose. Payer identity and recipient selection are preserved: the
+landlord is still the payer and still the recipient; they may simply not be
+contactable yet. Issuing an invoice does not require a contact — the number,
+the PDF and the payer are all valid without one — so the block lands at
+delivery, not at issue.
 
-**That is a schema change and a business decision, so it has not been made.**
+Applying it is an owner step, and it has to happen **before** the current
+commit is deployed: `PILOT_RUNBOOK.md` §2E.
+
+## A name is not an identity
+
+`landlordMatch: match_existing_by_name` recovers the case where a contactless
+landlord is already on file. What it may conclude from that is deliberately
+narrow.
+
+**Exactly one landlord of that name is a suggestion, not a match.** Two people
+genuinely share names, and the second may simply not be recorded yet. So the
+preview asks, per row, whether this is the same person or a different one with
+the same name, and **an unanswered row is not imported**. Attaching a property
+to the wrong Ada Fixture puts it — and eventually an invoice — in front of a
+stranger, and nothing downstream would notice.
+
+The mechanics are the existing ones. The suggested landlord's id travels
+**inside the signed envelope**, so the browser can accept or decline a
+suggestion the preview made and can never name a different landlord; the
+agent's answer is read as an allow-list of two values, with anything else
+meaning "unanswered"; and `createProperty` re-checks that the landlord belongs
+to this agency before attaching anything. The answer is part of the plan
+digest, so coming back and answering later is a new import rather than a
+blocked repeat.
+
+More than one landlord of the name still **holds the row**, and says to add an
+email to it. It does **not** suggest merging the two records: they may be two
+people, and merging them on the evidence of a repeated name destroys a record.
+
+## What the preview promises is what the commit writes
+
+A preview is a promise. Two places where it was making one it could not keep
+have been closed, both about landlord *details* on a property already held:
+
+- **Neither side has an email.** The preview offered "Landlord details" as
+  applicable; the commit had nothing to identify the landlord by and skipped
+  it. The agent ticked a box and nothing happened. It is now reported and
+  marked not applicable, with the reason said plainly.
+- **The file names a different landlord.** The preview correctly refused to
+  re-parent the property — and the commit, looking the incoming email up across
+  the agency, updated *that other landlord's* name, company and phone anyway.
+  A landlord's own record is now only ever updated when the file carries the
+  same, non-empty email as the landlord the property already belongs to, and
+  the update goes to that owner by id.
+
+Both are the same rule stated twice: an email identifies a person, a name does
+not, and neither does "this property happens to be attached to them".

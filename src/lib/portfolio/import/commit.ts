@@ -10,14 +10,10 @@ import {
   setCompliancePosition,
   updateLandlord,
 } from "../mutations";
-import {
-  lookupExistingByPostcode,
-  lookupLandlordsByEmail,
-  type ExistingProperty,
-} from "./lookup";
+import { lookupExistingByPostcode, type ExistingProperty } from "./lookup";
 import { fingerprintOf } from "./plan";
 import type { ImportEnvelope, PlannedWrite } from "./envelope";
-import type { Resolution } from "./plan";
+import type { LandlordChoice, Resolution } from "./plan";
 
 /**
  * Writing a reviewed plan.
@@ -92,6 +88,8 @@ async function applyRow(
   actorUserId: string,
   write: PlannedWrite,
   resolution: Resolution,
+  /** Who the agent said this row's contactless landlord is. */
+  identity: LandlordChoice,
   /** The portfolio as it is **now**, not as the preview saw it. */
   current: Map<string, ExistingProperty>,
 ): Promise<RowOutcome> {
@@ -157,27 +155,33 @@ async function applyRow(
     let touched = false;
 
     /*
-      The landlord's own details, where the file has the same address on file
-      and different particulars. Matched by email within the organisation —
-      never by an id from the file, which carries none — so a landlord in
-      another agency cannot be reached however the row is written.
+      The landlord's own details.
 
-      **A row with no email updates no landlord.** There is nothing to match
-      on, and matching on anything weaker would edit whichever landlord
-      happened to be there. The property's own details still apply; only the
-      landlord record is left alone.
+      **Only the landlord this property already belongs to, and only when the
+      file names them by the same email.** An email identifies a person; a name
+      does not, and a property's current owner is not evidence that the row is
+      about them. So the update goes to `now.landlordId` — the owner as freshly
+      read, already proven unmoved by the fingerprint check above — and only
+      when the file's email matches theirs.
+
+      That is precisely the condition under which the preview marks "Landlord
+      details" applicable, so the promise and the write now say the same thing.
+      Two earlier shapes are gone with it: looking the email up across the
+      agency could edit a *different* landlord who happened to hold it, and a
+      row with no email at all was offered as applicable and then silently did
+      nothing.
     */
-    const landlordEmail = record.landlord.email;
-    const landlords = landlordEmail
-      ? await lookupLandlordsByEmail(organisationId, [landlordEmail])
-      : null;
-    const landlord = landlordEmail
-      ? landlords?.get(landlordEmail.toLowerCase())
-      : undefined;
-    if (landlord) {
+    const fileEmail = (record.landlord.email ?? "").trim();
+    const heldEmail = (now.landlordEmail ?? "").trim();
+    const identifiesTheOwner =
+      fileEmail !== "" &&
+      heldEmail !== "" &&
+      fileEmail.toLowerCase() === heldEmail.toLowerCase();
+
+    if (identifiesTheOwner) {
       const updated = await updateLandlord(
         organisationId,
-        landlord.id,
+        now.landlordId,
         record.landlord,
         actorUserId,
       );
@@ -234,17 +238,47 @@ async function applyRow(
   }
 
   /*
-    A landlord the preview matched by name is attached by **id**, not
-    re-matched here. `createProperty` checks the id belongs to this agency, so
-    an id from anywhere else matches nothing; and re-running the name match at
-    write time could resolve differently from what the agent reviewed if a
-    second landlord of that name appeared in between.
+    **A contactless landlord whose name matched one on file.**
+
+    The preview offered it as a suggestion; this is where the agent's answer is
+    applied, and an unanswered row is **held**. A unique matching name is not
+    proof of identity — two landlords can share one — and attaching a property
+    to the wrong person of that name puts it, and eventually an invoice, in
+    front of a stranger with nothing downstream to notice.
+
+    The id comes from inside the signed envelope, so the browser can only
+    accept or decline the suggestion; `createProperty` then re-checks that the
+    landlord belongs to this agency, so an id from anywhere else matches
+    nothing. Declining records a second landlord of that name, which is the
+    honest answer when they are different people.
   */
+  if (write.landlordChoiceRequired) {
+    if (identity === "unanswered") {
+      return {
+        line: write.line,
+        outcome: "skipped",
+        reason:
+          "A landlord of this name is already on file and this row has no email, so we could not tell whether it is the same person. Import it again and say which.",
+      };
+    }
+    if (identity === "existing" && !write.suggestedLandlordId) {
+      // Accepting a suggestion the preview did not make. Nothing to attach to.
+      return {
+        line: write.line,
+        outcome: "skipped",
+        reason: "We no longer hold the landlord this row was matched to. Import it again.",
+      };
+    }
+  }
+
+  const attachToExisting =
+    identity === "existing" ? write.suggestedLandlordId : undefined;
+
   const created = await createProperty(
     organisationId,
-    write.matchedLandlordId
+    attachToExisting
       ? {
-          landlordId: write.matchedLandlordId,
+          landlordId: attachToExisting,
           property: record.property,
           tenancy: record.tenancy,
           compliance: record.compliance,
@@ -289,6 +323,8 @@ export async function commitImport(input: {
   envelope: ImportEnvelope;
   planDigest: string;
   resolutions: Map<number, Resolution>;
+  /** Who the agent said each contactless landlord is. Absent means unanswered. */
+  identities?: Map<number, LandlordChoice>;
 }): Promise<CommitResult> {
   const db = getDb();
   if (!db) return { status: "not_configured" };
@@ -357,6 +393,7 @@ export async function commitImport(input: {
   const rows: RowOutcome[] = [];
   for (const write of input.envelope.writes) {
     const resolution = input.resolutions.get(write.line) ?? "skip";
+    const identity = input.identities?.get(write.line) ?? "unanswered";
     try {
       rows.push(
         await applyRow(
@@ -364,6 +401,7 @@ export async function commitImport(input: {
           input.actorUserId,
           write,
           resolution,
+          identity,
           current,
         ),
       );
