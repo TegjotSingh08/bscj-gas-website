@@ -12,6 +12,7 @@ import { HOLD_WARNING_SECONDS } from "@/lib/booking/holds";
 import type { Product, ProductId } from "@/lib/booking/products";
 import { SCHEDULING_CONFIRM_PATH } from "@/lib/scheduling/paths";
 import type { DeadlineNotice } from "@/lib/scheduling/deadline";
+import { laterDatesView } from "@/lib/scheduling/later-dates";
 import { business } from "@/lib/business";
 
 /**
@@ -133,44 +134,31 @@ export function TenantScheduler({
   );
 
   /*
-    The cutoff, applied to what is offered.
+    The cutoff, applied to what is offered, and the decision about later dates.
 
-    An appointment counts if it **finishes** by the end of the deadline date,
-    which is why the slot's end is compared rather than its start: a 60-minute
+    Both live in `lib/scheduling/later-dates` rather than here: the defect this
+    closes was a **missing branch**, and a branch is something a test should be
+    able to state a case against rather than infer from rendered markup. An
+    appointment counts if it **finishes** by the end of the deadline date,
+    which is why a slot's end is compared rather than its start — a 60-minute
     booking starting at 23:30 does not finish that day.
   */
+  const view = laterDatesView({
+    days,
+    endsBeforeIso: deadline?.endsBeforeIso ?? null,
+    deadlineDate: deadline?.date ?? null,
+    showingLate,
+    deadlineOverdue,
+  });
+  const {
+    visibleDays,
+    hasCompliantSlot,
+    offer,
+    showingEarlierToo,
+    canReturnToEarlier,
+  } = view;
+
   const endsBefore = deadline ? Date.parse(deadline.endsBeforeIso) : null;
-  const withinDeadline = (slot: Slot) =>
-    endsBefore === null || Date.parse(slot.endIso) <= endsBefore;
-
-  const visibleDays = showingLate
-    ? days
-    : days.map((day) => ({
-        date: day.date,
-        slots: day.slots.filter(withinDeadline),
-      }));
-
-  /** Whether anything at all meets the cutoff, for the empty-state wording. */
-  const hasCompliantSlot = days.some((day) => day.slots.some(withinDeadline));
-
-  /**
-   * Whether there is anything to *show* after the deadline.
-   *
-   * **The bug this closes:** the booking window is a fixed number of days
-   * ahead, and a deadline can sit at or beyond the end of it. When it does,
-   * every slot the server offers is already before the deadline — so "show me
-   * later dates" revealed exactly the same list while announcing "you are now
-   * choosing from times after <date>", which was false, and left no way back.
-   *
-   * Offering the choice only when later times genuinely exist means the button
-   * always does what it says. Where they do not, the page says so plainly
-   * instead of pretending; the horizon itself is **not** widened, because how
-   * far ahead BSCJ takes bookings is a business rule and not something a
-   * tenant's frustration should change.
-   */
-  const laterSlotsExist = days.some((day) =>
-    day.slots.some((slot) => !withinDeadline(slot)),
-  );
 
   const availableDates = visibleDays
     .filter((day) => day.slots.length > 0)
@@ -403,46 +391,60 @@ export function TenantScheduler({
       {/*
         The way out, and it is deliberately a button rather than a silent
         widening of the list: choosing a later time is a decision the tenant
-        makes, not one the page makes for them.
+        makes, not one the page makes for them. Offered only when later times
+        genuinely exist, so it always does what it says.
       */}
-      {deadline &&
-        !showingLate &&
-        laterSlotsExist &&
-        (!reservation || changingTime) && (
-          <button
-            type="button"
-            onClick={() => setShowingLate(true)}
-            className="mb-4 w-full rounded-xl border-2 border-navy-300 bg-white px-4 py-3 text-sm font-bold text-navy-900 hover:border-flame-500"
-          >
-            None of these times work — show me later dates
-          </button>
-        )}
+      {offer === "offer" && (!reservation || changingTime) && (
+        <button
+          type="button"
+          onClick={() => setShowingLate(true)}
+          className="mb-4 w-full rounded-xl border-2 border-navy-300 bg-white px-4 py-3 text-sm font-bold text-navy-900 hover:border-flame-500"
+        >
+          None of these times work — show me later dates
+        </button>
+      )}
 
       {/*
-        The honest version of the same situation. The diary simply does not go
-        past the deadline yet, so there is nothing later to offer and saying so
-        is better than a button that changes nothing.
+        The honest version of the same situation, and it is **two** situations.
+        A diary that does not reach past the deadline yet will open more dates
+        as they get closer; one that does reach past it and has nothing free
+        will not. Telling somebody to wait when waiting cannot help is the
+        thing worth avoiding here.
       */}
-      {deadline &&
-        !showingLate &&
-        !laterSlotsExist &&
-        (!reservation || changingTime) && (
-          <p className="mb-4 rounded-xl border-2 border-navy-200 bg-white px-4 py-3 text-sm text-navy-700">
-            {hasCompliantSlot
-              ? `Every time we can currently offer is before ${longDate(deadline.date)}, so there are no later dates to show. We open more dates as they get closer.`
-              : `We have no times to offer before ${longDate(deadline.date)}, and the diary does not go past it yet. Call or WhatsApp ${business.phoneDisplay} and we will sort something out.`}
-          </p>
-        )}
+      {deadline && offer === "beyond_horizon" && (!reservation || changingTime) && (
+        <p className="mb-4 rounded-xl border-2 border-navy-200 bg-white px-4 py-3 text-sm text-navy-700">
+          {hasCompliantSlot
+            ? `Our diary does not go past ${longDate(deadline.date)} yet, so there are no later dates to show. We open more dates as they get closer.`
+            : `We have no times to offer before ${longDate(deadline.date)}, and our diary does not go past it yet. Call or WhatsApp ${business.phoneDisplay} and we will sort something out.`}
+        </p>
+      )}
+
+      {deadline && offer === "later_taken" && (!reservation || changingTime) && (
+        <p className="mb-4 rounded-xl border-2 border-navy-200 bg-white px-4 py-3 text-sm text-navy-700">
+          {hasCompliantSlot
+            ? `Every later date we have is already taken, so the times above are the ones left. Call or WhatsApp ${business.phoneDisplay} if none of them work.`
+            : `We have nothing left to offer before ${longDate(deadline.date)}, and the dates after it are taken too. Call or WhatsApp ${business.phoneDisplay} and we will sort something out.`}
+        </p>
+      )}
 
       {deadline && showingLate && (
         <div
           role="alert"
           className="mb-4 rounded-xl border-2 border-flame-500 bg-flame-400/10 px-4 py-4 text-sm text-navy-900"
         >
+          {/*
+            The wording has to match the list underneath it. Revealing later
+            dates **widens** the list rather than replacing it — the earlier
+            times are still there, and still the better answer — so saying "you
+            are now choosing from times after <date>" described a filter this
+            page does not apply.
+          */}
           <p className="font-bold">
             {deadlineOverdue
               ? `This work was due by ${longDate(deadline.date)}, which has already passed.`
-              : `You are now choosing from times after ${longDate(deadline.date)}.`}
+              : showingEarlierToo
+                ? `The times below now include dates after ${longDate(deadline.date)}.`
+                : `You are now choosing from times after ${longDate(deadline.date)}.`}
           </p>
           <p className="mt-2 leading-relaxed text-navy-800">
             That is the date this work needs to be completed by. Booking a later
@@ -459,7 +461,7 @@ export function TenantScheduler({
             something to go back *to* — an overdue job has no compliant times
             by definition, and a dead control is worse than none.
           */}
-          {!deadlineOverdue && hasCompliantSlot && (
+          {canReturnToEarlier && (
             <button
               type="button"
               onClick={() => {
