@@ -50,8 +50,8 @@ is never described as one.
 | 1c | Profile compatibility | `parseProfile`, `profileDigest` | A third policy value must not misread saved v2 profiles. | Saved profiles keep working; digest still invalidates stale previews. | **done** |
 | 1d | End-to-end exercise | `previewImportAction` / `confirmImportAction` | Never run as one path outside the deployed app. | A harness drives the real actions over fictional CSVs. | **done** |
 | 2 | Work journey | jobs, scheduling, documents, invoices | Not exercised as one path; defects unknown. | Service-level pass with defects fixed. | not started |
-| 3 | Certificate → renewal | `releaseCertificate`, `setCompliancePosition` | `releaseCertificate` **never writes `compliance_cycle`**; `setCompliancePosition` hardcodes `cp12` and supersedes every product. | Release updates the right service's position, preserving history. | not started |
-| 3b | Due-work view | admin list patterns | No overdue/due-soon/unknown view. | Admin can see and act without developer help. | not started |
+| 3 | Certificate → renewal | `releaseCertificate`, `setCompliancePosition` | `releaseCertificate` **never writes `compliance_cycle`**; `setCompliancePosition` hardcodes `cp12` and supersedes every product. | Release updates the right service's position, preserving history. | **done** |
+| 3b | Due-work view | admin list patterns | No overdue/due-soon/unknown view. | Admin can see and act without developer help. | **done** |
 | 4 | Failure visibility | outbox, `admin/reconcile` | States exist; surfacing and recovery need checking. | Operator-visible states and a safe recovery action. | not started |
 | 5 | Polish + acceptance pack | site components, email theme | — | Morning pack exists and is honest. | not started |
 | 6 | Agency page | public site | Absent. | Local-only, no unsupported claims. | not started |
@@ -64,6 +64,7 @@ is never described as one.
 | --- | --- |
 | `d4d3c82` | *(session start)* |
 | `5725d2e` | Make the import's hold policy actually hold |
+| `f3aee35` | Let a released certificate move the renewal it proves |
 
 Working tree: clean.
 
@@ -77,6 +78,9 @@ Working tree: clean.
 | P1 | `npm test` | 2165 pass, 0 fail (was 2125) |
 | P1 | `npx tsc --noEmit` | clean |
 | P1 | `walkthrough.test.ts` | 33 scenarios through the real server actions, all pass |
+| P3 | `npm test` | 2213 pass, 0 fail |
+| P3 | `npx tsc --noEmit` | clean |
+| P3 | `npm run build` | clean; `/admin/due` present |
 
 ---
 
@@ -88,7 +92,11 @@ None.
 
 ## Next action after interruption
 
-Begin **Priority 3** (checklist item 3): `releaseCertificate` in
+Begin **Priority 4**: outbox failure visibility and recovery. Start by reading
+`src/lib/notifications/outbox.ts` and `src/app/admin/reconcile/page.tsx`, then
+check what states the admin job page already shows for a queued message.
+
+*(Superseded note — Priority 3 is done.)* `releaseCertificate` in
 `src/lib/documents/certificates.ts` writes a `certificates` row but never
 touches `compliance_cycle`, so a released certificate does not move the
 property's due date. `setCompliancePosition` in `src/lib/portfolio/mutations.ts`
