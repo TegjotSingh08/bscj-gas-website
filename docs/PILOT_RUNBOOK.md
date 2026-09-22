@@ -78,6 +78,20 @@ to send.
 - Do **not** use `@example.invalid` addresses here. They are correct for unit
   fixtures and are undeliverable; the pilot has to prove delivery.
 
+**Migration 0010 — the engineer's certificate drafts**
+- Adds one table, `certificate_draft`. Additive only: no existing table is
+  altered, no column changes type or nullability, and no row is read or
+  rewritten. There is no precheck to run and nothing it can conflict with.
+- **Apply it before the deploy**, for the same reason as every other
+  migration here: the new code reads the table, and a deployment that is
+  serving the connected workflow against a database without it will fail on
+  every draft save. The old code ignores the table entirely, so applying it
+  early is harmless.
+- Rolling back is `drizzle/down/0010_engineer_certificate_drafts.down.sql`.
+  It discards any **unsubmitted** draft — an engineer's part-written record —
+  and touches nothing that has been submitted or issued. The down file
+  carries the query to check for work in progress first.
+
 **Blob storage**
 - Attach a Vercel Blob store; `BLOB_READ_WRITE_TOKEN` is injected and nothing
   else is needed. The local driver refuses to run when `NODE_ENV=production`,

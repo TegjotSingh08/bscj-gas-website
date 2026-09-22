@@ -1258,6 +1258,33 @@ full list, not the pilot subset.
    migrated and verified. `drizzle.config.ts` now loads `.env.local` itself, so
    `source .env.local` is no longer needed before `db:migrate`.~~
 
+## The connected engineer certificate workflow — 22 September 2026
+
+The engineer's four-step download/import/upload workflow is replaced by one
+button on the job. The generator, the prefill mapping, the PDF drawing, the
+document store and the whole certificate lifecycle are **reused unchanged**;
+what is new is a server-held draft and three authenticated routes.
+
+Full design, rules and verification: `docs/ENGINEER_CERTIFICATE_WORKFLOW.md`.
+
+**Submitting is not issuing** — that boundary is unchanged and tested. A
+submitted record is a document awaiting review; an administrator still opens
+it and releases it, and only release writes a certificate, moves a renewal or
+permits an email.
+
+**Schema:** migration `0010_engineer_certificate_drafts` adds one table,
+`certificate_draft`. Purely additive — no existing table is altered and no row
+is read or rewritten. It takes the chain to **11 migrations and 25 tables**;
+enums are unchanged at 22. The pilot is at 10 applied and 24 tables until it
+is deployed.
+
+**`/engineer/certificate` is unchanged for standalone use.** Without
+`?job=<uuid>` the generator behaves exactly as it always has, which is what
+the desktop user working on a job that is not in the application relies on.
+The download bridge and manual upload both remain, as secondary routes.
+
+---
+
 ## Known issues, V2
 
 - ~~**The branch is unpushed. No upstream is set.**~~ **Wrong, corrected

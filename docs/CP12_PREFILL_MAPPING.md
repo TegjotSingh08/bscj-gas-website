@@ -146,6 +146,38 @@ Until the first three are closed the bridge saves the engineer the property,
 the landlord and the phone numbers — the retyping that is most error-prone —
 and leaves the rest as it is today. That is worth having on its own.
 
+## Superseded as the normal route — the connected workflow
+
+**22 September 2026.** Everything below describes the **download bridge**,
+which still exists and still works. It is no longer how an engineer normally
+writes a gas safety record.
+
+The connected workflow replaces the file. From an assigned job the engineer
+presses **Create gas safety record** (or **Continue draft**) and the same
+generator opens at `/engineer/certificate?job=<uuid>`, fetches this same
+payload over an authenticated request, and keeps the draft **on the server**
+against the job. **Submit for review** draws the same PDF and posts it
+straight into the awaiting-review state the manual upload already fed.
+
+| | Download bridge | Connected workflow |
+| --- | --- | --- |
+| Steps for the engineer | four | one |
+| Customer details on the device | a file in Downloads, until deleted | on screen only |
+| Draft | `localStorage`, one browser | `certificate_draft`, any device |
+| Getting the PDF back | save it, find it, upload it | submitted from the generator |
+| What it issues | nothing | nothing — unchanged |
+
+The mapping itself is **unchanged**: the same 13 fields, the same allow-list,
+the same three unavailable fields, and still no reading, outcome, signature,
+date or certificate number. `CP12_PREFILL_FIELDS` is what both routes send,
+and the generator's `IMPORT_ALLOWED` is still what decides what may land.
+
+**The download is kept**, and so is manual upload, for a record prepared on a
+laptop or in the standalone generator, or for a job that is not in the
+application. They are secondary, not removed.
+
+See `docs/ENGINEER_CERTIFICATE_WORKFLOW.md` for the connected design.
+
 ## Getting the payload across
 
 Two requirements shape this: **no customer data in a URL**, and

@@ -237,6 +237,67 @@ been called.
 
 ---
 
+## Connected engineer certificate workflow — 22 September 2026
+
+**Complete.** The engineer's four-step download/import/upload workflow is one
+button on the job. Nothing was rebuilt: the generator, the prefill mapping, the
+PDF drawing, the document store and the whole certificate lifecycle are reused.
+
+Design and rules: `docs/ENGINEER_CERTIFICATE_WORKFLOW.md`.
+
+| | |
+| --- | --- |
+| New table | `certificate_draft` (migration `0010`, additive, has a down file) |
+| New routes | `session`, `draft`, `submission` under `/api/engineer/jobs/[id]/certificate` |
+| Generator | same file; `?job=<uuid>` is connected mode, without it unchanged |
+| Submission | calls `uploadCertificate` — same store, same checks, same review queue |
+| Boundary kept | submitting is **not** issuing: no certificate, no renewal, no email, job not finished |
+
+### Two defects found by driving it
+
+1. **Two simultaneous taps stored two documents.** The read-then-write replay
+   check cannot see a request already in flight. Closed with a conditional
+   `UPDATE` that claims the submission key before a byte is stored — the row
+   lock makes one claim win. Reproduced first: with the claim removed the test
+   fails with two document ids.
+2. **Submitting always refused itself.** `connectedSubmit` set `submitting`
+   before calling the save, and the save refused while `submitting` was set.
+   Found on the first real browser run; the save now awaits an in-flight save
+   rather than refusing.
+
+### Verified
+
+- `test/integration/engineer-certificate.test.ts` — 30 tests against real
+  PostgreSQL: prefill, binding, drafts, isolation, unauthorised access,
+  reassignment, stale revisions, validation, duplicates, retry, awaiting
+  review, admin release, manual upload.
+- Certificate routes over HTTP in `access-boundaries.test.ts` — 401
+  unauthenticated, 404 for another engineer with nothing written, agency user
+  refused, cross-site post refused, 409 carrying the current draft.
+- `certificate-draft-fields.test.ts` — the server's field list is asserted
+  against the generator's own markup.
+- **Browser, signed in, phone width, throwaway database** — the whole journey
+  end to end, and the generated PDF extracted from the store and read: correct
+  landscape A4, nothing clipped.
+
+### Gates
+
+| Command | Result |
+| --- | --- |
+| `npm run test:integration` | **198 pass, 58 suites, 0 fail** |
+| `npm test` | **2270 pass, 458 suites, 0 fail** |
+| `npm run typecheck` | clean |
+| `npm run lint` | 1 pre-existing warning (`invitationRow`) |
+| `npm run build` | clean |
+
+### Still the owner's
+
+Apply `0009` **and** `0010` before pushing. The **Blob** driver is still the
+one part of the certificate path with no evidence — every document in these
+runs went to the local store.
+
+---
+
 ## Outstanding owner decisions
 
 These block **real agency use** and cannot be invented:

@@ -25,12 +25,18 @@ last, which asked you to test fixes that were not on the pilot yet. Corrected:
 Each one links to the section that says how. Nothing here has been done for
 you: every step below touches something live, and none of them was performed.
 
+> **Since this pack was written**, the engineer's certificate workflow has
+> been connected — one button on the job instead of a download, an import and
+> an upload. It adds **migration `0010`**, which is additive and applies in the
+> same migrate-then-push order as `0009`. See §2b and
+> `docs/ENGINEER_CERTIFICATE_WORKFLOW.md`.
+
 | # | Step | Where |
 | --- | --- | --- |
 | 1 | **Confirm the revision and the target.** The release is the head of `v2-compliance-platform`; the target is the **pilot** project, not the live one. | this section, and §4.2 |
 | 2 | **Run the duplicate-active-cycle precheck.** Read-only. It must return no rows, or `0009` will stop part-way. | §4.1 |
-| 3 | **Confirm 10 migrations on disk and 9 applied**, with `0009` the only one not applied and nothing differing from disk. | §4.2 |
-| 4 | **Apply `0009` and verify** — 10 of 10, still 24 tables and 22 enum types. | §4.3, §4.4 |
+| 3 | **Confirm 11 migrations on disk and 9 applied**, with `0009` and `0010` the only ones not applied and nothing differing from disk. | §4.2 |
+| 4 | **Apply `0009` and `0010`, then verify** — 11 of 11, **25** tables and 22 enum types. `0010` adds `certificate_draft`. | §4.3, §4.4 |
 | 5 | **Push the branch.** The pilot builds it, so the push is the deploy. Then confirm the cron job is still `*/15 * * * *`. | §4.5 |
 | 6 | **Work the supervised acceptance sequence** — the CSV scenarios, the certificate through **Blob**, and the delivery evidence only a real provider can give. | §1, §2, §6 |
 
@@ -287,6 +293,35 @@ PDF structure) so the upload and review screens can be exercised.
    renewal — there is no certificate for a service, and claiming one would be
    inventing a gas safety check nobody carried out.
 
+### 2b. The connected gas safety record
+
+*The engineer's workflow, with fictional data. Nothing here issues anything.*
+
+1. Sign in as an engineer with a job assigned to them and open it.
+2. Press **Create gas safety record**. The generator opens with the property,
+   the customer and the engineer's details filled in — and with the
+   certificate number, the dates, the readings and all six safety outcomes
+   **blank**, which is correct: those are the engineer's.
+3. Type a reading. The status changes to **Unsaved changes**, then to
+   **Saved** with a time a couple of seconds later. It must never say *Saved*
+   before that.
+4. Press **Save draft**, then close the tab and reopen the job. The button now
+   reads **Continue draft** and everything typed is still there — it is on the
+   office system, not on the phone.
+5. Finish the record — number, date, at least one appliance row, an answer to
+   each of the six outcomes — and press **Submit for review**.
+6. Expect *Submitted for review*, and on the job *Submitted and waiting for
+   the office to review it*. **Nothing has been issued and nobody has been
+   emailed.**
+7. As an administrator, open the job. The record is in *Waiting for review*
+   with no upload step. Open the PDF, then release it exactly as in §2.
+8. Only now does the property's renewal move.
+
+Also worth one look each: the sheet at phone width (the two buttons are
+full-width and stay on screen while the form scrolls), and
+**Prepared a PDF somewhere else? Upload it instead** — the manual route, still
+there, still working.
+
 ---
 
 ## 3. Screens to look at
@@ -324,9 +359,19 @@ in a browser, light and dark, at phone width. No real mail client has seen them.
 **Do this before §1 to §3.** Exactly as before, and for the same reason:
 **migrate first, then push.**
 
-Migration **0009** (`0009_one_active_cycle_per_service`) is new and applied
-nowhere. It is a partial unique index — additive, enforcing only, no column
-added or dropped, no data rewritten.
+Two migrations are outstanding, and both are additive.
+
+**`0009_one_active_cycle_per_service`** is a partial unique index — enforcing
+only, no column added or dropped, no data rewritten. It is the one with a
+precondition; §4.1 is that check.
+
+**`0010_engineer_certificate_drafts`** adds one table, `certificate_draft`, for
+the engineer's part-written gas safety records. It alters nothing that exists,
+has no precondition, and cannot conflict with any data. It must be applied
+**before** the deploy, because the new code reads that table on every draft
+save; the currently-deployed code ignores it entirely, so applying it early is
+harmless. Rollback is `drizzle/down/0010_engineer_certificate_drafts.down.sql`,
+which discards unsubmitted drafts only and touches nothing issued.
 
 ### 4.1 Check nothing already violates it
 
@@ -350,9 +395,9 @@ BSCJ_PILOT=1 npm --prefix /Users/tegjot/Projects/bscj-gas-website run db:status
 ```
 
 Expect `Mode: pilot`, the confirmed endpoint **matches**, `Migrations on disk :
-10`, `Migrations applied : 9`, with `0009_one_active_cycle_per_service` the only
-`NOT APPLIED` tag and no `DIFFERS FROM DISK` anywhere. **If `Target` is not the
-pilot, stop.**
+11`, `Migrations applied : 9`, with `0009_one_active_cycle_per_service` and
+`0010_engineer_certificate_drafts` the only `NOT APPLIED` tags and no
+`DIFFERS FROM DISK` anywhere. **If `Target` is not the pilot, stop.**
 
 ### 4.3 Apply
 
@@ -360,7 +405,9 @@ pilot, stop.**
 BSCJ_PILOT=1 npm --prefix /Users/tegjot/Projects/bscj-gas-website run db:migrate
 ```
 
-Silent on success. Read nothing into the silence.
+Silent on success. Read nothing into the silence. This applies **both**
+outstanding migrations, in order: `0009`'s partial unique index, then `0010`'s
+new `certificate_draft` table.
 
 ### 4.4 Verify
 
@@ -368,8 +415,9 @@ Silent on success. Read nothing into the silence.
 BSCJ_PILOT=1 npm --prefix /Users/tegjot/Projects/bscj-gas-website run db:status
 ```
 
-Expect `10` / `10`, all applied, still **24 tables and 22 enums** — an index is
-neither.
+Expect `11` / `11`, all applied, **25 tables and 22 enums**. The extra table is
+`certificate_draft`, from `0010`; `0009` added an index, which is neither a
+table nor an enum.
 
 ### 4.5 Then push
 
