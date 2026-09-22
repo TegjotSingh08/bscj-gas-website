@@ -79,9 +79,16 @@ mock.module("@/lib/booking/holds", {
 
 mock.module("@/lib/storage/documents", {
   namedExports: {
-    // `putDocument(bytes)` — the bytes themselves, not an envelope.
-    putDocument: async (bytes: Uint8Array) => {
-      const key = `captured/${stored.size + 1}`;
+    /*
+      `putDocument(bytes, { key })` — matches the real module's signature,
+      including the optional derived key the connected certificate submission
+      uses so a retry writes to the same place. Honouring it here is what
+      lets the idempotency behaviour be genuinely exercised through this
+      capture, rather than one that always mints a fresh key regardless of
+      what was asked for.
+    */
+    putDocument: async (bytes: Uint8Array, options: { key?: string } = {}) => {
+      const key = options.key ?? `captured/${stored.size + 1}`;
       stored.set(key, bytes);
       return { ok: true, key };
     },
@@ -93,6 +100,8 @@ mock.module("@/lib/storage/documents", {
       stored.delete(key);
     },
     storageStatus: () => ({ ready: true, driver: "captured", outstanding: [] }),
+    newDocumentKey: () => `captured/${stored.size + 1}`,
+    derivedDocumentKey: (seed: string) => `captured/derived/${seed}`,
   },
 });
 
@@ -136,6 +145,13 @@ const { createInvoiceDraft, issueInvoice, markInvoicePaid } = await import(
 );
 const { listDueWork } = await import("../../src/lib/compliance/due-work");
 const { readFileSync } = await import("node:fs");
+const { saveCertificateDraft, submitCertificateDraft } = await import(
+  "../../src/lib/documents/certificate-drafts"
+);
+const { listAgencyJobCertificates } = await import(
+  "../../src/lib/documents/certificates"
+);
+const { getProperty } = await import("../../src/lib/portfolio/queries");
 
 let conn: Connection;
 let fixture: Fixture;
@@ -571,6 +587,145 @@ describe("the certificate", () => {
     );
 
     assert.equal(access.ok, false, "another agency's document is not readable");
+  });
+
+  test("the connected engineer workflow reaches the same review and release", async () => {
+    /*
+      The same business outcome as `uploadAndRelease`, reached the way an
+      engineer on a phone actually reaches it: a server-held draft, saved,
+      then submitted as a PDF — never a plain file upload. It has to arrive at
+      the identical admin surface, because that is the whole promise of the
+      connected workflow: nothing about review or release changes underneath
+      it.
+    */
+    await conn.client.query(
+      `update job set assigned_engineer_id = $2 where id = $1`,
+      [fixture.jobId, fixture.engineerUserId],
+    );
+
+    const draft = {
+      certNo: "TEST-NOT-VALID-0002",
+      instEngineer: "Fixture Engineer",
+      jobAddress: "14 Fixture Street, Wolverhampton",
+      sigDate: "20/09/2026",
+      issuedPrintName: "Fixture Engineer",
+      app_1_location: "Kitchen",
+      app_1_type: "Boiler",
+      coFitted: "yes",
+      coTested: "yes",
+      chkEmergency: "yes",
+      chkTightness: "yes",
+      chkPipework: "yes",
+      chkBonding: "yes",
+    };
+
+    const saved = await saveCertificateDraft({
+      session: engineer() as never,
+      jobId: fixture.jobId,
+      fields: draft,
+      expectedRevision: 0,
+    });
+    assert.ok(saved.ok);
+
+    const submitted = await submitCertificateDraft({
+      session: engineer() as never,
+      jobId: fixture.jobId,
+      bytes: TEST_PDF,
+      filename: "TEST-NOT-VALID-certificate.pdf",
+      submissionKey: "journey-connected-1",
+    });
+    assert.ok(submitted.ok);
+
+    /*
+      Submitting is not issuing. It landed as a document awaiting review, the
+      same list the manual upload feeds — not as a certificate, and it moved
+      no renewal.
+    */
+    assert.equal(
+      (await conn.client.query<{ n: string }>(
+        "select count(*)::text as n from certificate",
+      )).rows[0].n,
+      "0",
+    );
+    assert.equal(
+      (await conn.client.query<{ n: string }>(
+        "select count(*)::text as n from compliance_cycle",
+      )).rows[0].n,
+      "0",
+    );
+
+    const released = await releaseCertificate({
+      session: admin() as never,
+      jobId: fixture.jobId,
+      documentId: submitted.documentId,
+      details: {
+        certificateNumber: "TEST-NOT-VALID-0002",
+        inspectionDate: "2026-09-20",
+        nextDueDate: "2027-09-19",
+        correctionReason: "",
+      },
+      today: "2026-09-22",
+    });
+    assert.equal(released.ok, true);
+
+    const { rows } = await conn.client.query<{ due_date: string }>(
+      `select due_date from compliance_cycle where property_id = $1`,
+      [fixture.propertyId],
+    );
+    assert.deepEqual(rows, [{ due_date: "2027-09-19" }]);
+  });
+
+  test("the agency sees the released certificate, and the correct renewal date, only after release", async () => {
+    await conn.client.query(
+      `update job set assigned_engineer_id = $2 where id = $1`,
+      [fixture.jobId, fixture.engineerUserId],
+    );
+
+    /* Before release: no certificate visible, no renewal date on the property. */
+    const before = await listAgencyJobCertificates(
+      fixture.organisationId,
+      fixture.jobId,
+    );
+    assert.equal(before.length, 0);
+
+    const propertyBefore = await getProperty(
+      fixture.organisationId,
+      fixture.propertyId,
+    );
+    assert.ok(propertyBefore);
+    assert.equal(
+      propertyBefore.cycles.length,
+      0,
+      "no renewal position exists before release",
+    );
+    assert.equal(propertyBefore.activeCycle, null);
+
+    await uploadAndRelease();
+
+    /* After release: the agency can see it, scoped to their own organisation. */
+    const after = await listAgencyJobCertificates(
+      fixture.organisationId,
+      fixture.jobId,
+    );
+    assert.equal(after.length, 1);
+    assert.equal(after[0].certificateNumber, "TEST-NOT-VALID-0001");
+    assert.equal(after[0].status, "issued");
+    /* The agency's view carries no delivery bookkeeping. */
+    assert.equal(after[0].sentTo, null);
+
+    const propertyAfter = await getProperty(
+      fixture.organisationId,
+      fixture.propertyId,
+    );
+    assert.ok(propertyAfter);
+    assert.equal(propertyAfter.activeCycle?.dueDate, "2027-09-19");
+
+    /* And it is invisible to the rival agency, exactly as the document is. */
+    const rival = await listAgencyJobCertificates(
+      fixture.otherOrganisationId,
+      fixture.jobId,
+    );
+    assert.equal(rival.length, 0);
   });
 });
 
