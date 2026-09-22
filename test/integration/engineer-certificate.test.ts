@@ -878,3 +878,359 @@ describe("the office picks it up through the path it always used", () => {
     );
   });
 });
+
+/**
+ * What a process death leaves behind, and whether anybody can get out of it.
+ *
+ * **Why these are written as database states rather than as killed processes.**
+ * A submission is: claim the key, store the object, insert the row, record the
+ * link. A crash, a serverless timeout or a dropped connection can land between
+ * any two of those, and what the *next* request sees is exactly the row state
+ * the dead one left. Reproducing that state is reproducing the interruption —
+ * and it is the only way to reproduce it deterministically.
+ */
+describe("a submission interrupted part-way", () => {
+  /** The row as a process that died just after claiming the key leaves it. */
+  async function claimLeftBehind(key: string, startedMinutesAgo = 10) {
+    await conn.client.query(
+      `update certificate_draft
+          set submission_key = $1,
+              submission_started_at = now() - ($2 || ' minutes')::interval
+        where job_id = $3`,
+      [key, String(startedMinutesAgo), fixture.jobId],
+    );
+  }
+
+  test("a retry after dying between the claim and the upload gets through", async () => {
+    /*
+      **The permanent "submitting" state.** The claim is `IS DISTINCT FROM`, so
+      the engineer's own retry — same key, because it is the same attempt —
+      matched nothing, found no document to replay, and was told the record was
+      already being submitted. For ever: nothing clears the key, so every
+      retry, on any device, got the same answer and the certificate could never
+      be filed.
+    */
+    await saveComplete();
+    await claimLeftBehind("attempt-1");
+
+    const retried = await submitCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+      bytes: SPECIMEN,
+      filename: "TEST-NOT-VALID-certificate.pdf",
+      submissionKey: "attempt-1",
+    });
+
+    assert.ok(retried.ok, "the engineer can recover their own attempt");
+    assert.equal(retried.replayed, false, "nothing was stored last time");
+    assert.equal(
+      await countRows("document", "where blob_key not like 'fixture/%'"),
+      1,
+      "and exactly one document exists",
+    );
+  });
+
+  test("a retry after dying between the upload and the link finds the document", async () => {
+    /*
+      The worse half: the PDF **is** stored and already in front of the office,
+      but the draft never learned its id. A retry must not store a second copy
+      for an administrator to choose between — it has to find the first.
+    */
+    await saveComplete();
+
+    /*
+      Stored the way the submission path stores it — under the key derived
+      from this attempt — because that is what a process dying here would
+      actually have left behind. An orphan under a random key is a different
+      situation, and the honest answer to it is the administrator's release
+      action rather than a guess.
+    */
+    const { uploadCertificate } = await import(
+      "../../src/lib/documents/certificates"
+    );
+    const { derivedDocumentKey } = await import(
+      "../../src/lib/storage/documents"
+    );
+    const orphan = await uploadCertificate({
+      session: engineer(),
+      jobId: fixture.jobId,
+      bytes: SPECIMEN,
+      filename: "TEST-NOT-VALID-certificate.pdf",
+      blobKey: derivedDocumentKey(`${fixture.jobId}:attempt-1`),
+    });
+    assert.ok(orphan.ok);
+    await claimLeftBehind("attempt-1");
+
+    const retried = await submitCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+      bytes: SPECIMEN,
+      filename: "TEST-NOT-VALID-certificate.pdf",
+      submissionKey: "attempt-1",
+    });
+
+    assert.ok(retried.ok);
+    assert.equal(
+      retried.documentId,
+      orphan.documentId,
+      "the retry got back the document the dead attempt stored",
+    );
+    assert.equal(
+      await countRows("document", "where blob_key not like 'fixture/%'"),
+      1,
+      "no second copy was stored",
+    );
+
+    /*
+      `replayed` is not asserted here, and deliberately. The recovery runs
+      through `uploadCertificate`, whose unique index returns the first row —
+      so the draft itself never learned this was a second attempt and reports
+      the conservative answer. Claiming "already submitted" when it might not
+      have been would be the dangerous direction; this is the safe one.
+    */
+  });
+
+  test("a genuinely in-flight attempt is still not stomped on", async () => {
+    /*
+      The recovery above must not become a way to bypass the claim. A claim
+      taken seconds ago is a request that is probably still running, and the
+      right answer there is to wait rather than to store a second document.
+    */
+    await saveComplete();
+    await claimLeftBehind("attempt-1", 0);
+
+    const second = await submitCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+      bytes: SPECIMEN,
+      filename: "TEST-NOT-VALID-certificate.pdf",
+      submissionKey: "attempt-1",
+    });
+
+    assert.equal(second.ok, false);
+    assert.equal(
+      await countRows("document", "where blob_key not like 'fixture/%'"),
+      0,
+    );
+  });
+});
+
+describe("the PDF and the draft are the same state", () => {
+  test("a certificate drawn before an edit is refused against the draft after it", async () => {
+    /*
+      **What the server can check about a PDF, and what it cannot.** It checks
+      the bytes are a PDF and that the stored draft is complete. It does not
+      read the document, so it cannot know the figures printed on it are the
+      figures in the draft — and nothing should claim it does.
+
+      What it can establish is that the two refer to the same state. The
+      client says which revision it drew; if the draft has moved since, the
+      submission is refused rather than filing a PDF of the old readings
+      against the new record.
+    */
+    const saved = await saveComplete();
+    assert.ok(saved.ok);
+
+    // The engineer changes a reading after the certificate was drawn.
+    await saveCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+      fields: completeFields({ app_1_highCO: "48" }),
+      expectedRevision: saved.revision,
+    });
+
+    const stale = await submitCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+      bytes: SPECIMEN,
+      filename: "TEST-NOT-VALID-certificate.pdf",
+      submissionKey: "drawn-early",
+      drawnFromRevision: saved.revision,
+    });
+
+    assert.equal(stale.ok, false);
+    assert.ok(!stale.ok);
+    assert.match(stale.error, /changed after the certificate was drawn/i);
+    assert.equal(
+      await countRows("document", "where blob_key not like 'fixture/%'"),
+      0,
+      "nothing was stored",
+    );
+  });
+
+  test("drawn from the current revision goes through", async () => {
+    const saved = await saveComplete();
+    assert.ok(saved.ok);
+
+    const submitted = await submitCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+      bytes: SPECIMEN,
+      filename: "TEST-NOT-VALID-certificate.pdf",
+      submissionKey: "in-step",
+      drawnFromRevision: saved.revision,
+    });
+    assert.ok(submitted.ok);
+  });
+
+  test("a client that says nothing is still accepted", async () => {
+    /*
+      Refusing every submission that omits the revision would break a tab that
+      has not reloaded since the deploy — a worse failure than the one the
+      check prevents, and one the engineer cannot diagnose.
+    */
+    await saveComplete();
+    const submitted = await submitCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+      bytes: SPECIMEN,
+      filename: "TEST-NOT-VALID-certificate.pdf",
+      submissionKey: "older-client",
+    });
+    assert.ok(submitted.ok);
+  });
+});
+
+describe("editing a record that has already been sent", () => {
+  test("the job stops saying it is submitted once there is newer work", async () => {
+    /*
+      The correction path: the engineer notices something after sending. The
+      document already with the office is untouched — an administrator may
+      still release it, and a correction goes through the existing versioning
+      — but the job screen must not keep saying "submitted and waiting" over
+      work nobody has seen.
+    */
+    await saveComplete();
+    const submitted = await submitCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+      bytes: SPECIMEN,
+      filename: "TEST-NOT-VALID-certificate.pdf",
+      submissionKey: "first",
+    });
+    assert.ok(submitted.ok);
+    assert.notEqual(
+      (await draftSummaryFor(engineer(), fixture.jobId))?.submittedAt,
+      null,
+    );
+
+    const loaded = await loadCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+    });
+    assert.ok(loaded.ok);
+    await saveCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+      fields: completeFields({ comments: "Corrected the model number." }),
+      expectedRevision: loaded.draft.revision,
+    });
+
+    assert.equal(
+      (await draftSummaryFor(engineer(), fixture.jobId))?.submittedAt,
+      null,
+      "there is unsent work again",
+    );
+
+    /* And the document already sent is untouched. */
+    const { listPendingDocuments } = await import(
+      "../../src/lib/documents/certificates"
+    );
+    assert.ok(
+      (await listPendingDocuments(fixture.jobId)).some(
+        (doc) => doc.id === submitted.documentId,
+      ),
+    );
+  });
+});
+
+describe("an administrator can clear a submission nobody can finish", () => {
+  test("a stalled claim is listed, and releasing it lets the engineer resend", async () => {
+    await saveComplete();
+    await conn.client.query(
+      `update certificate_draft
+          set submission_key = 'abandoned',
+              submission_started_at = now() - interval '30 minutes'
+        where job_id = $1`,
+      [fixture.jobId],
+    );
+
+    const { listStalledSubmissions, releaseStalledSubmission } = await import(
+      "../../src/lib/documents/certificate-drafts"
+    );
+
+    const stalled = await listStalledSubmissions();
+    assert.equal(stalled?.length, 1);
+    assert.equal(stalled?.[0].reference, fixture.jobReference);
+
+    const released = await releaseStalledSubmission({
+      session: admin(),
+      jobId: fixture.jobId,
+    });
+    assert.equal(released.ok, true);
+
+    assert.deepEqual(await listStalledSubmissions(), []);
+
+    /* Nothing was destroyed, and the engineer can send again. */
+    const resent = await submitCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+      bytes: SPECIMEN,
+      filename: "TEST-NOT-VALID-certificate.pdf",
+      submissionKey: "fresh-attempt",
+    });
+    assert.ok(resent.ok);
+  });
+
+  test("an engineer cannot release one — it is an administrator's action", async () => {
+    await saveComplete();
+    await conn.client.query(
+      `update certificate_draft set submission_key = 'abandoned',
+              submission_started_at = now() - interval '30 minutes'
+        where job_id = $1`,
+      [fixture.jobId],
+    );
+
+    const { releaseStalledSubmission } = await import(
+      "../../src/lib/documents/certificate-drafts"
+    );
+    const refused = await releaseStalledSubmission({
+      session: engineer(),
+      jobId: fixture.jobId,
+    });
+    assert.equal(refused.ok, false);
+  });
+
+  test("a completed submission is not offered as stalled", async () => {
+    await saveComplete();
+    const submitted = await submitCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+      bytes: SPECIMEN,
+      filename: "TEST-NOT-VALID-certificate.pdf",
+      submissionKey: "done",
+    });
+    assert.ok(submitted.ok);
+
+    await conn.client.query(
+      `update certificate_draft
+          set submission_started_at = now() - interval '30 minutes'
+        where job_id = $1`,
+      [fixture.jobId],
+    );
+
+    const { listStalledSubmissions, releaseStalledSubmission } = await import(
+      "../../src/lib/documents/certificate-drafts"
+    );
+    assert.deepEqual(
+      await listStalledSubmissions(),
+      [],
+      "it produced a document, so it is done rather than stalled",
+    );
+    const refused = await releaseStalledSubmission({
+      session: admin(),
+      jobId: fixture.jobId,
+    });
+    assert.equal(refused.ok, false);
+  });
+});

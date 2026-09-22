@@ -13,6 +13,7 @@ import { summariseReconcile } from "./summary";
  */
 
 const empty = {
+  stalledSubmissions: 0,
   awaitingCalendarSync: 0,
   awaitingCalendarCleanup: 0,
   unpersistedBookings: 0,

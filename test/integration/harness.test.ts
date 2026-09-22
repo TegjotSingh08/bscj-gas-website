@@ -108,8 +108,8 @@ describe("the real migration chain is applied", () => {
     const { rows } = await a.client.query<{ n: string }>(
       "select count(*)::text as n from drizzle.__drizzle_migrations",
     );
-    // 0000 through 0010.
-    assert.equal(Number(rows[0].n), 11);
+    // 0000 through 0011.
+    assert.equal(Number(rows[0].n), 12);
   });
 
   test("the tables and enums a fully migrated deployment has are here", async () => {

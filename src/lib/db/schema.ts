@@ -1698,6 +1698,23 @@ export const certificateDrafts = pgTable(
 
     /** The client's key for one submission attempt. Null until one is made. */
     submissionKey: text("submission_key"),
+    /**
+     * When the attempt holding `submissionKey` claimed it.
+     *
+     * **This is what makes an interrupted submission recoverable.** The claim
+     * is taken before the PDF is stored, so a process that dies in between
+     * leaves a key with no document behind it — and without a time on it, the
+     * engineer's own retry (the same key, because it is the same attempt)
+     * matched nothing, found nothing to replay, and was told for ever that a
+     * submission was already in flight.
+     *
+     * With it, a claim younger than the lease is treated as a request still
+     * running and waited for; an older one is treated as abandoned and
+     * recovered. See `certificate-drafts.ts`.
+     */
+    submissionStartedAt: timestamp("submission_started_at", {
+      withTimezone: true,
+    }),
     /** The document that attempt produced, so a replay returns the same one. */
     submittedDocumentId: uuid("submitted_document_id").references(
       () => documents.id,

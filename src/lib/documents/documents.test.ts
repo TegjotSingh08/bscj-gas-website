@@ -342,14 +342,42 @@ describe("documents stay private", () => {
     assert.equal(code.includes("blob_key"), false);
   });
 
-  test("a storage key carries nothing about the job", () => {
-    const mint = STORAGE.slice(
-      STORAGE.indexOf("export function newDocumentKey"),
-      STORAGE.indexOf("const KEY_SHAPE"),
-    );
-    assert.match(mint, /randomBytes/);
-    for (const term of ["reference", "jobId", "postcode", "filename"]) {
-      assert.equal(mint.includes(term), false, `the key encodes ${term}`);
+  test("a storage key carries nothing about the job", async () => {
+    /*
+      **Behavioural now, not textual.** This used to read the source between
+      `newDocumentKey` and `KEY_SHAPE` and assert the words "reference",
+      "jobId" and so on did not appear in it — a proxy that broke the moment a
+      second minting function arrived whose *comment* explains what it does
+      not encode. The property worth holding is about the keys themselves.
+    */
+    const store = await import("@/lib/storage/documents");
+
+    const random = store.newDocumentKey();
+    assert.match(random, /^doc_[0-9a-f]{48}$/);
+    assert.notEqual(random, store.newDocumentKey(), "a fresh key each time");
+
+    /*
+      The derived key exists so an interrupted submission writes to the same
+      place twice. It is a hash of its seed, so it is stable — and none of the
+      seed survives into it.
+    */
+    const seed = "9f2b7c1e-0000-4000-8000-000000000001:attempt-1";
+    const derived = store.derivedDocumentKey(seed);
+    assert.match(derived, /^doc_[0-9a-f]{48}$/);
+    assert.equal(derived, store.derivedDocumentKey(seed), "stable");
+    assert.notEqual(derived, store.derivedDocumentKey(`${seed}x`));
+
+    for (const fragment of [
+      "9f2b7c1e",
+      "attempt-1",
+      "WV1 1AA",
+      "Fixture Street",
+    ]) {
+      assert.equal(
+        derived.includes(fragment.toLowerCase().replace(/[^0-9a-f]/g, "")),
+        false,
+        `the key carries ${fragment}`,
+      );
     }
   });
 

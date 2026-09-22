@@ -6,6 +6,7 @@ import { requireAdmin } from "@/lib/auth/session";
 import { recordAudit } from "@/lib/audit/record";
 import { runReconciliation, type ReconcileReport } from "@/lib/ops/reconcile";
 import { retryFailedNotification } from "@/lib/notifications/outbox";
+import { releaseStalledSubmission } from "@/lib/documents/certificate-drafts";
 
 /**
  * Running the reconciliation sweep.
@@ -83,5 +84,49 @@ export async function retryNotificationAction(
   if (!result.ok) return { error: result.error };
 
   revalidatePath("/admin/reconcile");
+  return { message: result.message };
+}
+
+/**
+ * Releasing a certificate submission that claimed a job and never finished.
+ *
+ * A submission takes a claim on the job before it stores anything, so a
+ * process that dies in between leaves a claim with no document under it. The
+ * engineer's own retry recovers it once the lease expires — this is for when
+ * that does not happen, because they have finished for the day and the office
+ * is looking at a record nobody can send.
+ *
+ * **It is the safest action available**, and that is the point: it clears a
+ * claim and nothing else. No document is deleted, no certificate is touched,
+ * no renewal moves and nobody is emailed. If the dead attempt did store a PDF,
+ * that PDF is already in the review list and is left exactly where it is.
+ *
+ * Audited, because it is an administrator intervening in somebody else's
+ * unfinished work.
+ */
+export async function releaseSubmissionAction(
+  _previous: RetryState,
+  form: FormData,
+): Promise<RetryState> {
+  const session = await requireAdmin();
+
+  const jobId = String(form.get("jobId") ?? "");
+  if (!jobId) return { error: "No job was named." };
+
+  const result = await releaseStalledSubmission({ session, jobId });
+  if (!result.ok) return { error: result.error };
+
+  await recordAudit({
+    actorUserId: session.user.id,
+    actorDescription: session.user.email,
+    kind: "certificate.submission_released",
+    subjectType: "job",
+    subjectId: jobId,
+    detail: {},
+  });
+
+  revalidatePath("/admin/reconcile");
+  revalidatePath(`/admin/jobs/${jobId}`);
+  revalidatePath(`/engineer/jobs/${jobId}`);
   return { message: result.message };
 }

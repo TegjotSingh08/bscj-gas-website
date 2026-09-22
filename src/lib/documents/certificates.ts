@@ -109,6 +109,15 @@ export async function uploadCertificate(input: {
   jobId: string;
   bytes: Uint8Array;
   filename: unknown;
+  /**
+   * Store under this key rather than a fresh one.
+   *
+   * Used by the connected submission, which derives a key from the attempt so
+   * that a retry writes the same object and the unique index below turns the
+   * second insert into a lookup of the first. Absent for a manual upload,
+   * where every upload is a separate act and a fresh key is right.
+   */
+  blobKey?: string;
 }): Promise<DocumentResult> {
   const { session, jobId } = input;
   assertCan(session.user.role, "certificate:issue");
@@ -153,7 +162,7 @@ export async function uploadCertificate(input: {
     exactly as it was and the engineer is told to try again — which is the
     only honest outcome, because there is nothing to point a row at.
   */
-  const stored = await putDocument(input.bytes);
+  const stored = await putDocument(input.bytes, { key: input.blobKey });
   if (!stored.ok) return { ok: false, error: stored.error };
 
   let documentId: string | null = null;

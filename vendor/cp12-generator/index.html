@@ -1940,14 +1940,36 @@ async function connectedSubmit(){
       return;
     }
 
-    /* 3. The same drawing the download has always produced. */
+    /*
+      3. The same drawing the download has always produced, and a note of
+         which revision it was drawn from.
+
+      The revision is read **before** the drawing starts. Drawing takes a
+      second or two on a phone, and an engineer who changes a reading during
+      it would otherwise file a PDF of the old value against the new draft —
+      the server refuses that mismatch, and the check below catches it here
+      first so the refusal never has to happen.
+    */
+    const drawnFromRevision = CONNECTED.revision;
     const pdf = await renderCertificatePdf();
+
+    if(CONNECTED.dirty || CONNECTED.revision !== drawnFromRevision){
+      setSaveState('dirty');
+      showImportReport('bad','Not submitted',
+        '<p>The record changed while the certificate was being drawn, so nothing ' +
+        'was sent — the document would not have matched what is saved.</p>' +
+        '<p>Your work is safe. Press <strong>Submit for review</strong> again.</p>');
+      connectedTouch();
+      return;
+    }
+
     const blob = pdf.output('blob');
 
     /* 4. To the office. */
     const form = new FormData();
     form.append('pdf', blob, buildFilename());
     form.append('submissionKey', currentSubmissionKey);
+    form.append('revision', String(drawnFromRevision));
 
     const response = await fetch(jobUrl('/submission'), {method:'POST', body: form});
     const body = await response.json().catch(()=>({}));

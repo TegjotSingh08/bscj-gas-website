@@ -52,6 +52,8 @@ export function summariseReconcile(input: {
   /** False when the reservation store could not be listed. */
   reservationsListed: boolean;
   counts: {
+    /** Certificate submissions that claimed a job and never finished. */
+    stalledSubmissions: number;
     awaitingCalendarSync: number;
     awaitingCalendarCleanup: number;
     unpersistedBookings: number;
@@ -77,6 +79,7 @@ export function summariseReconcile(input: {
 
   const everyQueueEmpty =
     (renewals?.rows.length ?? 0) === 0 &&
+    counts.stalledSubmissions === 0 &&
     counts.awaitingCalendarSync === 0 &&
     counts.awaitingCalendarCleanup === 0 &&
     counts.unpersistedBookings === 0 &&

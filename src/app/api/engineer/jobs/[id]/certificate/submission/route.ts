@@ -69,6 +69,8 @@ export async function POST(
   }
 
   const submissionKey = String(form.get("submissionKey") ?? "");
+  const drawnFrom = Number(form.get("revision"));
+  const drawnFromRevision = Number.isInteger(drawnFrom) ? drawnFrom : undefined;
 
   let bytes: Uint8Array;
   try {
@@ -86,6 +88,7 @@ export async function POST(
     bytes,
     filename: file.name,
     submissionKey,
+    drawnFromRevision,
   });
 
   if (!result.ok) {

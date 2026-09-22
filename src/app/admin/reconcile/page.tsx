@@ -15,6 +15,8 @@ import {
 } from "@/lib/compliance/outstanding";
 import { ReconcileRunner } from "./ReconcileRunner";
 import { MessageQueue, type QueueRow } from "./MessageQueue";
+import { StalledSubmissions } from "./StalledSubmissions";
+import { listStalledSubmissions } from "@/lib/documents/certificate-drafts";
 import { summariseReconcile } from "./summary";
 
 export const metadata: Metadata = {
@@ -77,6 +79,13 @@ export default async function ReconcilePage({
     state that needs no action. Unknown gets its own alert, and it withholds
     the reassurance.
   */
+  /*
+    Certificate submissions that claimed a job and never finished. Derived
+    from the rows, like everything else here, so it is still true after a
+    refresh and for whoever opens this page tomorrow.
+  */
+  const stalled = await listStalledSubmissions();
+
   const now = new Date();
   const outstanding = await listOutstandingNotifications();
   const messageRows: QueueRow[] = (outstanding ?? []).map((row) => ({
@@ -105,6 +114,7 @@ export default async function ReconcilePage({
     messagesReadable: outstanding !== null,
     reservationsListed: queue.unpersistedListed,
     counts: {
+      stalledSubmissions: stalled?.length ?? 0,
       awaitingCalendarSync: queue.awaitingCalendarSync.length,
       awaitingCalendarCleanup: queue.awaitingCalendarCleanup.length,
       unpersistedBookings: queue.unpersistedBookings.length,
@@ -160,6 +170,17 @@ export default async function ReconcilePage({
         </p>
       )}
 
+      {stalled === null && (
+        <p
+          role="alert"
+          className="mt-6 rounded-2xl border-2 border-flame-500 bg-flame-400/10 px-5 py-4 text-sm font-semibold text-navy-900"
+        >
+          Certificate submissions could not be read. Records an engineer began
+          sending and did not finish are <strong>unknown</strong> rather than
+          none.
+        </p>
+      )}
+
       {renewals === null && (
         <p
           role="alert"
@@ -197,6 +218,7 @@ export default async function ReconcilePage({
           {renewals && (
             <OutstandingRenewals renewals={renewals} continued={after !== null} />
           )}
+          <StalledSubmissions rows={stalled ?? []} />
           <MessageQueue rows={messageRows} />
         </div>
       )}

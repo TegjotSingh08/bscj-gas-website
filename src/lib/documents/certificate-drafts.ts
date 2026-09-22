@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, or, sql } from "drizzle-orm";
 
 import { getDb } from "@/lib/db/client";
 import { certificateDrafts, jobs } from "@/lib/db/schema";
@@ -9,6 +9,7 @@ import { assertCan } from "@/lib/auth/roles";
 import type { Session } from "@/lib/auth/session";
 import { canUploadCertificate, uploadRefusal } from "./release";
 import { uploadCertificate } from "./certificates";
+import { derivedDocumentKey } from "@/lib/storage/documents";
 import {
   describeIncompleteDraft,
   sanitiseDraftFields,
@@ -49,6 +50,16 @@ import {
  */
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * How long a submission claim is believed to be live.
+ *
+ * Long enough that a slow upload on a poor signal is never mistaken for a
+ * dead one, short enough that an engineer recovering their own interrupted
+ * attempt is not left waiting. The outbox uses the same idea for the same
+ * reason — a lease, not a lock, because the holder may never come back.
+ */
+export const SUBMISSION_LEASE_SECONDS = 120;
 
 const NOT_FOUND = "That job could not be found.";
 const NO_DATABASE = "The database is not configured.";
@@ -261,6 +272,14 @@ export async function saveCertificateDraft(input: {
         administrator and belongs to the certificate lifecycle, not to this.
       */
       submissionKey: null,
+      submissionStartedAt: null,
+      /*
+        And it is no longer *this* draft that was submitted. The document
+        already with the office is untouched — it belongs to the certificate
+        lifecycle — but the job screen must stop saying "submitted and waiting"
+        over work the office has not seen.
+      */
+      submittedAt: null,
     })
     .where(
       and(
@@ -320,6 +339,21 @@ export async function submitCertificateDraft(input: {
   bytes: Uint8Array;
   filename: unknown;
   submissionKey: string;
+  /**
+   * The draft revision the PDF was drawn from.
+   *
+   * **What the server can and cannot check about a PDF.** It checks that the
+   * bytes are a PDF, and it checks that the *stored draft* is complete — but
+   * it does not read the document, so it cannot know that the figures printed
+   * on it are the figures in the draft. Nothing here should be described as
+   * verifying the contents, because it does not.
+   *
+   * What it can establish is that the two refer to the same state: the client
+   * says which revision it drew, and this refuses if the stored draft has
+   * moved since. That closes the case that matters — a PDF drawn before an
+   * edit being filed against the draft made after it.
+   */
+  drawnFromRevision?: number;
 }): Promise<SubmitResult> {
   const { session, jobId, submissionKey } = input;
   assertCan(session.user.role, "certificate:issue");
@@ -336,8 +370,10 @@ export async function submitCertificateDraft(input: {
   const [existing] = await db
     .select({
       fields: certificateDrafts.fields,
+      revision: certificateDrafts.revision,
       submissionKey: certificateDrafts.submissionKey,
       submittedDocumentId: certificateDrafts.submittedDocumentId,
+      submissionStartedAt: certificateDrafts.submissionStartedAt,
     })
     .from(certificateDrafts)
     .where(eq(certificateDrafts.jobId, job.id))
@@ -372,6 +408,23 @@ export async function submitCertificateDraft(input: {
     The generator checks too, so the engineer is told before a PDF is drawn —
     but a check that only runs in a browser is not a check.
   */
+  /*
+    The PDF and the draft must be the same state. A client that says nothing
+    is an older one, and is let through — the alternative is refusing every
+    submission from a tab that has not reloaded, which would be a worse
+    failure than the one this prevents.
+  */
+  if (
+    typeof input.drawnFromRevision === "number" &&
+    input.drawnFromRevision !== existing.revision
+  ) {
+    return {
+      ok: false,
+      error:
+        "This record changed after the certificate was drawn, so nothing was submitted. Press Submit for review again to draw it from what is saved now.",
+    };
+  }
+
   const missing = describeIncompleteDraft(sanitiseDraftFields(existing.fields));
   if (missing.length > 0) {
     return {
@@ -397,24 +450,42 @@ export async function submitCertificateDraft(input: {
     no transaction spanning an upload, and nothing that depends on the two
     requests reaching the same process.
   */
+  const startedAt = new Date();
   const claimed = await db
     .update(certificateDrafts)
-    .set({ submissionKey })
+    .set({ submissionKey, submissionStartedAt: startedAt })
     .where(
       and(
         eq(certificateDrafts.jobId, job.id),
-        sql`${certificateDrafts.submissionKey} is distinct from ${submissionKey}`,
+        or(
+          sql`${certificateDrafts.submissionKey} is distinct from ${submissionKey}`,
+          /*
+            **Or this attempt's own claim, abandoned.** A process that dies
+            between claiming and storing leaves its key behind with no
+            document under it. The engineer's retry is the *same* key — it is
+            the same attempt — so without this it matched nothing, found
+            nothing to replay, and was told for ever that a submission was
+            already in flight. Past the lease, the attempt takes its own claim
+            back.
+          */
+          sql`(
+            ${certificateDrafts.submittedDocumentId} is null
+            and (
+              ${certificateDrafts.submissionStartedAt} is null
+              or ${certificateDrafts.submissionStartedAt} < now() - ${sql.raw(`interval '${SUBMISSION_LEASE_SECONDS} seconds'`)}
+            )
+          )`,
+        ),
       ),
     )
     .returning({ id: certificateDrafts.id });
 
   if (claimed.length === 0) {
     /*
-      Somebody else holds this key. Either the first of two simultaneous taps
-      is still storing, or it finished between the read above and here. Wait
-      briefly for its document rather than storing a second one — a short poll
-      is the right shape because the thing being waited for takes milliseconds
-      and the alternative is a duplicate record.
+      Somebody else holds this key and the claim is young, so it is a request
+      that is probably still running. Wait briefly for its document rather than
+      storing a second one — the thing being waited for takes milliseconds and
+      the alternative is a duplicate record in front of an administrator.
     */
     const settled = await awaitSubmission(job.id);
     if (settled) {
@@ -428,15 +499,32 @@ export async function submitCertificateDraft(input: {
     return {
       ok: false,
       error:
-        "This record is already being submitted. Open the job to check whether it arrived before sending it again.",
+        "This record is already being submitted. Wait a moment, then open the job to check whether it arrived before sending it again.",
     };
   }
+
+  /*
+    **The same attempt always writes to the same place.**
+
+    This is what makes an interruption recoverable exactly rather than by
+    guesswork. A process that died after storing the object but before writing
+    the row left a PDF with no record of it; the retry derives the same key,
+    writes the same bytes over it, and `uploadCertificate`'s unique index on
+    `blob_key` turns its second insert into a lookup of the first — so the
+    engineer gets back the document their earlier attempt produced instead of
+    a duplicate for an administrator to choose between.
+
+    The job id is in the seed as well as the key, so two jobs can never
+    collide even if a client reused a key.
+  */
+  const blobKey = derivedDocumentKey(`${job.id}:${submissionKey}`);
 
   const uploaded = await uploadCertificate({
     session,
     jobId: job.id,
     bytes: input.bytes,
     filename: input.filename,
+    blobKey,
   });
   if (!uploaded.ok) {
     /*
@@ -520,6 +608,105 @@ async function awaitSubmission(jobId: string): Promise<string | null> {
   return null;
 }
 
+/**
+ * Submissions that claimed a job and never finished.
+ *
+ * What an administrator needs to see: a record an engineer believes they sent
+ * that has no document under it. Everything here is derived from the rows, so
+ * it survives a refresh and is still true tomorrow.
+ */
+export type StalledSubmission = {
+  jobId: string;
+  reference: string;
+  startedAt: Date | null;
+  revision: number;
+};
+
+export async function listStalledSubmissions(
+  limit = 20,
+): Promise<StalledSubmission[] | null> {
+  const db = getDb();
+  if (!db) return null;
+
+  try {
+    const rows = await db
+      .select({
+        jobId: certificateDrafts.jobId,
+        reference: jobs.reference,
+        startedAt: certificateDrafts.submissionStartedAt,
+        revision: certificateDrafts.revision,
+      })
+      .from(certificateDrafts)
+      .innerJoin(jobs, eq(jobs.id, certificateDrafts.jobId))
+      .where(
+        and(
+          sql`${certificateDrafts.submissionKey} is not null`,
+          isNull(certificateDrafts.submittedDocumentId),
+          sql`(
+            ${certificateDrafts.submissionStartedAt} is null
+            or ${certificateDrafts.submissionStartedAt} < now() - ${sql.raw(`interval '${SUBMISSION_LEASE_SECONDS} seconds'`)}
+          )`,
+        ),
+      )
+      .orderBy(certificateDrafts.submissionStartedAt)
+      .limit(limit);
+
+    return rows;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Releases a stalled claim, so the engineer can send the record again.
+ *
+ * **The safest possible recovery action, deliberately.** It clears a claim and
+ * nothing else: no document is deleted, no certificate is touched, no renewal
+ * moves and nobody is emailed. If the attempt did store a PDF, that PDF is
+ * already in the review list and this does not disturb it; the engineer's next
+ * submission is simply allowed to proceed rather than being refused.
+ *
+ * Administrators only, and it refuses a claim that produced a document — that
+ * one is not stalled, it is done.
+ */
+export async function releaseStalledSubmission(input: {
+  session: Session;
+  jobId: string;
+}): Promise<{ ok: true; message: string } | { ok: false; error: string }> {
+  const { session, jobId } = input;
+  assertCan(session.user.role, "certificate:issue");
+  if (session.scope.kind !== "all") return { ok: false, error: NOT_FOUND };
+
+  const db = getDb();
+  if (!db) return { ok: false, error: NO_DATABASE };
+  if (!UUID.test(jobId)) return { ok: false, error: NOT_FOUND };
+
+  const released = await db
+    .update(certificateDrafts)
+    .set({ submissionKey: null, submissionStartedAt: null })
+    .where(
+      and(
+        eq(certificateDrafts.jobId, jobId),
+        isNull(certificateDrafts.submittedDocumentId),
+        sql`${certificateDrafts.submissionKey} is not null`,
+      ),
+    )
+    .returning({ id: certificateDrafts.id });
+
+  if (released.length === 0) {
+    return {
+      ok: false,
+      error: "There is nothing stalled on that job — it may have completed.",
+    };
+  }
+
+  return {
+    ok: true,
+    message:
+      "Released. The engineer can submit that record again; nothing was deleted.",
+  };
+}
+
 /** Puts a claim back when the attempt holding it stored nothing. */
 async function releaseClaim(jobId: string, submissionKey: string): Promise<void> {
   const db = getDb();
@@ -527,7 +714,7 @@ async function releaseClaim(jobId: string, submissionKey: string): Promise<void>
   try {
     await db
       .update(certificateDrafts)
-      .set({ submissionKey: null })
+      .set({ submissionKey: null, submissionStartedAt: null })
       .where(
         and(
           eq(certificateDrafts.jobId, jobId),

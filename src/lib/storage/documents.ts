@@ -2,7 +2,7 @@ import "server-only";
 
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 
 import { blobDelete, blobGet, blobPut } from "./blob";
 
@@ -144,6 +144,31 @@ export function newDocumentKey(): string {
   return `doc_${randomBytes(24).toString("hex")}`;
 }
 
+/**
+ * A key that is the same every time for the same attempt.
+ *
+ * **Why this exists.** A submission that is interrupted after the object is
+ * stored but before the row is written leaves a PDF nobody can find again. A
+ * random key makes that unrecoverable: the retry has no way to ask "did my
+ * own previous attempt already store this?", so it either stores a second
+ * copy for an administrator to choose between, or guesses from timestamps and
+ * risks adopting an unrelated document.
+ *
+ * Deriving the key from the attempt removes the question. The retry computes
+ * the same key, writes the same object — the store overwrites it with
+ * identical bytes — and the unique index on `blob_key` turns the second
+ * insert into a lookup of the first. Idempotency comes from the database
+ * rather than from timing.
+ *
+ * **It still encodes nothing.** The seed is hashed, so the key carries no job
+ * reference, no name and no address — the property the comment above is about.
+ * It is not a secret either: every document is served by its own id behind an
+ * authorisation check, and the store is private on both drivers.
+ */
+export function derivedDocumentKey(seed: string): string {
+  return `doc_${createHash("sha256").update(seed).digest("hex").slice(0, 48)}`;
+}
+
 /** Keys this module minted. Anything else is not ours to open. */
 const KEY_SHAPE = /^doc_[0-9a-f]{48}$/;
 
@@ -166,13 +191,28 @@ export type PutResult =
  * database until this has succeeded**, so a storage failure leaves no row
  * claiming a file that is not there.
  */
-export async function putDocument(bytes: Uint8Array): Promise<PutResult> {
+export async function putDocument(
+  bytes: Uint8Array,
+  options: {
+    /**
+     * Store under this key rather than a fresh random one.
+     *
+     * For a caller that needs the same attempt to land in the same place
+     * twice — see `derivedDocumentKey`. Refused unless it has the shape this
+     * module mints, so a caller cannot write outside the store's namespace.
+     */
+    key?: string;
+  } = {},
+): Promise<PutResult> {
   const status = storageStatus();
   if (!status.ready) {
     return { ok: false, error: status.requirement ?? "No document store is configured." };
   }
 
-  const key = newDocumentKey();
+  if (options.key && !KEY_SHAPE.test(options.key)) {
+    return { ok: false, error: "That document key is not one this store mints." };
+  }
+  const key = options.key ?? newDocumentKey();
 
   if (status.driver === "local") {
     try {
