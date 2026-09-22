@@ -403,6 +403,143 @@ describe("the capability table, which is not the same as a guard", () => {
   });
 });
 
+describe("the connected certificate endpoints, over real HTTP", () => {
+  /**
+   * The three routes the engineer's generator calls.
+   *
+   * The decisions they rest on are exercised against the database in
+   * `engineer-certificate.test.ts`; what these add is the wire: that an
+   * unauthenticated caller gets a status rather than a login page, that an
+   * engineer who is not on the job is refused by the route and not only by
+   * the function behind it, and that a cross-site post carries nothing.
+   */
+  const jobUrl = (suffix: string) =>
+    `${BASE_URL}/api/engineer/jobs/${fixture.jobId}/certificate${suffix}`;
+
+  let engineerSession: HttpSession;
+  let strangerSession: HttpSession;
+
+  before(async () => {
+    await conn.client.query(
+      "update job set assigned_engineer_id = $1 where id = $2",
+      [fixture.engineerUserId, fixture.jobId],
+    );
+    engineerSession = await signIn("engineer@fixture.example.invalid", PASSWORD);
+    strangerSession = await signIn("engineer2@fixture.example.invalid", PASSWORD);
+  });
+
+  const put = (session: HttpSession | null, body: unknown, origin = BASE_URL) =>
+    fetch(jobUrl("/draft"), {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
+        ...(session ? { cookie: session.cookie() } : {}),
+        origin,
+      },
+      body: JSON.stringify(body),
+      redirect: "manual",
+    });
+
+  test("an unauthenticated caller gets 401, not a login page with a 200 on it", async () => {
+    const session = await fetch(jobUrl("/session"), { redirect: "manual" });
+    assert.equal(session.status, 401);
+    assert.match(await session.text(), /unauthenticated/);
+
+    const draft = await put(null, { fields: {}, revision: 0 });
+    assert.equal(draft.status, 401);
+  });
+
+  test("the engineer on the job is served the prefill and an empty draft", async () => {
+    const response = await fetch(jobUrl("/session"), {
+      headers: { cookie: engineerSession.cookie() },
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "no-store, max-age=0");
+
+    const body = (await response.json()) as {
+      job: { reference: string; canSubmit: boolean };
+      prefill: { fields: Record<string, string> };
+      draft: { revision: number };
+    };
+    assert.equal(body.job.reference, fixture.jobReference);
+    assert.equal(body.job.canSubmit, true);
+    assert.equal(body.draft.revision, 0);
+
+    /* Prefilled from the job — and nothing the engineer has to decide. */
+    assert.equal(body.prefill.fields.jobPostcode, "WV1 1AA");
+    assert.equal(body.prefill.fields.certNo, undefined, "no number is invented");
+    assert.equal(body.prefill.fields.sigDate, undefined, "no date is invented");
+    assert.equal(body.prefill.fields.coFitted, undefined, "no outcome is invented");
+  });
+
+  test("another engineer is refused by the route, with nothing that says why", async () => {
+    const session = await fetch(jobUrl("/session"), {
+      headers: { cookie: strangerSession.cookie() },
+    });
+    assert.equal(session.status, 404);
+
+    const draft = await put(strangerSession, {
+      fields: { certNo: "TEST-NOT-VALID-9999" },
+      revision: 0,
+    });
+    assert.equal(draft.status, 404);
+
+    const { rows } = await conn.client.query<{ n: string }>(
+      "select count(*)::text as n from certificate_draft",
+    );
+    assert.equal(rows[0].n, "0", "and nothing was written");
+  });
+
+  test("an agency user cannot reach them at all", async () => {
+    const response = await fetch(jobUrl("/session"), {
+      headers: { cookie: agent.cookie() },
+    });
+    assert.equal(response.status, 401, "the engineer audience guard refuses them");
+  });
+
+  test("a cross-site post is refused before the session is even considered", async () => {
+    const response = await put(
+      engineerSession,
+      { fields: {}, revision: 0 },
+      "https://not-bscj.example.invalid",
+    );
+    assert.equal(response.status, 401);
+  });
+
+  test("a stale revision is a 409 that carries the current draft", async () => {
+    const first = await put(engineerSession, {
+      fields: { certNo: "TEST-NOT-VALID-0001" },
+      revision: 0,
+    });
+    assert.equal(first.status, 200);
+
+    const stale = await put(engineerSession, {
+      fields: { certNo: "TEST-NOT-VALID-0002" },
+      revision: 0,
+    });
+    assert.equal(stale.status, 409);
+    const body = (await stale.json()) as {
+      conflict: boolean;
+      draft: { fields: Record<string, string>; revision: number };
+    };
+    assert.equal(body.conflict, true);
+    assert.equal(body.draft.fields.certNo, "TEST-NOT-VALID-0001");
+    assert.equal(body.draft.revision, 1);
+  });
+
+  test("a submission with no PDF on it is refused", async () => {
+    const form = new FormData();
+    form.set("submissionKey", "no-file");
+    const response = await fetch(jobUrl("/submission"), {
+      method: "POST",
+      headers: { cookie: engineerSession.cookie(), origin: BASE_URL },
+      body: form,
+    });
+    assert.equal(response.status, 400);
+    assert.match(await response.text(), /No certificate was attached/);
+  });
+});
+
 describe("the browser harness keeps its promises", () => {
   test("it fixes every key the application documents", () => {
     const example = readFileSync(".env.example", "utf8");

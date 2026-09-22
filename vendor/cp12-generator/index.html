@@ -13,6 +13,7 @@
 -->
 <base href="/engineer/certificate/">
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Gas Safety Record Generator</title>
 <style>
   :root{
@@ -58,6 +59,107 @@
   .toolbar button.primary{background:#ffc107;color:#1a1a1a;}
   .toolbar button:hover{filter:brightness(0.95);}
   .status{font-size:11px;color:#cdd8ee;flex-basis:100%;}
+
+  /* ---------- Connected mode ----------
+     The generator opened against a job in the BSCJ application. Everything
+     here is additive: without [data-connected] the sheet is untouched.       */
+  .status[data-tone]{
+    font-size:13px;
+    font-weight:700;
+    padding:6px 10px;
+    border-radius:6px;
+    margin-top:4px;
+    display:inline-block;
+    flex-basis:auto;
+  }
+  .status[data-tone="ok"]{background:#0f5132;color:#d1e7dd;}
+  .status[data-tone="warn"]{background:#664d03;color:#fff3cd;}
+  .status[data-tone="bad"]{background:#842029;color:#f8d7da;}
+  .status[data-tone="busy"]{background:#0b3d63;color:#cfe2ff;}
+
+  #connBack{
+    color:#fff;
+    font-size:13px;
+    font-weight:700;
+    text-decoration:underline;
+    align-self:center;
+  }
+
+  /*
+    The two connected buttons are the only actions on this screen, so they are
+    sized to be hit with a thumb rather than clicked with a mouse. 44px is the
+    usual floor for a touch target and an engineer is holding a phone in a
+    hallway, often one-handed and often in gloves.
+  */
+  body[data-connected] .toolbar button.conn-only{
+    min-height:44px;
+    font-size:15px;
+    font-weight:700;
+    padding:10px 16px;
+  }
+  body[data-connected] .toolbar #btnSubmit{
+    background:var(--flame,#e8721c);
+    color:#10233f;
+    border-color:#10233f;
+  }
+  body[data-connected] .toolbar button.conn-only:disabled{opacity:.55;}
+
+  /*
+    On a phone the toolbar is the thing an engineer needs constantly — the
+    save state and the two buttons — so it stays on screen while the sheet
+    scrolls underneath it, and the controls go full width so neither can be
+    mistaken for the other.
+  */
+  @media (max-width: 720px){
+    body[data-connected] .toolbar{
+      position:sticky;
+      top:0;
+      z-index:40;
+      margin-bottom:10px;
+      border-radius:0;
+      padding:10px 12px;
+      gap:8px;
+    }
+    body[data-connected] .toolbar h2{font-size:14px;flex-basis:100%;}
+    body[data-connected] .toolbar button.conn-only{flex:1 1 100%;}
+    body[data-connected] .status[data-tone]{width:100%;text-align:center;}
+    /*
+      The sheet is a landscape A4 form and stays one — squeezing 21 appliance
+      columns into 375px would make a safety record unreadable. It scrolls
+      sideways inside its own frame, with the toolbar pinned above it, so the
+      two controls that matter are always reachable with a thumb while the
+      form is panned.
+    */
+    body[data-connected] .sheet{
+      padding:10px;
+      overflow-x:auto;
+      -webkit-overflow-scrolling:touch;
+    }
+    body[data-connected] .field-line label{font-size:12px;}
+    /* Inputs at 16px, or iOS zooms the whole page on focus. */
+    body[data-connected] .sheet input,
+    body[data-connected] .sheet select,
+    body[data-connected] .sheet textarea{font-size:16px;}
+
+    /*
+      The three header blocks stack. Side by side they are 110px wide on a
+      phone, which turns an address into three letters and an ellipsis —
+      unreadable, and unreadable is how a wrong postcode gets onto a gas
+      safety record.
+    */
+    body[data-connected] .info-row{flex-direction:column;}
+
+    /*
+      **The PDF is not a phone layout.** The capture host draws the sheet at a
+      fixed 1650px to produce a landscape A4 document, and it is inside the
+      body — so without these it would inherit the stacking and scrolling
+      above and an engineer generating a certificate on a phone would submit a
+      differently-shaped document from one generating it on a laptop.
+    */
+    #pdfCaptureHost .sheet{overflow:visible;padding:14px;}
+    #pdfCaptureHost .info-row{flex-direction:row;}
+    #pdfCaptureHost .field-line label{font-size:11px;}
+  }
 
   /* ---------- Sheet ---------- */
   .sheet{
@@ -312,6 +414,17 @@
   <button id="btnDownloadPdf" class="primary">⬇ Download Certificate PDF</button>
   <button id="btnPickFolder" title="Choose the GAS CERTS folder once — certificates are then saved into it automatically, sorted by month and landlord">📁 Save folder</button>
   <button id="btnPrint" style="font-size:11px;">🖨️ Print instead</button>
+
+  <!--
+    The connected toolbar. Hidden unless the generator was opened against a
+    job, in which case the standalone controls above are hidden instead. Two
+    buttons, because there are two things an engineer does: keep the work
+    safe, and hand it to the office.
+  -->
+  <a id="connBack" class="conn-only" href="#" hidden>← Back to the job</a>
+  <button id="btnSaveDraft" class="conn-only" hidden>💾 Save draft</button>
+  <button id="btnSubmit" class="primary conn-only" hidden>📤 Submit for review</button>
+
   <div class="status" id="statusLine">Draft auto-saves in this browser as you type. Certificates save sorted by month → landlord into your chosen folder (📁 Save folder).</div>
   <div class="import-report" id="importReport" role="status" aria-live="polite" hidden></div>
 </div>
@@ -429,9 +542,29 @@
 
 </div>
 
-<p class="footer-note no-print">
+<p class="footer-note no-print" id="standaloneFooter">
   Data is stored only in this browser (landlord list, default engineer details, and the current draft). Use "Manage Landlords" to add, edit, export or back up landlord records.
   To finish a certificate: click <strong>Print / Save as PDF</strong>, then choose "Save as PDF" as the destination in the print dialog and save it into the correct EP / Private folder.
+</p>
+
+<!--
+  The connected footer. Every sentence in the standalone one above is false
+  when the generator is working against a job — the draft is on the server,
+  there is no landlord book, and the certificate is submitted rather than
+  saved to a folder — so it is swapped rather than left to mislead.
+
+  It is also careful about what it does *not* claim. The customer's details
+  are on this screen, in this browser, and saying otherwise would be a lie an
+  engineer could repeat to a landlord. What changed is that no file is
+  downloaded and nothing is left in the browser's storage afterwards.
+-->
+<p class="footer-note no-print conn-only" id="connectedFooter" hidden>
+  This record is saved against the job on the office system, not in this
+  browser — it is here whichever device you sign in on. Nothing is downloaded
+  and nothing is left on this device when you close the tab. The customer's
+  details are shown on this screen while you work, as they have to be.
+  <strong>Submit for review</strong> sends the finished record to the office;
+  it does not issue the certificate and emails nobody.
 </p>
 
 <!-- ===================== Manage Landlords Modal ===================== -->
@@ -475,6 +608,46 @@ const LANDLORDS_KEY = 'gascert_landlords_v1';
 const ENGINEER_KEY  = 'gascert_engineer_v1';
 const DRAFT_KEY      = 'gascert_draft_v1';
 const PRIVATE_ID = '__private__';
+
+/* ============================================================
+   Connected mode
+   ------------------------------------------------------------
+   Opened as /engineer/certificate?job=<uuid>, the generator works
+   against one job in the BSCJ application: its details are fetched
+   rather than imported from a file, the draft is held on the server
+   rather than in this browser, and the finished PDF is submitted
+   straight to the office instead of being downloaded.
+
+   Opened without ?job=, everything below is inert and this behaves
+   exactly as it always has — which is what the engineer using it from
+   a desktop, on a job that is not in the application, still relies on.
+
+   The id is read from the query string and is an opaque UUID. No name,
+   address or postcode is ever in a URL; the details come back in the
+   body of an authenticated request, which the server scopes to this
+   engineer's own assignment.
+   ============================================================ */
+const CONNECTED = (function(){
+  let jobId = null;
+  try{
+    const value = new URLSearchParams(location.search).get('job');
+    if(value && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)){
+      jobId = value;
+    }
+  }catch{ /* No URL API, or an opaque origin. Standalone it is. */ }
+  return {
+    jobId,
+    get on(){ return this.jobId !== null; },
+    /* Filled once the session has been fetched. */
+    reference: '',
+    revision: 0,
+    submitted: false,
+    /* Set by the field watcher, cleared by a save the server accepted. */
+    dirty: false,
+    saving: false,
+    submitting: false,
+  };
+})();
 
 function defaultEngineer(){
   /*
@@ -524,7 +697,16 @@ function getLandlords(){
     return JSON.parse(raw);
   }catch(e){ return defaultLandlords(); }
 }
-function setLandlords(list){ localStorage.setItem(LANDLORDS_KEY, JSON.stringify(list)); }
+function setLandlords(list){
+  /*
+    Connected mode keeps nothing about a customer in this browser. The
+    landlord book is a standalone convenience; in connected mode the details
+    come from the job and go back to the server, so writing them here would
+    leave a copy on the device for no benefit.
+  */
+  if(CONNECTED.on) return;
+  localStorage.setItem(LANDLORDS_KEY, JSON.stringify(list));
+}
 
 function getEngineer(){
   try{
@@ -533,7 +715,10 @@ function getEngineer(){
     return JSON.parse(raw);
   }catch(e){ return defaultEngineer(); }
 }
-function setEngineer(obj){ localStorage.setItem(ENGINEER_KEY, JSON.stringify(obj)); }
+function setEngineer(obj){
+  if(CONNECTED.on) return;   /* Same reason as setLandlords. */
+  localStorage.setItem(ENGINEER_KEY, JSON.stringify(obj));
+}
 
 /* ---------------- Appliance table config ---------------- */
 const APPLIANCE_COLS = [
@@ -1104,6 +1289,29 @@ async function downloadPdf(){
   btn.textContent = '⏳ Generating PDF…';
   btn.disabled = true;
 
+  try{
+    await saveSorted(await renderCertificatePdf());
+  }catch(err){
+    console.error(err);
+    alert('Could not generate the PDF automatically. You can use "Print instead" as a fallback.\n\n' + err.message);
+  }finally{
+    btn.textContent = origBtnText;
+    btn.disabled = false;
+  }
+}
+
+/**
+ * Draws the sheet and returns the jsPDF document.
+ *
+ * Factored out of `downloadPdf` unchanged — same clone, same scale, same page
+ * geometry — so the connected submission and the standalone download produce
+ * **the same PDF by construction** rather than by two implementations that
+ * agree today. The only difference downstream is where the bytes go.
+ *
+ * Throws on failure. Both callers have something useful to say about it and
+ * neither wants a half-drawn document.
+ */
+async function renderCertificatePdf(){
   const host = document.createElement('div');
   host.id = 'pdfCaptureHost';
   host.appendChild(makePrintClone());
@@ -1121,14 +1329,9 @@ async function downloadPdf(){
     if(h > maxH){ h = maxH; w = h * ratio; }
     const x = (pageW - w) / 2, y = (pageH - h) / 2;
     pdf.addImage(canvas.toDataURL('image/jpeg', 0.95), 'JPEG', x, y, w, h);
-    await saveSorted(pdf);
-  }catch(err){
-    console.error(err);
-    alert('Could not generate the PDF automatically. You can use "Print instead" as a fallback.\n\n' + err.message);
+    return pdf;
   }finally{
     host.remove();
-    btn.textContent = origBtnText;
-    btn.disabled = false;
   }
 }
 qs('btnDownloadPdf').addEventListener('click', downloadPdf);
@@ -1177,6 +1380,7 @@ OUTCOME_IDS.forEach(id=>{
   blank.
 */
 function reportLegacyOutcomes(originalDraft){
+  if(CONNECTED.on) return;   /* No browser draft was read, so none was migrated. */
   const ids = Object.keys(legacyOutcomes);
   if(ids.length === 0) return;
 
@@ -1397,13 +1601,26 @@ qs('importJobFile').addEventListener('change', async (e)=>{
 
 /* ---------------- Autosave draft ---------------- */
 let saveTimer = null;
-function saveDraft(){
+/** Everything on the sheet, as the flat map both ends of the bridge use. */
+function collectSheet(){
   const data = {};
   document.querySelectorAll('#sheet input, #sheet select, #sheet textarea').forEach(el=>{
     if(!el.id) return;
     data[el.id] = el.type==='checkbox' ? el.checked : el.value;
   });
-  localStorage.setItem(DRAFT_KEY, JSON.stringify(data));
+  return data;
+}
+
+function saveDraft(){
+  /*
+    In connected mode this browser stores nothing. The work is marked unsaved
+    and the server save is scheduled; "Saved" is only ever shown once the
+    server has actually accepted it, which is the whole point of moving the
+    draft off the device.
+  */
+  if(CONNECTED.on){ connectedTouch(); return; }
+
+  localStorage.setItem(DRAFT_KEY, JSON.stringify(collectSheet()));
   const status = qs('statusLine');
   status.textContent = 'Draft saved ' + new Date().toLocaleTimeString();
 }
@@ -1419,6 +1636,14 @@ const legacyOutcomes = {};
 const LEGACY_DRAFT_KEY = 'gascert_draft_pre_outcomes_v1';
 
 function loadDraft(){
+  /*
+    Connected mode never reads this browser's draft — not even to fall back
+    on. The sheet is filled from the server, and a leftover draft from another
+    job on the same device must not appear on it. Returning true keeps the
+    caller from starting a blank certificate underneath the fetch.
+  */
+  if(CONNECTED.on) return true;
+
   try{
     const raw = localStorage.getItem(DRAFT_KEY);
     if(!raw) return false;
@@ -1488,6 +1713,432 @@ if(!loadDraft()){
 // what was actually saved rather than the markup's starting point.
 refreshOutcomeStates();
 reportLegacyOutcomes(draftBeforeLoad);
+
+/* ==========================================================================
+   Connected mode
+   --------------------------------------------------------------------------
+   Everything below runs only when the generator was opened against a job.
+   Standalone use reaches `if(!CONNECTED.on)` and stops.
+   ========================================================================== */
+
+/** The save states an engineer is shown. Never "Saved" before the server said so. */
+const SAVE_STATES = {
+  loading:  {text:'Loading this job…',            tone:'busy'},
+  clean:    {text:'Saved',                         tone:'ok'},
+  dirty:    {text:'Unsaved changes',               tone:'warn'},
+  saving:   {text:'Saving…',                       tone:'busy'},
+  failed:   {text:'Could not save — tap Save draft to try again', tone:'bad'},
+  conflict: {text:'Saved somewhere else since this screen opened', tone:'bad'},
+  submitting:{text:'Submitting…',                  tone:'busy'},
+  submitted:{text:'Submitted — waiting for the office to review it', tone:'ok'},
+};
+
+function setSaveState(key, extra){
+  const state = SAVE_STATES[key];
+  if(!state) return;
+  const line = qs('statusLine');
+  line.textContent = extra ? state.text + ' · ' + extra : state.text;
+  line.setAttribute('data-tone', state.tone);
+}
+
+/** The field watcher's hook. Marks unsaved and schedules a server save. */
+let connectedSaveTimer = null;
+function connectedTouch(){
+  if(CONNECTED.submitting) return;
+  CONNECTED.dirty = true;
+  if(!CONNECTED.saving) setSaveState('dirty');
+  clearTimeout(connectedSaveTimer);
+  /*
+    Autosave, but unhurried. Two seconds after typing stops is often enough to
+    mean an engineer never presses Save draft at all, and slow enough that a
+    six-appliance table is not a request per keystroke on a phone signal. The
+    explicit button remains, because an autosave you cannot trigger is one you
+    cannot rely on.
+  */
+  connectedSaveTimer = setTimeout(()=>{
+    /* Never while a submission is in flight: it would race the PDF. */
+    if(CONNECTED.submitting) return;
+    connectedSave(false);
+  }, 2000);
+}
+
+function jobUrl(suffix){
+  return '/api/engineer/jobs/' + encodeURIComponent(CONNECTED.jobId) + '/certificate' + suffix;
+}
+
+/**
+ * Sends the sheet to the server.
+ *
+ * Returns true only when the server accepted it. Every caller that is about
+ * to do something irreversible checks the return value rather than assuming.
+ */
+/** The save currently in flight, so a second caller waits rather than losing. */
+let savePromise = null;
+
+async function connectedSave(explicit){
+  /*
+    A save already on the wire is awaited rather than refused. The submission
+    path calls this and then acts on the answer, so returning false because
+    an autosave happened to be in flight would refuse to submit a record that
+    is about to be perfectly safe — which is exactly what it did the first
+    time this was driven in a browser.
+  */
+  if(savePromise){
+    const inFlight = await savePromise;
+    /* An autosave is satisfied by the one that just finished. An explicit
+       save is a person asking, and may have newer work to send. */
+    if(!explicit || !CONNECTED.dirty) return inFlight;
+  }
+
+  savePromise = connectedSaveNow(explicit);
+  try{
+    return await savePromise;
+  }finally{
+    savePromise = null;
+  }
+}
+
+async function connectedSaveNow(explicit){
+  clearTimeout(connectedSaveTimer);
+  CONNECTED.saving = true;
+  setSaveState('saving');
+
+  /*
+    The sheet is read now, and the revision that goes with it is the one this
+    screen was built from. If another device has saved since, the server
+    refuses and says so — this screen never wins by being last.
+  */
+  const fields = collectSheet();
+  const basedOn = CONNECTED.revision;
+
+  try{
+    const response = await fetch(jobUrl('/draft'), {
+      method: 'PUT',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({fields, revision: basedOn}),
+    });
+
+    if(response.status === 409){
+      const body = await response.json().catch(()=>({}));
+      CONNECTED.saving = false;
+      setSaveState('conflict');
+      showImportReport('bad','This record was saved somewhere else',
+        '<p>Another device or tab saved this gas safety record after this screen ' +
+        'was opened. <strong>Nothing you can see has been sent, and nothing there ' +
+        'has been overwritten.</strong></p>' +
+        '<p>Open the job again on this device to load the current version. If the ' +
+        'work on this screen is the one you want, copy it across by hand first — ' +
+        'it has not been lost.</p>');
+      return false;
+    }
+
+    if(!response.ok){
+      const body = await response.json().catch(()=>({}));
+      CONNECTED.saving = false;
+      setSaveState('failed');
+      if(explicit && body.error){
+        showImportReport('bad','Could not save the draft','<p>' + escapeHtml(body.error) + '</p>');
+      }
+      return false;
+    }
+
+    const body = await response.json();
+    CONNECTED.revision = body.revision;
+    CONNECTED.saving = false;
+    /*
+      Only clear the unsaved flag if nothing was typed while the request was
+      in flight. Otherwise this would show "Saved" over changes the server has
+      never seen, which is the one thing a save indicator must not do.
+      `collectSheet()` was taken before the request, so anything since is new.
+    */
+    const changedDuringSave = JSON.stringify(collectSheet()) !== JSON.stringify(fields);
+    if(changedDuringSave){
+      CONNECTED.dirty = true;
+      setSaveState('dirty');
+      connectedTouch();
+    }else{
+      CONNECTED.dirty = false;
+      setSaveState('clean', new Date().toLocaleTimeString());
+    }
+    return true;
+  }catch(err){
+    CONNECTED.saving = false;
+    setSaveState('failed');
+    if(explicit){
+      showImportReport('bad','Could not save the draft',
+        '<p>The save did not reach the office. Your work is still on this screen ' +
+        '— nothing has been lost. Check your signal and press ' +
+        '<strong>Save draft</strong> again.</p>');
+    }
+    return false;
+  }
+}
+
+/** A key for one submission attempt, so a double tap cannot make two records. */
+function newSubmissionKey(){
+  if(window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  return 'sub-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
+}
+let currentSubmissionKey = null;
+
+/**
+ * The finished record, to the office.
+ *
+ * Order matters and is deliberate: save first, then validate, then draw, then
+ * send. Saving first means a failure at any later step leaves the engineer's
+ * work safely on the server rather than only on the screen.
+ */
+async function connectedSubmit(){
+  if(CONNECTED.submitting) return;
+
+  const submitBtn = qs('btnSubmit');
+  CONNECTED.submitting = true;
+  submitBtn.disabled = true;
+  qs('btnSaveDraft').disabled = true;
+  setSaveState('submitting');
+  qs('importReport').hidden = true;
+
+  /*
+    The same key for every retry of this attempt. It is only replaced once a
+    submission has actually succeeded, so a tap, a timeout and a second tap
+    are one submission — and the server returns the first document rather than
+    storing a second.
+  */
+  if(!currentSubmissionKey) currentSubmissionKey = newSubmissionKey();
+
+  try{
+    /* 1. The work is safe before anything else is attempted. */
+    const saved = await connectedSave(true);
+    if(!saved){
+      setSaveState('failed');
+      showImportReport('bad','Not submitted',
+        '<p>The draft could not be saved, so nothing was submitted. ' +
+        'Your work is still on this screen. Try <strong>Save draft</strong> first.</p>');
+      return;
+    }
+
+    /* 2. The browser's copy of the completeness rules, so the engineer is
+          told before a PDF is drawn. The server checks again and decides. */
+    const unassessed = unassessedOutcomes();
+    if(unassessed.length){
+      setSaveState('clean');
+      showImportReport('bad','Not submitted yet',
+        '<p>These safety outcomes have not been assessed. Choose an outcome for ' +
+        'each, then submit again.</p><ul>' +
+        unassessed.map(l => '<li>' + escapeHtml(l) + '</li>').join('') +
+        '</ul><p>Your draft is saved. Nothing has been lost.</p>');
+      const first = OUTCOME_IDS.find(id => !qs(id).value);
+      if(first) qs(first).focus();
+      return;
+    }
+
+    if(typeof html2canvas === 'undefined' || !window.jspdf){
+      setSaveState('clean');
+      showImportReport('bad','Not submitted',
+        '<p>The PDF engine did not load, so the certificate could not be drawn. ' +
+        'Your draft is saved. Reload this page and try again.</p>');
+      return;
+    }
+
+    /* 3. The same drawing the download has always produced. */
+    const pdf = await renderCertificatePdf();
+    const blob = pdf.output('blob');
+
+    /* 4. To the office. */
+    const form = new FormData();
+    form.append('pdf', blob, buildFilename());
+    form.append('submissionKey', currentSubmissionKey);
+
+    const response = await fetch(jobUrl('/submission'), {method:'POST', body: form});
+    const body = await response.json().catch(()=>({}));
+
+    if(!response.ok){
+      setSaveState('failed');
+      const missing = Array.isArray(body.missing) && body.missing.length
+        ? '<ul>' + body.missing.map(m => '<li>' + escapeHtml(String(m)) + '</li>').join('') + '</ul>'
+        : '';
+      showImportReport('bad','Not submitted',
+        '<p>' + escapeHtml(body.error || 'The submission did not go through.') + '</p>' +
+        missing +
+        '<p>Your draft is saved. Press <strong>Submit for review</strong> again when ' +
+        'you are ready — this will not create a second record.</p>');
+      return;
+    }
+
+    CONNECTED.submitted = true;
+    currentSubmissionKey = null;
+    connectedSubmitted(body.replayed);
+  }catch(err){
+    console.error(err);
+    setSaveState('failed');
+    showImportReport('bad','Not submitted',
+      '<p>Something went wrong while submitting. Your draft is saved and nothing ' +
+      'has been lost.</p><p>Press <strong>Submit for review</strong> again — if the ' +
+      'first attempt did reach the office, this will not create a second record.</p>');
+  }finally{
+    CONNECTED.submitting = false;
+    submitBtn.disabled = false;
+    qs('btnSaveDraft').disabled = false;
+  }
+}
+
+/** What the engineer sees once it has gone. Unambiguous, and it ends the task. */
+function connectedSubmitted(replayed){
+  setSaveState('submitted');
+  qs('btnSubmit').hidden = true;
+  qs('btnSaveDraft').hidden = true;
+  showImportReport('ok', replayed ? 'Already submitted' : 'Submitted for review',
+    '<p>This gas safety record is with the office for ' + escapeHtml(CONNECTED.reference) + '.</p>' +
+    '<p><strong>It is not issued yet.</strong> An administrator reads it and releases ' +
+    'it; nobody is emailed and no renewal date moves until they do.</p>' +
+    '<p>You can close this tab. <a href="/engineer/jobs/' + encodeURIComponent(CONNECTED.jobId) + '">Back to the job</a></p>');
+}
+
+/** Opens the generator on a job: fetch, prefill, then lay the draft over it. */
+async function connectedBoot(){
+  if(!CONNECTED.on) return;
+
+  document.body.setAttribute('data-connected','1');
+  document.querySelectorAll('.conn-only').forEach(el => { el.hidden = false; });
+  /*
+    The standalone controls are hidden rather than removed: every one of them
+    writes to this browser, opens a file picker or downloads a document, and
+    none of those belongs in a workflow whose whole point is that the record
+    goes straight to the office.
+  */
+  ['btnManageLandlords','btnNewCert','btnImportJob','btnDownloadPdf','btnPickFolder','btnSaveEngineer','btnSaveLandlord','standaloneFooter']
+    .forEach(id => { const el = qs(id); if(el) el.hidden = true; });
+
+  const back = qs('connBack');
+  back.setAttribute('href', '/engineer/jobs/' + encodeURIComponent(CONNECTED.jobId));
+
+  setSaveState('loading');
+
+  let data;
+  try{
+    const response = await fetch(jobUrl('/session'), {headers:{'Accept':'application/json'}});
+    if(!response.ok) throw new Error('status ' + response.status);
+    data = await response.json();
+  }catch(err){
+    setSaveState('failed');
+    showImportReport('bad','This job could not be opened',
+      '<p>Either it is not assigned to you, or the connection failed. ' +
+      'Nothing has been changed.</p><p><a href="/engineer">Back to today</a></p>');
+    return;
+  }
+
+  CONNECTED.reference = data.job.reference || '';
+  CONNECTED.revision = data.draft.revision || 0;
+
+  /*
+    Prefill first, onto the blank sheet, then the stored draft over the top.
+    That order is what makes reopening safe: an administrative detail that has
+    changed on the job is applied, and then anything the engineer has actually
+    typed wins over it. Nothing the engineer entered is ever replaced by a
+    value from the job record.
+  */
+  applyImport(data.prefill);
+
+  const fields = data.draft.fields || {};
+  const restored = Object.keys(fields).length > 0;
+
+  /*
+    What the job says now, against what this record already has.
+
+    The draft wins — it is the engineer's record and they may have corrected
+    something deliberately — but a detail that has changed on the job since
+    the draft was started is worth saying out loud rather than either
+    overwriting their work or hiding the difference. Collected before the
+    overlay, reported after it.
+  */
+  const changed = [];
+  if(restored){
+    IMPORT_ALLOWED.forEach(id=>{
+      const fromJob = (data.prefill.fields[id] || '').trim();
+      const onRecord = (fields[id] === undefined ? null : String(fields[id]).trim());
+      if(fromJob && onRecord !== null && onRecord !== fromJob){
+        changed.push({id, fromJob, onRecord});
+      }
+    });
+
+    Object.keys(fields).forEach(id=>{
+      const el = qs(id);
+      if(!el) return;
+      el.value = fields[id];
+    });
+    refreshOutcomeStates();
+  }
+
+  /* The import report is about a file. This is not one. */
+  qs('importReport').hidden = true;
+
+  if(data.draft.submittedAt){
+    CONNECTED.submitted = true;
+    connectedSubmitted(true);
+    return;
+  }
+
+  if(!data.job.canSubmit){
+    showImportReport('bad','This job is not ready for a certificate',
+      '<p>Start the visit on the job screen first. You can still fill this in and ' +
+      'save it as a draft.</p>');
+  }
+
+  if(changed.length){
+    showImportReport('bad','The job details have changed since you started this record',
+      '<p>Your record has <strong>not</strong> been altered — what you typed is what ' +
+      'is on the sheet. These are the differences, so you can decide:</p><ul>' +
+      changed.slice(0, 8).map(c =>
+        '<li>' + escapeHtml(fieldLabel(c.id)) + ' — this record says <strong>' +
+        escapeHtml(c.onRecord || '(blank)') + '</strong>, the job now says <strong>' +
+        escapeHtml(c.fromJob) + '</strong></li>').join('') +
+      '</ul><p>Change anything that should follow the job, then save.</p>');
+  }
+
+  if(!restored){
+    /*
+      A fresh sheet with the prefill on it is worth having on the server at
+      once: an engineer who loses signal after typing one reading should still
+      find the job's details waiting when they come back.
+    */
+    setSaveState('dirty', 'not saved yet');
+    connectedSave(false);
+    return;
+  }
+
+  /*
+    Reopening is not a change. `applyImport` calls `saveDraft()`, which in
+    connected mode marks the sheet unsaved and schedules a write — so without
+    this every open would bump the revision and flicker "Unsaved changes" at
+    an engineer who has touched nothing.
+  */
+  clearTimeout(connectedSaveTimer);
+  CONNECTED.dirty = false;
+  setSaveState('clean', 'resumed');
+}
+
+/** What a field is called on the sheet, for a message a person reads. */
+function fieldLabel(id){
+  const el = qs(id);
+  if(!el) return id;
+  const line = el.closest('.field-line');
+  const label = line && line.querySelector('label');
+  return label ? label.textContent.trim() : id;
+}
+
+if(CONNECTED.on){
+  qs('btnSaveDraft').addEventListener('click', ()=>{ connectedSave(true); });
+  qs('btnSubmit').addEventListener('click', connectedSubmit);
+  /*
+    A last word before the tab closes on unsaved work. It cannot save — a
+    browser will not wait for a request here — so it only warns, and the
+    autosave above is what actually keeps the work.
+  */
+  window.addEventListener('beforeunload', (e)=>{
+    if(CONNECTED.dirty && !CONNECTED.submitted){ e.preventDefault(); e.returnValue = ''; }
+  });
+  connectedBoot();
+}
 </script>
 </body>
 </html>

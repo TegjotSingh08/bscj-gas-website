@@ -21,6 +21,7 @@ import {
   listPendingDocuments,
 } from "@/lib/documents/certificates";
 import { storageStatus } from "@/lib/storage/documents";
+import { draftSummaryFor } from "@/lib/documents/certificate-drafts";
 
 export const metadata: Metadata = {
   title: "Job",
@@ -49,7 +50,8 @@ export default async function EngineerJobPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const { user, scope } = await requireEngineer();
+  const session = await requireEngineer();
+  const { user, scope } = session;
   const { id } = await params;
 
   /*
@@ -97,6 +99,17 @@ export default async function EngineerJobPage({
     ? await Promise.all([listPendingDocuments(job.id), listJobCertificates(job.id)])
     : [[], []];
   const storage = storageStatus();
+
+  /*
+    Whether a record is already part-written, so the button can say "Continue
+    draft" rather than offering to start one over the top of it. The read is
+    authorised against the job the same way every other draft call is; a null
+    means it could not be read, and the button falls back to its plain wording
+    rather than guessing.
+  */
+  const draft = certificateStage
+    ? await draftSummaryFor(session, job.id)
+    : null;
 
   return (
     <>
@@ -199,6 +212,7 @@ export default async function EngineerJobPage({
             pending={pendingDocuments}
             released={releasedCertificates}
             storageRequirement={storage.ready ? null : storage.requirement}
+            draft={draft}
           />
         )}
 

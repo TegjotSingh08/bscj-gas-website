@@ -1,0 +1,28 @@
+-- Reverses 0010.
+--
+-- Drops the table the engineer's part-written gas safety records live in.
+--
+-- **What is lost, stated plainly.** Any record an engineer had saved but not
+-- yet submitted. Those are working state — the equivalent of a form half
+-- filled in — and they are the only thing in this table.
+--
+-- **What is not lost.** Nothing that has been submitted. A submitted record is
+-- a row in `document` and, once released, a row in `certificate`; neither is
+-- touched here, and the foreign key to `document` is `ON DELETE SET NULL` in
+-- that direction, so dropping this table cannot reach a stored PDF or an
+-- issued certificate.
+--
+-- **Before running it**, check whether anybody is mid-visit:
+--
+--   SELECT j.reference, d.updated_at
+--     FROM certificate_draft d JOIN job j ON j.id = d.job_id
+--    WHERE d.submitted_at IS NULL;
+--
+-- Any row that comes back is an engineer's unfinished record. Rolling back
+-- discards it and they would have to type it again.
+--
+-- The application tolerates the table's absence no better than any other
+-- missing table, so this is a rollback of the release, not something to run
+-- against a deployment still serving the connected workflow.
+
+DROP TABLE IF EXISTS "certificate_draft";

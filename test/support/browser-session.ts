@@ -33,6 +33,23 @@ import { BASE_URL, startServer, stopServer } from "./browser-server";
 /** Long enough for the application's own rule, and obviously not a secret. */
 const PASSWORD = "fixture-password-not-a-secret";
 
+/**
+ * The fixture job, on the fixture engineer's list.
+ *
+ * The connected certificate workflow is reachable only from an **assigned**
+ * job — assignment is the whole of an engineer's permission — so a session
+ * for driving it has to put the job on somebody's day.
+ */
+async function assignTheEngineer(
+  connection: Connection,
+  fixture: Fixture,
+): Promise<void> {
+  await connection.client.query(
+    `update job set assigned_engineer_id = $1 where id = $2`,
+    [fixture.engineerUserId, fixture.jobId],
+  );
+}
+
 async function giveEveryoneAPassword(connection: Connection): Promise<void> {
   const hash = await hashPassword(PASSWORD);
   await connection.client.query(
@@ -175,6 +192,7 @@ async function main() {
   console.log("Seeding fictional data…");
   const fixture = await seed(connection);
   await giveEveryoneAPassword(connection);
+  await assignTheEngineer(connection, fixture);
   await seedLandlords(connection, fixture);
   await seedRenewals(connection, fixture);
   await seedFailedMessage(connection, fixture);
@@ -195,6 +213,8 @@ async function main() {
       "",
       `  agency:   ${fixture.organisationId}`,
       `  job:      ${fixture.jobReference} (${fixture.jobId})`,
+      `            assigned to engineer@fixture.example.invalid`,
+      `  record:   ${BASE_URL}/engineer/jobs/${fixture.jobId}`,
       "",
     ].join("\n"),
   );

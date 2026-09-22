@@ -1632,3 +1632,82 @@ export const businessSettings = pgTable("business_setting", {
     onDelete: "set null",
   }),
 });
+
+/**
+ * A gas safety record an engineer is part-way through, held server-side.
+ *
+ * **Why the server and not the browser.** The generator has always kept its
+ * work in `localStorage`, which is right for a tool opened from a desktop and
+ * wrong for the connected workflow: a draft that lives in one browser does
+ * not survive signing out, does not follow an engineer who starts on a phone
+ * and finishes on a tablet, and leaves a property's details and a landlord's
+ * name sitting in a device's storage indefinitely. Holding the draft here
+ * makes it durable, scoped to the job, and removable when it is submitted.
+ *
+ * **One row per job.** A job has at most one record being drafted. A second
+ * record for the same property is a *correction*, and corrections go through
+ * the existing certificate versioning — not through a second draft.
+ *
+ * **`fields` is the generator's own shape** — the flat `{ elementId: value }`
+ * map its `saveDraft()` already produces — so nothing has to be translated in
+ * either direction. It is sanitised on the way in against a closed list of
+ * element ids, so a client cannot use this as arbitrary storage.
+ *
+ * **`revision` is what stops a stale tab winning.** Every save states the
+ * revision it was based on; a save based on an older one is refused rather
+ * than applied, because the alternative is a phone left open in a van
+ * silently replacing the work done afterwards on a tablet.
+ *
+ * **The submission triple is idempotency, not history.** `submissionKey` is
+ * minted by the client for one submission attempt; if the same key arrives
+ * again — a double tap, a retry after a timeout — the document already
+ * recorded against it is returned instead of a second one being created. The
+ * certificate's own history lives in `certificate`, which this never touches.
+ */
+export const certificateDrafts = pgTable(
+  "certificate_draft",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /*
+      Cascade, unlike most of the schema's `restrict`. A draft is working
+      state, not a record: if a job could ever be deleted, an unfinished draft
+      must not be the thing that prevents it. Nothing of evidential value is
+      lost, because a submitted record is a `document` and a `certificate`.
+    */
+    jobId: uuid("job_id")
+      .notNull()
+      .references(() => jobs.id, { onDelete: "cascade" }),
+    /** Carried directly so an access check never has to join to find it. */
+    agentOrganisationId: uuid("agent_organisation_id").references(
+      () => agentOrganisations.id,
+      { onDelete: "restrict" },
+    ),
+    /** The generator's flat field map, allow-listed on the way in. */
+    fields: jsonb("fields").notNull(),
+    /** Incremented on every accepted save. See the note above. */
+    revision: integer("revision").notNull().default(1),
+    updatedBy: uuid("updated_by").references(() => appUsers.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+
+    /** The client's key for one submission attempt. Null until one is made. */
+    submissionKey: text("submission_key"),
+    /** The document that attempt produced, so a replay returns the same one. */
+    submittedDocumentId: uuid("submitted_document_id").references(
+      () => documents.id,
+      { onDelete: "set null" },
+    ),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }),
+  },
+  (table) => [
+    /* One draft per job, enforced by the database rather than by a query. */
+    uniqueIndex("certificate_draft_job_key").on(table.jobId),
+    index("certificate_draft_organisation_idx").on(table.agentOrganisationId),
+  ],
+);

@@ -108,18 +108,26 @@ describe("the real migration chain is applied", () => {
     const { rows } = await a.client.query<{ n: string }>(
       "select count(*)::text as n from drizzle.__drizzle_migrations",
     );
-    // 0000 through 0009.
-    assert.equal(Number(rows[0].n), 10);
+    // 0000 through 0010.
+    assert.equal(Number(rows[0].n), 11);
   });
 
-  test("the tables and enums the pilot has are here", async () => {
+  test("the tables and enums a fully migrated deployment has are here", async () => {
     const tables = await a.client.query<{ n: string }>(
       "select count(*)::text as n from pg_tables where schemaname = 'public'",
     );
     const enums = await a.client.query<{ n: string }>(
       "select count(*)::text as n from pg_type where typtype = 'e'",
     );
-    assert.equal(Number(tables.rows[0].n), 24);
+    /*
+      25 tables, not 24. `0010` adds `certificate_draft` — the engineer's
+      server-held gas safety record — and adds no enum.
+
+      **The pilot is at 24 until `0010` is applied**, which is the deployment
+      order in the runbook: migrate, then push. This asserts the chain as it
+      stands on disk, which is what a deployment ends up with.
+    */
+    assert.equal(Number(tables.rows[0].n), 25);
     assert.equal(Number(enums.rows[0].n), 22);
   });
 
