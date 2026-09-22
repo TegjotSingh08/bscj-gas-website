@@ -3,42 +3,56 @@
 **Nothing in here has been pushed, deployed, migrated or sent.** Every file is
 fictional. The addresses use `.example.invalid`, which cannot receive mail.
 
+**Correcting an earlier version of this pack.** A previous pass here said
+migration `0009` remained outstanding on the pilot and that nine migrations
+were applied. That was wrong on both counts. **The owner applied `0009` to the
+pilot, verified 10 of 10 migrations applied, and deployed `da189bb`** — this is
+the owner's own report, not something checked from here, and it is the correct
+starting point for everything below.
+
+Two migrations, `0010` and `0011`, were added on this branch **after**
+`da189bb` and have never been applied anywhere, including the pilot. Every
+"applied" or "on disk" count in this pack is now given against that baseline:
+**twelve on disk, ten applied, `0010` and `0011` outstanding.** Where a claim
+below is the owner's own observation rather than something this session
+checked, it says so.
+
 ## Do these in this order
 
 The previous version of this pack listed the tests first and the deployment
 last, which asked you to test fixes that were not on the pilot yet. Corrected:
 
-1. **Review the release.** `git log d4d3c82..HEAD` and the diff. Nothing is
+1. **Review the release.** `git log da189bb..HEAD` and the diff — `da189bb` is
+   what the owner has already deployed and confirmed. Nothing since has been
    pushed, so this is the last point at which rejecting it costs nothing.
-2. **Check the migration pre-condition** — §4.1. Read-only, and it is the one
-   check that can stop `0009` part-way.
-3. **Confirm the target and migrate** — §4.2 to §4.4.
-4. **Push, which deploys** — §4.5.
-5. **Then** work through §1 to §3. Every expectation in them describes the
+2. **Confirm the target and migrate `0010` and `0011`** — §4.1 to §4.3. Neither
+   has a precondition to check first; `0009`'s was already run by the owner.
+3. **Push, which deploys** — §4.4.
+4. **Then** work through §1 to §3. Every expectation in them describes the
    behaviour *after* this release; run them before the deploy and they will
    describe the old behaviour and look like failures.
 
-§5 is the stop conditions and rollback limits. Read it before step 3.
+§5 is the stop conditions and rollback limits. Read it before step 2.
 
-### The short version, in six steps
+### The short version, in five steps
 
 Each one links to the section that says how. Nothing here has been done for
 you: every step below touches something live, and none of them was performed.
 
-> **Since this pack was written**, the engineer's certificate workflow has
-> been connected — one button on the job instead of a download, an import and
-> an upload. It adds **migration `0010`**, which is additive and applies in the
-> same migrate-then-push order as `0009`. See §2b and
-> `docs/ENGINEER_CERTIFICATE_WORKFLOW.md`.
+> **Since `da189bb` was deployed**, two more migrations were added and the
+> connected engineer certificate workflow was extended: `0010` created
+> `certificate_draft`; `0011` added the submission-lease column that lets an
+> interrupted submission recover instead of leaving an engineer permanently
+> unable to resend. See §2b and `docs/ENGINEER_CERTIFICATE_WORKFLOW.md`. Both
+> apply in the same migrate-then-push order `0009` always did.
 
 | # | Step | Where |
 | --- | --- | --- |
-| 1 | **Confirm the revision and the target.** The release is the head of `v2-compliance-platform`; the target is the **pilot** project, not the live one. | this section, and §4.2 |
-| 2 | **Run the duplicate-active-cycle precheck.** Read-only. It must return no rows, or `0009` will stop part-way. | §4.1 |
-| 3 | **Confirm 11 migrations on disk and 9 applied**, with `0009` and `0010` the only ones not applied and nothing differing from disk. | §4.2 |
-| 4 | **Apply `0009` and `0010`, then verify** — 11 of 11, **25** tables and 22 enum types. `0010` adds `certificate_draft`. | §4.3, §4.4 |
-| 5 | **Push the branch.** The pilot builds it, so the push is the deploy. Then confirm the cron job is still `*/15 * * * *`. | §4.5 |
-| 6 | **Work the supervised acceptance sequence** — the CSV scenarios, the certificate through **Blob**, and the delivery evidence only a real provider can give. | §1, §2, §6 |
+| 1 | **Confirm the revision and the target.** The release is the head of `v2-compliance-platform`; the target is the **pilot** project, not the live one. | this section, and §4.1 |
+| 2 | **Confirm 12 migrations on disk and 10 applied** — the owner's own `0009` precheck and apply are already done; only `0010` and `0011` remain, and nothing should differ from disk. | §4.1 |
+| 3 | **Apply `0010` and `0011`, then verify** — 12 of 12, **25** tables and 22 enum types. Neither has a precondition to check first: `0010` adds one table, `0011` adds one nullable column to it. | §4.2, §4.3 |
+| 4 | **Push the branch.** The pilot builds it, so the push is the deploy. Then confirm the cron job is still `*/15 * * * *`. | §4.4 |
+| 5 | **Work the supervised acceptance sequence** — the CSV scenarios, the certificate through **Blob**, and the delivery evidence only a real provider can give. | §1, §2, §6 |
 
 **Do not re-run `admin:create`. Do not regenerate `CRON_SECRET`. Do not change
 the cron interval.**
@@ -115,7 +129,12 @@ These are the owner's observations, not mine, and they are **successes**:
 Resend really delivered, and Google Calendar really received the appointment.
 Nothing in this pack should be read as saying email or the calendar is
 unproven. What they do not cover is **this release** — they were taken against
-the previous deployment.
+an earlier deployment.
+
+**Also owner-reported, not checked here:** migration `0009` applied to the
+pilot, `10` of `10` migrations confirmed applied, and `da189bb` deployed
+afterwards. That is the baseline §4 now migrates forward from — see the
+correction at the top of this pack.
 
 ### Without evidence of their own
 
@@ -128,7 +147,7 @@ delivery itself is proven above; **no real mail client has rendered them**; and
 
 ## 1. Fictional CSVs, with the exact settings and expected results
 
-> **Run these after deploying** (step 5 above). They describe the behaviour this
+> **Run these after deploying** (step 3 above). They describe the behaviour this
 > release introduces.
 
 In `docs/acceptance/csv/`. Upload each at **Portfolio → Import** in the agency
@@ -359,67 +378,70 @@ in a browser, light and dark, at phone width. No real mail client has seen them.
 **Do this before §1 to §3.** Exactly as before, and for the same reason:
 **migrate first, then push.**
 
-Two migrations are outstanding, and both are additive.
+**`0009_one_active_cycle_per_service` is already applied.** The owner ran its
+precheck, applied it to the pilot, and confirmed 10 of 10 migrations applied
+before deploying `da189bb` — that is the owner's own report and is not
+re-verified here. There is nothing to do for `0009` below; it is history, kept
+only so the two migrations that follow it are understood against the right
+baseline.
 
-**`0009_one_active_cycle_per_service`** is a partial unique index — enforcing
-only, no column added or dropped, no data rewritten. It is the one with a
-precondition; §4.1 is that check.
+**Two migrations are outstanding now, both additive, and neither has a
+precondition to check first.**
 
 **`0010_engineer_certificate_drafts`** adds one table, `certificate_draft`, for
-the engineer's part-written gas safety records. It alters nothing that exists,
-has no precondition, and cannot conflict with any data. It must be applied
-**before** the deploy, because the new code reads that table on every draft
-save; the currently-deployed code ignores it entirely, so applying it early is
-harmless. Rollback is `drizzle/down/0010_engineer_certificate_drafts.down.sql`,
-which discards unsubmitted drafts only and touches nothing issued.
+the engineer's part-written gas safety records. It alters nothing that exists
+and cannot conflict with any data. It must be applied **before** the deploy,
+because the new code reads that table on every draft save; the
+currently-deployed code ignores it entirely, so applying it early is harmless.
+Rollback is `drizzle/down/0010_engineer_certificate_drafts.down.sql`, which
+discards unsubmitted drafts only and touches nothing issued.
 
-### 4.1 Check nothing already violates it
+**`0011_certificate_submission_lease`** adds one nullable column,
+`submission_started_at`, to the table `0010` created. It is what lets an
+interrupted certificate submission recover on retry instead of telling the
+engineer for ever that a submission is already in progress — see
+`docs/OVERNIGHT_PROGRESS.md`'s "Let an interrupted certificate submission be
+finished". Nothing is defaulted on existing rows and no row is rewritten.
+Rollback is `drizzle/down/0011_certificate_submission_lease.down.sql`, which
+drops the column; a submission interrupted after that point falls back to the
+administrator's manual release on the reconciliation page rather than
+recovering itself.
 
-Run this against the pilot **before** applying. It must return **no rows**:
-
-```sql
-SELECT property_id, product_id, count(*)
-FROM compliance_cycle
-WHERE status = 'active'
-GROUP BY property_id, product_id
-HAVING count(*) > 1;
-```
-
-If it returns any, decide which position is correct and supersede the others by
-hand. Do not delete them, and do not let the migration choose.
-
-### 4.2 Confirm the target, read-only
+### 4.1 Confirm the target, read-only
 
 ```bash
 BSCJ_PILOT=1 npm --prefix /Users/tegjot/Projects/bscj-gas-website run db:status
 ```
 
 Expect `Mode: pilot`, the confirmed endpoint **matches**, `Migrations on disk :
-11`, `Migrations applied : 9`, with `0009_one_active_cycle_per_service` and
-`0010_engineer_certificate_drafts` the only `NOT APPLIED` tags and no
-`DIFFERS FROM DISK` anywhere. **If `Target` is not the pilot, stop.**
+12`, `Migrations applied : 10`, with `0010_engineer_certificate_drafts` and
+`0011_certificate_submission_lease` the only `NOT APPLIED` tags and no
+`DIFFERS FROM DISK` anywhere. **If `Migrations applied` is not 10, or `0009` is
+not among the applied ones, stop and reconcile against the owner's own record
+before going further — the baseline this section assumes has not held.** **If
+`Target` is not the pilot, stop.**
 
-### 4.3 Apply
+### 4.2 Apply
 
 ```bash
 BSCJ_PILOT=1 npm --prefix /Users/tegjot/Projects/bscj-gas-website run db:migrate
 ```
 
-Silent on success. Read nothing into the silence. This applies **both**
-outstanding migrations, in order: `0009`'s partial unique index, then `0010`'s
-new `certificate_draft` table.
+Silent on success. Read nothing into the silence. This applies both
+outstanding migrations, in order: `0010`'s new `certificate_draft` table, then
+`0011`'s column on it.
 
-### 4.4 Verify
+### 4.3 Verify
 
 ```bash
 BSCJ_PILOT=1 npm --prefix /Users/tegjot/Projects/bscj-gas-website run db:status
 ```
 
-Expect `11` / `11`, all applied, **25 tables and 22 enums**. The extra table is
-`certificate_draft`, from `0010`; `0009` added an index, which is neither a
-table nor an enum.
+Expect `12` / `12`, all applied, **25 tables and 22 enums** — unchanged from
+before this deploy on both counts, because `0010` is the table that already
+brought the count to 25 and `0011` only adds a column to it.
 
-### 4.5 Then push
+### 4.4 Then push
 
 ```bash
 git push origin v2-compliance-platform
@@ -437,7 +459,10 @@ confirm *Settings → Cron Jobs* still lists `/api/cron/outbox` at `*/15 * * * *
 ### Stop immediately if
 
 - `db:status` shows a target that is not the pilot, or `DIFFERS FROM DISK`.
-- The pre-check in §4.1 returns rows.
+- `Migrations applied` is not 10, or `0009` is not among them — the baseline
+  §4 assumes (the owner's own `0009` apply, ahead of this deploy) has not
+  held, and nothing past that point in §4 should be run until it is understood
+  why.
 - After deploying, an import preview writes anything before Confirm is pressed.
 - A tenant, landlord or agency who is not you receives any message.
 - A released certificate moves a renewal **backwards** on a property whose
@@ -450,6 +475,20 @@ restores it, and the older code works against the migrated schema.
 
 **0009 rolls back freely too** — dropping an index removes a guarantee and
 touches no data: `drizzle/down/0009_one_active_cycle_per_service.down.sql`.
+
+**0010 rolls back with a condition.** Dropping `certificate_draft` discards any
+engineer's **unsubmitted** work in progress — a part-written record nobody has
+sent yet. It touches nothing submitted or released: those are rows in
+`document` and `certificate`, untouched by dropping this table. Check first —
+the query is in `drizzle/down/0010_engineer_certificate_drafts.down.sql`'s own
+header — and only roll it back once nobody has an open draft, or accept that
+whoever does loses it.
+
+**0011 rolls back freely.** Dropping `submission_started_at` loses nothing —
+it only records when an in-progress claim was taken. What is lost is the
+*ability* to recover an interrupted submission automatically; after the
+rollback, an engineer stuck on a claim needs an administrator to release it
+from the reconciliation page instead. `drizzle/down/0011_certificate_submission_lease.down.sql`.
 
 **0008 does not.** Restoring `NOT NULL` on `customer.email` and `customer.phone`
 fails while any landlord has neither, which is the state the migration exists to
@@ -506,8 +545,10 @@ the previous deployment, before the changes below.
 
 **Still without evidence of their own:**
 
-- **The pilot's own database.** The suites run against a throwaway server and
-  must not touch the pilot. Migration `0009` has been applied only there.
+- **The pilot's own database, for `0010` and `0011`.** The suites run against a
+  throwaway server and must not touch the pilot. `0009` is owner-confirmed
+  applied there; `0010` and `0011` have only ever been applied to disposable
+  test databases in this session.
 - **The Blob document driver.** Certificate upload, review, release and
   recovery are now **browser-verified** (§0) — but against the **local**
   document store. The pilot uses Vercel Blob, which is a live service and was

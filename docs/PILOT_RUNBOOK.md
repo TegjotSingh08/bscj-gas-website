@@ -715,12 +715,19 @@ to close it.
 
 ## 2E. Releasing the current commit — migration before deploy
 
-> **0008 is applied — owner-observed, 21 September 2026.** `db:status` reported
-> 9 of 9, 24 tables, 22 enums, and `d4d3c82` was pushed and deployed. The
-> reasoning below is kept because it is the same reasoning for **0009**, which
-> is now the outstanding one. Substitute `0009_one_active_cycle_per_service`
-> wherever `0008` is named, expect `10` on disk and `9` applied, and read
-> §2E.5 first — 0009 has a pre-condition that 0008 did not.
+> **0009 is applied — owner-observed.** `db:status` reported 10 of 10
+> migrations applied, 24 tables, 22 enums, and `da189bb` was pushed and
+> deployed after it. This is the owner's own report, not something
+> independently checked from here.
+>
+> **Corrects an earlier version of this note**, which said 0009 remained
+> outstanding and gave `9` as the applied count. Both were wrong.
+>
+> The reasoning below (§2E.1–§2E.5) describes how 0008 and 0009 were released
+> and is kept for the pattern — substitute names and it is exactly the
+> reasoning for what is outstanding **now**: `0010_engineer_certificate_drafts`
+> and `0011_certificate_submission_lease`, covered in §2E.7. Neither has a
+> pre-condition to check first, unlike 0009.
 
 The pilot is running an **earlier** commit. Commits land locally and go out as
 **one release**. Nothing here is optional ordering.
@@ -819,6 +826,10 @@ it against an existing address resets the password, increments
 
 ### 2E.5 Migration 0009 has a pre-condition — check it first
 
+**Owner-observed complete.** This section describes the check that was
+already run and the migration that is already applied. Kept for the pattern
+it establishes, which §2E.7 follows for what is actually outstanding now.
+
 `0009_one_active_cycle_per_service` creates a **partial unique index**: one
 active `compliance_cycle` per property, per service. Additive and enforcing
 only — no column added or dropped, no data rewritten.
@@ -878,6 +889,54 @@ never delete a business record to make a rollback succeed. A fiction in a
 `customer` row ends up on an invoice addressed to a landlord, and a deleted
 landlord takes their properties' history with them. If neither (1) nor (2) is
 acceptable, the answer is to stop and decide, not to unblock the SQL.
+
+### 2E.7 Migrations 0010 and 0011 — outstanding now, neither with a pre-condition
+
+Two migrations were added on this branch **after** `da189bb` was deployed, and
+neither has been applied anywhere, including the pilot.
+
+**`0010_engineer_certificate_drafts`** adds one table, `certificate_draft`, so
+the engineer's connected gas safety record has somewhere to hold a draft
+server-side rather than in the browser. It alters nothing that exists and has
+no pre-condition — there is no equivalent of §2E.5's check to run first. It
+must be applied before the deploy, because the connected certificate workflow
+reads this table on every draft save and the currently-deployed code does not
+know it exists.
+
+**`0011_certificate_submission_lease`** adds one nullable column,
+`submission_started_at`, to the table `0010` created. It is what lets an
+interrupted certificate submission recover on the engineer's own retry rather
+than leaving them told for ever that a submission is already in progress. No
+default is written to existing rows and nothing is rewritten.
+
+```bash
+BSCJ_PILOT=1 npm --prefix /Users/tegjot/Projects/bscj-gas-website run db:status
+```
+
+Expect `Migrations on disk : 12`, `Migrations applied : 10`, with `0010` and
+`0011` the only `NOT APPLIED` tags. **If the applied count is not 10, or 0009
+is not among the applied ones, stop** — the baseline this section assumes has
+not held, and that needs reconciling against the owner's own record before
+anything else here is run.
+
+```bash
+BSCJ_PILOT=1 npm --prefix /Users/tegjot/Projects/bscj-gas-website run db:migrate
+```
+
+Then verify `12` / `12`, all applied, **still 24 tables and 22 enums** before
+this deploy, **25 tables** after — `certificate_draft` is the one new table;
+`0011` adds a column to it, not a table.
+
+**Rolling 0010 back has a condition.** It discards any engineer's
+**unsubmitted** draft — nothing submitted or released, which lives in
+`document` and `certificate` and is untouched. Check for an open draft first;
+the query is in `drizzle/down/0010_engineer_certificate_drafts.down.sql`'s own
+header.
+
+**Rolling 0011 back is free.** It only records when a submission claim was
+taken; dropping it loses the automatic-recovery behaviour, not any data — an
+engineer stuck on a claim after the rollback needs an administrator to release
+it from the reconciliation page instead.
 
 ---
 

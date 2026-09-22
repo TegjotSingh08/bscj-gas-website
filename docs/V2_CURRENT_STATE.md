@@ -3,7 +3,8 @@
 **Read this first.** It exists so a new session does not have to re-audit the
 repository. Update it at the end of every piece of work.
 
-Last updated: 22 September 2026 (release-readiness correction pass; migration 0009 outstanding).
+Last updated: 22 September 2026 (agency-onboarding readiness pass; `0009`
+owner-confirmed applied, `0010` and `0011` outstanding).
 
 ---
 
@@ -1109,14 +1110,19 @@ agency pricing, no compliance guarantee, no customer numbers or reviews, no
 claim of automatic reminders. `noindex`, absent from the sitemap, unlinked.
 Needs the owner's sign-off.
 
-### Migration 0009 — prepared, applied nowhere
+### Migration 0009 — applied, owner-confirmed
 
 A partial unique index making one active compliance position per property per
 service impossible in the database rather than only in the application. Two
 requests arriving together can each read "nothing active" and each insert.
-Additive and enforcing only; no column added or dropped, no data rewritten. The
-pre-check query is in its header and in the acceptance pack. Rolls back freely —
-dropping an index touches no data.
+Additive and enforcing only; no column added or dropped, no data rewritten.
+Rolls back freely — dropping an index touches no data.
+
+**It is applied.** The owner ran its pre-check, applied it to the pilot,
+confirmed `10` of `10` migrations applied, and deployed `da189bb`. That is the
+owner's own report and is not independently verified from here. The heading on
+this section previously read "prepared, applied nowhere", which was true when
+it was written and is not true now.
 
 ### What this pass did **not** verify
 
@@ -1218,11 +1224,22 @@ full list, not the pilot subset.
     ever sent: no tenant invitation, no certificate, no invoice, and **no
     account invitation or password reset**. An agency invited with no schedule
     running simply never hears from us.
-16. **Migration 0009 must be applied** to any database the current commit is
-    deployed against. `0000`–`0008` are applied to the pilot (owner-observed,
-    9/9, 24 tables, 22 enums); **`0009` is applied nowhere.** Order matters and
-    is documented in `PILOT_RUNBOOK.md` §2E and `docs/acceptance/README.md` §4:
-    check the pre-condition, migrate, verify, *then* push.
+16. **Migrations `0010` and `0011` must be applied** to any database the
+    current commit is deployed against.
+
+    **Owner-reported baseline, not checked from here:** `0000`–`0009` are
+    applied to the pilot — the owner confirmed `10` of `10` applied and then
+    deployed `da189bb`. An earlier version of this entry said nine were applied
+    and `0009` was outstanding. Both were wrong.
+
+    **Outstanding now:** `0010_engineer_certificate_drafts` (one new table,
+    `certificate_draft`) and `0011_certificate_submission_lease` (one nullable
+    column on it). Neither has a pre-condition to check first, unlike `0009`.
+    Both have only ever been applied to disposable test databases here.
+
+    Expect `12` on disk and `10` applied before; `12` / `12` and **25 tables,
+    22 enums** after. Order matters and is documented in `PILOT_RUNBOOK.md`
+    §2E.7 and `docs/acceptance/README.md` §4: migrate, verify, *then* push.
 
 ### Known issues
 
@@ -1282,6 +1299,89 @@ is deployed.
 `?job=<uuid>` the generator behaves exactly as it always has, which is what
 the desktop user working on a job that is not in the application relies on.
 The download bridge and manual upload both remain, as secondary routes.
+
+---
+
+## Agency-onboarding readiness pass — 22 September 2026
+
+Three bounded priorities, ahead of a supervised first agency. The connected
+engineer certificate workflow was reviewed as an independent reviewer would,
+the business journey was proved end to end against a real database, and the
+single highest-leverage operational gap was closed.
+
+### Certificate submission integrity — defects found and fixed
+
+**A submission interrupted part-way left the engineer permanently stuck.** The
+claim on a job is taken *before* the PDF is stored, and the claim test was
+`IS DISTINCT FROM`, so the engineer's own retry — the same key, because it is
+the same attempt — matched nothing, found no document to replay, and was told
+the record was already being sent. For ever, on any device. Reproduced as the
+row state a process death actually leaves.
+
+Closed two ways, needing one nullable column (`0011`):
+
+- The claim now records **when** it was taken. A claim younger than the lease
+  is a request probably still running and is waited for; an older one with no
+  document is abandoned, and the attempt takes its own claim back.
+- The storage key is now **derived from the attempt** rather than random, so a
+  retry writes the same object and the unique index on `blob_key` turns its
+  second insert into a lookup of the first. That is exact, where a timestamp
+  window would have been a guess capable of adopting an unrelated upload.
+
+Where neither applies — an engineer who has finished for the day — the
+condition is visible on **`/admin/reconcile`** with an action that clears the
+claim and nothing else. No document deleted, no certificate touched, no renewal
+moved, nobody emailed; a claim that did produce a document is refused, because
+it is done rather than stalled.
+
+**Two smaller corrections from the same trace.** The PDF and the draft are now
+explicitly the same state: the client says which revision it drew and the
+server refuses if the draft has moved since. What the server still does *not*
+do is read the document — it checks the bytes are a PDF and that the stored
+draft is complete, and nothing claims more than that. And saving after sending
+clears the submitted marker, so a job stops saying "submitted and waiting" over
+work the office has not seen.
+
+### The business journey, proved against PostgreSQL
+
+`test/integration/onboarding.test.ts` drives `previewImportAction` and
+`confirmImportAction` for real — only the session is faked; the profile store,
+lookups, planner, envelope, `commitImport` and every mutation are the real ones
+against real constraints. Two agencies throughout. It covers both
+landlord-contact policies, an unanswered name-match correctly holding its row,
+reimport reporting matches rather than duplicating, a plan sealed for one
+agency refused by another, and a profile changed between preview and confirm
+invalidating the review.
+
+`journey.test.ts` gained the connected certificate path — `saveCertificateDraft`
+then `submitCertificateDraft`, not a plain upload — reaching the identical
+review and release, and a test that an agency sees no certificate and no
+renewal date before release and both immediately after, while a rival agency
+sees neither.
+
+This sits **beside** `walkthrough.test.ts`, which fakes the database at its
+boundary and says so in its own header. Neither replaces the other.
+
+### Certificates awaiting review are now findable
+
+`countPendingReview()` already existed, commented "for the administrator's
+dashboard", and was called from nowhere. A submitted certificate was visible
+only by opening the one job it belonged to — which does not scale past a
+handful, and a launch across several agencies reaches a handful in a morning.
+
+The dashboard's *Needs attention* section now calls it, and a new job-list
+view, `certificate_review`, makes the count a clickable list. Verified in a
+browser at desktop and phone width against a disposable database.
+
+### Gates
+
+| Command | Result |
+| --- | --- |
+| `npm run test:integration` | **229 pass, 68 suites, 0 fail** |
+| `npm test` | **2270 pass, 458 suites, 0 fail** |
+| `npm run typecheck` | clean |
+| `npm run lint` | 1 pre-existing warning (`invitationRow`) |
+| `npm run build` | clean |
 
 ---
 

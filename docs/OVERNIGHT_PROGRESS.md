@@ -298,6 +298,63 @@ runs went to the local store.
 
 ---
 
+## Agency-onboarding readiness pass — 22 September 2026
+
+**Complete.** Three bounded priorities. HEAD at the end of the pass is recorded
+in "Commits" below; the working tree is clean.
+
+### The correction that shaped this pass
+
+The previous handover said nine migrations were applied to the pilot and that
+`0009` remained outstanding. **Both were wrong.** The owner applied `0009`,
+confirmed `10` of `10` applied, and deployed `da189bb`. Every count in the
+runbook and the acceptance pack has been corrected against that baseline, and
+owner-reported facts are now labelled as owner-reported rather than mixed in
+with what was checked here.
+
+**Outstanding now: `0010` and `0011`**, neither applied anywhere but a
+disposable test database, neither with a pre-condition.
+
+### Priority 1 — certificate submission integrity
+
+| Defect | State |
+| --- | --- |
+| A submission interrupted between claiming and storing left the engineer told for ever that a submission was in progress | **fixed** — lease on the claim, so an abandoned one is recoverable by the engineer's own retry |
+| A submission interrupted between storing and linking would have stored a second document | **fixed** — the storage key is derived from the attempt, so the unique index returns the first |
+| A PDF drawn before an edit could be filed against the draft made after it | **fixed** — the client states the revision it drew; the server refuses a mismatch |
+| A job kept saying "submitted and waiting" after the engineer edited the record again | **fixed** — saving clears the submitted marker |
+| No way out for a stalled claim without SQL | **fixed** — visible on `/admin/reconcile` with a release action that clears the claim and nothing else |
+
+Each was reproduced first, as the row state a process death actually leaves,
+before anything was changed.
+
+### Priority 2 — the journey, against a real database
+
+`onboarding.test.ts` is new: the import actions driven for real against
+PostgreSQL, two agencies, both contact policies, identity choices, reimport,
+and the isolation boundaries. `journey.test.ts` gained the connected
+certificate path and agency-side visibility of a released record.
+
+### Priority 3 — the operational gap
+
+`countPendingReview()` existed and was called from nowhere. It is now on the
+dashboard, with a `certificate_review` job-list view behind it, so a submitted
+certificate is findable without opening every job in turn.
+
+### Verified in a browser, disposable database
+
+Dashboard count and its filtered list, at desktop and phone width; the stalled
+submission seeded, listed, released through the real button, and gone from the
+page afterwards.
+
+### Still the owner's
+
+Apply `0010` and `0011`, then push. The **Blob** driver remains the one part of
+the certificate path with no evidence — every document in these runs went to
+the local store.
+
+---
+
 ## Outstanding owner decisions
 
 These block **real agency use** and cannot be invented:
