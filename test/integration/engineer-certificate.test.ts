@@ -1234,3 +1234,142 @@ describe("an administrator can clear a submission nobody can finish", () => {
     assert.equal(refused.ok, false);
   });
 });
+
+describe("a submitted certificate is findable, not just visible on its own job", () => {
+  /*
+    `countPendingReview` and the `certificate_review` job-list view existed
+    only as dead code and an unwired filter until this pass — a submitted or
+    uploaded certificate was previously visible **only** by opening each job
+    in turn, which does not scale past a handful of jobs, and a launch with
+    several agencies reaches a handful in a morning.
+  */
+  test("counts it across the whole board, and drops by one once released", async () => {
+    /*
+      The fixture already seeds two pending certificate documents on this
+      same job as prior state, so the count before submitting is 2, not 0 —
+      asserted explicitly, so the rest of the test is honest about what it is
+      actually proving: one more submission raises it by one, and releasing
+      that one submission lowers it by one, not to zero.
+    */
+    const { countPendingReview } = await import(
+      "../../src/lib/documents/certificates"
+    );
+    const before = await countPendingReview();
+    assert.equal(before, 2, "the fixture's own two pending documents");
+
+    await saveComplete();
+    const submitted = await submitCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+      bytes: SPECIMEN,
+      filename: "TEST-NOT-VALID-certificate.pdf",
+      submissionKey: "for-dashboard",
+    });
+    assert.ok(submitted.ok);
+    assert.equal(await countPendingReview(), before + 1);
+
+    const { releaseCertificate } = await import(
+      "../../src/lib/documents/certificates"
+    );
+    const released = await releaseCertificate({
+      session: admin(),
+      jobId: fixture.jobId,
+      documentId: submitted.documentId,
+      details: {
+        certificateNumber: "TEST-NOT-VALID-0001",
+        inspectionDate: "2026-09-20",
+        nextDueDate: "2027-09-19",
+        correctionReason: "",
+      },
+      today: "2026-09-22",
+    });
+    assert.equal(released.ok, true);
+
+    assert.equal(
+      await countPendingReview(),
+      before,
+      "back to just the two that were never this submission",
+    );
+  });
+
+  test("the job-list view finds it, and drops it after release", async () => {
+    /*
+      A fresh job, not `fixture.jobId` — that one already carries two pending
+      documents as prior state, so releasing one submission against it would
+      leave the job in the view anyway, for the entirely correct reason that
+      the other two are still unreviewed. Isolating the one submission this
+      test is about needs a job with nothing else pending on it.
+    */
+    const { rows: created } = await conn.client.query<{ id: string }>(
+      `insert into job
+         (reference, idempotency_key, agent_organisation_id, customer_id,
+          billing_customer_id, property_id, product_id, source,
+          scheduling_method, lifecycle_status, appliance_count,
+          price_total_pence, customer_snapshot, property_snapshot,
+          price_snapshot, assigned_engineer_id)
+       values ('BSCJ-CERTLIST', 'BSCJ-CERTLIST', $1, $2, $2, $3, 'cp12', 'portal',
+               'tenant_selected', 'in_progress', 1, 4500,
+               '{"name":"Ada Fixture"}'::jsonb,
+               '{"postcode":"WV1 1AA"}'::jsonb,
+               '{"totalPence":4500}'::jsonb, $4)
+       returning id`,
+      [
+        fixture.organisationId,
+        fixture.landlordId,
+        fixture.propertyId,
+        fixture.engineerUserId,
+      ],
+    );
+    const jobId = created[0].id;
+
+    const saved = await saveCertificateDraft({
+      session: engineer(),
+      jobId,
+      fields: completeFields(),
+      expectedRevision: 0,
+    });
+    assert.ok(saved.ok);
+    const submitted = await submitCertificateDraft({
+      session: engineer(),
+      jobId,
+      bytes: SPECIMEN,
+      filename: "TEST-NOT-VALID-certificate.pdf",
+      submissionKey: "for-list",
+    });
+    assert.ok(submitted.ok);
+
+    const { listJobs } = await import("../../src/lib/jobs/queries");
+    const { DEFAULT_FILTERS } = await import("../../src/lib/jobs/filters");
+    const before = await listJobs(
+      { kind: "all" },
+      { ...DEFAULT_FILTERS, view: "certificate_review" },
+    );
+    assert.ok(before?.rows.some((row) => row.id === jobId));
+
+    const { releaseCertificate } = await import(
+      "../../src/lib/documents/certificates"
+    );
+    await releaseCertificate({
+      session: admin(),
+      jobId,
+      documentId: submitted.documentId,
+      details: {
+        certificateNumber: "TEST-NOT-VALID-0002",
+        inspectionDate: "2026-09-20",
+        nextDueDate: "2027-09-19",
+        correctionReason: "",
+      },
+      today: "2026-09-22",
+    });
+
+    const after = await listJobs(
+      { kind: "all" },
+      { ...DEFAULT_FILTERS, view: "certificate_review" },
+    );
+    assert.equal(
+      after?.rows.some((row) => row.id === jobId),
+      false,
+      "a released certificate is no longer awaiting review",
+    );
+  });
+});

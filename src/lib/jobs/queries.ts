@@ -230,6 +230,15 @@ function filterConditions(
     case "attention":
       conditions.push(attentionCondition(today));
       break;
+    case "certificate_review":
+      conditions.push(sql`EXISTS (
+        SELECT 1 FROM "document"
+        LEFT JOIN "certificate" ON "certificate"."document_id" = "document"."id"
+        WHERE "document"."job_id" = ${jobs.id}
+          AND "document"."kind" = 'certificate'
+          AND "certificate"."id" IS NULL
+      )`);
+      break;
     case "closed":
       conditions.push(inArray(jobs.lifecycleStatus, [...TERMINAL_STATUSES]));
       break;

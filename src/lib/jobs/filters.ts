@@ -51,6 +51,16 @@ export const JOB_VIEWS = [
   "unassigned",
   /** Something is wrong or waiting on a person. See `attention.ts`. */
   "attention",
+  /**
+   * A certificate has been submitted and nobody has opened it yet.
+   *
+   * Separate from `attention`: an unreviewed certificate is not a failure or
+   * a deadline at risk, it is ordinary work waiting for a person — but it was
+   * previously visible **only** by opening each job in turn, which does not
+   * scale past a handful of jobs, and a launch with several agencies reaches
+   * a handful in a morning.
+   */
+  "certificate_review",
   /** Finished, either way. */
   "closed",
 ] as const;

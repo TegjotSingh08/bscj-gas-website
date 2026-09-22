@@ -140,6 +140,7 @@ const VIEW_LABELS: Readonly<Record<JobView, string>> = {
   upcoming: "Upcoming",
   unassigned: "Nobody allocated",
   attention: "Needs attention",
+  certificate_review: "Certificate to review",
   closed: "Closed",
 };
 

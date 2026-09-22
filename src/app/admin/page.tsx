@@ -5,6 +5,7 @@ import { requireAdmin } from "@/lib/auth/session";
 import { isDatabaseConfigured } from "@/lib/db/client";
 import { jobTotals, type JobTotals } from "@/lib/jobs/queries";
 import { readOutboxSummary } from "@/lib/notifications/outbox";
+import { countPendingReview } from "@/lib/documents/certificates";
 import { STATUS_LABELS } from "@/components/jobs/JobLabels";
 import { JOB_LIFECYCLE_STATUSES } from "@/lib/jobs/lifecycle";
 import { AdminNav } from "./AdminNav";
@@ -35,9 +36,10 @@ export const dynamic = "force-dynamic";
 export default async function AdminDashboardPage() {
   const { user, scope } = await requireAdmin();
 
-  const [totals, outbox] = await Promise.all([
+  const [totals, outbox, pendingCertificates] = await Promise.all([
     jobTotals(scope),
     readOutboxSummary(),
+    countPendingReview(),
   ]);
 
   return (
@@ -59,7 +61,11 @@ export default async function AdminDashboardPage() {
         ) : (
           <>
             <Today totals={totals} />
-            <Attention totals={totals} outbox={outbox} />
+            <Attention
+              totals={totals}
+              outbox={outbox}
+              pendingCertificates={pendingCertificates}
+            />
             <Split totals={totals} />
             <Pipeline totals={totals} />
           </>
@@ -149,11 +155,15 @@ function Today({ totals }: { totals: JobTotals }) {
 function Attention({
   totals,
   outbox,
+  pendingCertificates,
 }: {
   totals: JobTotals;
   outbox: { pending: number; failed: number; missingRecipient: number };
+  /** Certificates submitted or uploaded and not yet reviewed, across every job. */
+  pendingCertificates: number;
 }) {
-  const quiet = totals.attention === 0 && outbox.failed === 0;
+  const quiet =
+    totals.attention === 0 && outbox.failed === 0 && pendingCertificates === 0;
 
   return (
     <section className="mt-8 rounded-2xl border-2 border-navy-200 bg-white p-5">
@@ -175,6 +185,19 @@ function Attention({
               </Link>{" "}
               — a calendar entry not written, a message given up on, a deadline
               at risk, or a remedial awaiting approval.
+            </li>
+          )}
+          {pendingCertificates > 0 && (
+            <li>
+              <Link
+                href="/admin/jobs?view=certificate_review"
+                className="font-bold text-flame-600 underline"
+              >
+                {pendingCertificates}{" "}
+                {pendingCertificates === 1 ? "certificate" : "certificates"} to
+                review
+              </Link>{" "}
+              — uploaded or submitted by an engineer, not yet opened.
             </li>
           )}
           {outbox.failed > 0 && (
