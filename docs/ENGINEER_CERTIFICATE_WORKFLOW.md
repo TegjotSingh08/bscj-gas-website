@@ -145,6 +145,54 @@ submitted → administrator opened the stored PDF → released it. The generated
 PDF was extracted from the store and read: correct landscape A4, nothing
 clipped, all 21 appliance columns and all six outcomes present.
 
+### PDF layout acceptance — 22 September 2026
+
+The check left outstanding by the previous handover. Three certificates
+produced **through the real submission path**, on a disposable database, with
+deliberately long landlord and property details and the **maximum six
+appliance rows**, every row carrying all 21 columns. Each PDF was pulled out
+of the document store and read.
+
+| Run | Width | Result |
+| --- | --- | --- |
+| `TEST-NOT-VALID-LONG-0001-SUFFIX` | desktop, 1024px | 1 page, A4 landscape. Nothing clipped or overlapping. |
+| `TEST-NOT-VALID-LONG-0002-PHONE` | phone, 375px | Same, and materially identical to the desktop one. |
+| `TEST-NOT-VALID-OVERFLOW-0003` | desktop | 3,161 characters of defects and 1,694 of comments. Still 1 page, still nothing clipped. |
+
+**What was checked and held.** A 30-character certificate number, a
+66-character company name, a 64-character landlord company, four-line
+addresses in all three blocks, twelve numbered defect entries, and eight
+comment paragraphs — all render complete. All six appliance rows and all 21
+columns present in every run, including the `No` / `No` row that has to read
+as *not satisfactory*. The "Equipotential Bonding" outcome prints as ✗ when
+set to not satisfactory rather than silently as a tick.
+
+**Phone and desktop agree.** The capture host draws the sheet at a fixed
+1650px whatever the viewport: measured 1650×1302 at both 320px and 375px, and
+1650×1305 at desktop — a 0.23% difference. The resulting PDFs differ by under
+1% in scale, which is rasterisation rounding, not a layout difference. The
+phone-specific CSS does not reach the capture host, which was the risk worth
+testing.
+
+**Under extreme text it degrades by scaling, not by clipping.** The overflow
+run's content renders at about 73% of normal linear scale — the sheet grows
+taller and fit-to-page shrinks it onto one page. Smaller, still legible, and
+nothing is lost. That is the right failure mode and it is the generator's own
+pre-existing behaviour.
+
+**Two characteristics worth knowing, neither introduced by this workflow and
+neither a defect:**
+
+- **The signature boxes are blank.** `.sig-box` is an empty `<div>` with no
+  input; the generator has never captured a signature. The boxes render
+  correctly, correctly sized and labelled, for a wet signature after printing,
+  and the two print names *are* captured and do appear. Adding signature
+  capture would be a new feature.
+- **The PDF has no text layer.** It is a rasterised image, because the
+  generator draws through html2canvas and embeds a JPEG. So a released
+  certificate is not searchable or selectable. That is how the original tool
+  has always produced them.
+
 **Not verified here** — the **Vercel Blob** driver. Every document above went
 into the local store. The screens are identical on Blob; the driver underneath
 them has not been exercised from this workflow.
