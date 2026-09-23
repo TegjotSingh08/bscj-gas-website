@@ -154,10 +154,19 @@ const open = new Set<Client>();
  * Starts the server, creates the database and applies the real migration chain.
  *
  * The migrations are the committed SQL files, run by Drizzle's own migrator in
- * journal order — `0000` through `0009`, including the partial unique index
- * that makes two active compliance positions impossible. Nothing is generated
- * from the schema at run time: if the chain would not apply to the pilot, it
- * does not apply here either, and that is the point.
+ * journal order — the whole chain, including the partial unique index that
+ * makes two active compliance positions impossible. Nothing is generated from
+ * the schema at run time.
+ *
+ * **But applying the whole chain to an empty database does not prove the
+ * chain can be applied to the pilot**, and for a long time this comment
+ * claimed more than it was entitled to. The migrator applies a migration only
+ * when its journal timestamp is greater than the newest `created_at` already
+ * in the database; on an empty database there is no such row, the check
+ * short-circuits, and every migration applies whatever its timestamp says.
+ * That is how `0010`–`0012` were silently unapplicable to the pilot while
+ * every test here passed. The upgrade path is tested separately and
+ * deliberately, in `test/integration/migration-upgrade.test.ts`.
  */
 export async function start(): Promise<void> {
   if (server) return;
