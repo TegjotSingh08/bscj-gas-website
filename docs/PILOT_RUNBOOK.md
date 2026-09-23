@@ -115,6 +115,42 @@ to send.
 - `npm run db:status` should report **13 of 13** applied, **25 tables, 22
   enums**. Before them the pilot reports 10 of 13 and 24 tables.
 
+**If a migration run reports success and applies nothing — 24 September 2026**
+
+This happened, on the pilot, and it is worth knowing the shape of it because
+the symptom is indistinguishable from a successful run.
+
+`drizzle-kit migrate` does not diff the journal against the migration table.
+It reads the newest `created_at` in `drizzle.__drizzle_migrations` and applies
+each journal entry only when that entry's `when` is **greater** than it:
+
+```js
+// drizzle-orm/pg-core/dialect.js
+if (!lastDbMigration || Number(lastDbMigration.created_at) < migration.folderMillis) {
+```
+
+`0010`–`0012` had been generated with their real timestamps while `0008` and
+`0009` carried hand-picked round numbers running ahead of real time, so all
+three sorted before the pilot's newest applied migration and were skipped
+silently, exit code zero, every run. It was repaired by moving the three
+unapplied timestamps above `0009`'s — `0000`–`0009` were not touched, so the
+pilot's applied rows and hashes stay valid and nothing in the migration table
+needs editing.
+
+**There is now a gate in front of the command.** `npm run db:migrate` runs
+`npm run db:journal` first. It opens no connection and mutates nothing, and it
+prints one line when it is happy:
+
+```
+Journal            : 13 migrations, ordered, newest 0012_certificate_draft_signatures (1790800000000)
+```
+
+If that line is missing, or the command stops with *"The migration journal is
+not in a state the migrator will act on"*, **nothing was applied and no
+database was opened**. Fix the journal; do not reach for the migration table.
+
+`npm run db:journal` is safe to run on its own, at any time, from anywhere.
+
 **Blob storage**
 - Attach a Vercel Blob store; `BLOB_READ_WRITE_TOKEN` is injected and nothing
   else is needed. The local driver refuses to run when `NODE_ENV=production`,

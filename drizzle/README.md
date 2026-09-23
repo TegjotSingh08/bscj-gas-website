@@ -9,8 +9,9 @@ production data.
 
 ```
 npm run db:status     # read-only: what is applied, what is outstanding
+npm run db:journal    # read-only, offline: is the journal appliable at all?
 npm run db:generate   # after changing src/lib/db/schema.ts
-npm run db:migrate    # applies anything outstanding, in journal order
+npm run db:migrate    # checks the journal, then applies what is outstanding
 ```
 
 `drizzle.config.ts` loads `.env.local` itself, so there is no need to
@@ -19,6 +20,43 @@ is what CI and production need.
 
 It applies only what the journal in `meta/_journal.json` says is outstanding,
 so re-running it is safe.
+
+### `when` is an ordinal, and it decides whether the SQL runs at all
+
+**Read this before hand-editing a journal entry or committing a generated
+one.** The migrator does not diff the journal against the migration table. It
+reads the newest `created_at` in `drizzle.__drizzle_migrations` and applies an
+entry only if that entry's `when` is greater:
+
+```js
+// drizzle-orm/pg-core/dialect.js
+if (!lastDbMigration || Number(lastDbMigration.created_at) < migration.folderMillis) {
+```
+
+An entry whose `when` is lower — or equal — is **skipped without a word**. No
+error, no warning, no row, exit code zero. On an empty database the check
+short-circuits and everything applies, so a test suite that only ever builds
+from scratch will never see it.
+
+That is not hypothetical. `0010`–`0012` shipped with real generation
+timestamps while `0008` and `0009` carried hand-picked round numbers running
+ahead of real time, and the pilot could not be upgraded at all. See
+`docs/V2_CURRENT_STATE.md`.
+
+So:
+
+- **Every entry's `when` must be strictly greater than the one before it.**
+  `npm run db:journal` checks it, `db:migrate` will not run without it, and
+  `src/lib/ops/migration-journal.test.ts` asserts it against this very file.
+- **Never lower an applied migration's `when`.** Those numbers are already
+  `created_at` values in live databases. Repair an ordering problem by raising
+  the *unapplied* entries above the applied ones — the fix is always forwards.
+- The numbers in this chain are deliberately round and synthetic. They are an
+  ordering, not a history; `git log` is the history.
+- The upgrade path itself is tested in
+  `test/integration/migration-upgrade.test.ts`, which stages a database at
+  `0009` and upgrades it with the real command rather than building from
+  empty.
 
 **`db:migrate` is silent when it succeeds.** A run that applies everything
 prints a driver line, a websocket warning and then nothing — which looks

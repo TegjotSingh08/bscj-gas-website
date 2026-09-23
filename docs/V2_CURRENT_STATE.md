@@ -3,9 +3,10 @@
 **Read this first.** It exists so a new session does not have to re-audit the
 repository. Update it at the end of every piece of work.
 
-Last updated: 23 September 2026 (signature capture in the connected
-generator; `0009` owner-confirmed applied, `0010`, `0011` and `0012`
-outstanding).
+Last updated: 24 September 2026 (the migration-journal repair that makes
+`0010`–`0012` applicable to the pilot at all; signature capture landed
+23 September. `0009` owner-confirmed applied; `0010`, `0011` and `0012`
+outstanding and now actually appliable).
 
 ---
 
@@ -1243,6 +1244,21 @@ full list, not the pilot subset.
     22 enums** after. Order matters and is documented in `PILOT_RUNBOOK.md`
     §2E.7 and `docs/acceptance/README.md` §4: migrate, verify, *then* push.
 
+    **The journal had to be repaired first, and until it was, `db:migrate`
+    could not apply them at all.** The owner ran the command and `db:status`
+    still reported 10 of 13. That was not an operator error: `0010`–`0012`
+    carried journal timestamps *lower* than `0009`'s, and the migrator applies
+    a migration only when its timestamp is greater than the newest
+    `created_at` already in the database — one `<`, in
+    `drizzle-orm/pg-core/dialect.js`. All three lost it and were skipped in
+    silence, exit code zero.
+
+    Repaired by moving the three unapplied timestamps above `0009`'s
+    (`1790600000000`, `1790700000000`, `1790800000000`). **Nothing about
+    `0000`–`0009` changed** — not their timestamps, not their SQL, not their
+    hashes — so the pilot's applied rows stay valid and no row in
+    `drizzle.__drizzle_migrations` is edited by hand.
+
     **The down files have now actually been run**, against a disposable
     database with a submitted certificate and a signed draft on it —
     `test/integration/migration-rollback.test.ts`. Reversing `0012` takes the
@@ -1257,6 +1273,62 @@ full list, not the pilot subset.
     build that expects it breaks every certificate draft save immediately. The
     other direction is safe — an older build ignores the column — which is why
     the order is migrate, then deploy.
+
+## The migration journal, and why the pilot could not be upgraded
+
+**24 September 2026.** `npm run db:migrate` reported success and applied
+nothing. The owner ran it; `db:status` still said 10 of 13.
+
+`drizzle-kit migrate` does not compute a set difference between the journal
+and the migration table. It reads the single newest `created_at` in
+`drizzle.__drizzle_migrations` and applies each journal entry only if that
+entry's `when` is greater:
+
+```js
+// drizzle-orm/pg-core/dialect.js
+if (!lastDbMigration || Number(lastDbMigration.created_at) < migration.folderMillis) {
+```
+
+`0008` and `0009` had been given hand-picked round `when` values that ran
+ahead of real time — 2026-09-26 and 2026-09-27. `0010`–`0012` were generated
+by `drizzle-kit generate` and got their real timestamps, 22–23 September. So
+all three sorted *before* the pilot's newest applied migration and none of
+them would ever run.
+
+**Why no test caught it.** Every integration test starts from an empty
+database. With no rows in the migration table, `!lastDbMigration`
+short-circuits and every migration applies whatever its timestamp says. The
+suite was entirely green while the pilot was unupgradable.
+
+Three things now stand between that and a repeat:
+
+1. **`src/lib/ops/migration-journal.ts`** — the invariant, as a pure check:
+   strictly increasing `when`, `idx` matching position, the tag's own number
+   matching `idx`, and a readable refusal. Its unit tests read the
+   **repository's own journal**, so putting it back into an unappliable state
+   fails the ordinary test run.
+2. **A preflight gate on the command.** `db:migrate` is now
+   `npm run db:journal && drizzle-kit migrate`. The gate opens no connection,
+   mutates nothing, exits 1 on a bad journal, and prints one line on success
+   naming the count and newest entry — because the original failure was a
+   command that said nothing and did nothing. `db:status` runs the same check
+   before it resolves a target.
+3. **`test/integration/migration-upgrade.test.ts`** — the upgrade path, not
+   the fresh build. It empties a disposable database, applies `0000`–`0009`
+   only, and then upgrades it. It proves the defect (the original timestamps,
+   through both the in-process migrator **and** the real `drizzle-kit migrate`
+   CLI, leave the database at 10 applied with no `certificate_draft` and exit
+   zero) and proves the repair (the owner's actual `npm run db:migrate` takes
+   it to 13 of 13, with every recorded hash matching the file on disk, every
+   `created_at` matching its journal entry, `certificate_draft` present with
+   nullable `submission_started_at` and `signatures`, its unique index and
+   four foreign keys, and 25 tables / 22 enums). A second run adds no row,
+   rewrites none and duplicates none. The application then writes a draft
+   through the real `schema.ts`, so the migration and the schema definition
+   are shown to agree.
+
+**Nothing was applied to, or edited in, any real database.** The repair is
+three numbers in `drizzle/meta/_journal.json`.
 
 ### Known issues
 
