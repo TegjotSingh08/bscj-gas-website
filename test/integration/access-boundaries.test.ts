@@ -12,6 +12,7 @@ import {
 } from "../support/disposable-postgres";
 import { setDbForTesting } from "../../src/lib/db/client";
 import { seed, type Fixture } from "../support/fixtures";
+import { TEST_SIGNATURE_PNG } from "../support/signature";
 import {
   BASE_URL,
   isolatedEnvironment,
@@ -537,6 +538,134 @@ describe("the connected certificate endpoints, over real HTTP", () => {
     });
     assert.equal(response.status, 400);
     assert.match(await response.text(), /No certificate was attached/);
+  });
+
+  /* ---------------- The signature route, on the wire ---------------- */
+
+  const sign = (
+    session: HttpSession | null,
+    body: unknown,
+    origin = BASE_URL,
+  ) =>
+    fetch(jobUrl("/signature"), {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
+        ...(session ? { cookie: session.cookie() } : {}),
+        origin,
+      },
+      body: JSON.stringify(body),
+      redirect: "manual",
+    });
+
+  /** Whatever revision the shared draft is on now, read the way a tab would. */
+  async function currentRevision(): Promise<number> {
+    const response = await fetch(jobUrl("/session"), {
+      headers: { cookie: engineerSession.cookie() },
+    });
+    const body = (await response.json()) as { draft: { revision: number } };
+    return body.draft.revision;
+  }
+
+  test("signing needs a session, an origin, and the job", async () => {
+    const revision = await currentRevision();
+    const payload = { role: "issued", image: TEST_SIGNATURE_PNG, revision };
+
+    assert.equal((await sign(null, payload)).status, 401);
+    assert.equal(
+      (await sign(engineerSession, payload, "https://not-bscj.example.invalid"))
+        .status,
+      401,
+      "a cross-site post cannot sign anything",
+    );
+    assert.equal((await sign(strangerSession, payload)).status, 404);
+    assert.equal(
+      (await sign(agent, payload)).status,
+      401,
+      "the engineer audience guard refuses an agency user",
+    );
+
+    const response = await fetch(jobUrl("/session"), {
+      headers: { cookie: engineerSession.cookie() },
+    });
+    const body = (await response.json()) as {
+      draft: { signatures: Record<string, unknown> };
+    };
+    assert.deepEqual(body.draft.signatures, {}, "and none of them wrote a mark");
+  });
+
+  test("a name posted as a signature is refused by the route", async () => {
+    const response = await sign(engineerSession, {
+      role: "issued",
+      image: "Fixture Engineer",
+      revision: await currentRevision(),
+    });
+    assert.equal(response.status, 400);
+    assert.match(await response.text(), /not a signature this form produced/i);
+  });
+
+  test("a box the certificate does not have is refused", async () => {
+    const response = await sign(engineerSession, {
+      role: "witness",
+      image: TEST_SIGNATURE_PNG,
+      revision: await currentRevision(),
+    });
+    assert.equal(response.status, 400);
+  });
+
+  test("the engineer on the job signs it, and the sheet reads it back", async () => {
+    const revision = await currentRevision();
+    const response = await sign(engineerSession, {
+      role: "issued",
+      image: TEST_SIGNATURE_PNG,
+      revision,
+    });
+    assert.equal(response.status, 200);
+
+    const body = (await response.json()) as {
+      revision: number;
+      signatures: Record<string, { dataUrl: string }>;
+    };
+    assert.equal(body.revision, revision + 1);
+    assert.equal(body.signatures.issued.dataUrl, TEST_SIGNATURE_PNG);
+
+    /* And the next open of the generator shows it, rather than an empty box. */
+    const reopened = await fetch(jobUrl("/session"), {
+      headers: { cookie: engineerSession.cookie() },
+    });
+    const sheet = (await reopened.json()) as {
+      draft: { signatures: Record<string, { dataUrl: string }> };
+    };
+    assert.equal(sheet.draft.signatures.issued.dataUrl, TEST_SIGNATURE_PNG);
+  });
+
+  test("signing against a revision that has moved is a 409", async () => {
+    const response = await sign(engineerSession, {
+      role: "issued",
+      image: TEST_SIGNATURE_PNG,
+      revision: 1,
+    });
+    assert.equal(response.status, 409);
+    const body = (await response.json()) as { conflict: boolean };
+    assert.equal(body.conflict, true);
+  });
+
+  test("an ordinary save says which marks it removed", async () => {
+    const revision = await currentRevision();
+    const response = await put(engineerSession, {
+      fields: { certNo: "TEST-NOT-VALID-0003" },
+      revision,
+    });
+    assert.equal(response.status, 200);
+
+    const body = (await response.json()) as {
+      signatures: Record<string, unknown>;
+      clearedSignatures: { role: string; label: string }[];
+    };
+    assert.deepEqual(body.signatures, {}, "the mark did not survive the edit");
+    assert.deepEqual(body.clearedSignatures, [
+      { role: "issued", label: "Issued by (engineer)" },
+    ]);
   });
 });
 

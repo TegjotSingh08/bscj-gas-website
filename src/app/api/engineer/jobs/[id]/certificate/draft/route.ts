@@ -3,6 +3,10 @@ import { NextResponse } from "next/server";
 import { requireEngineerOrThrow } from "@/lib/auth/session";
 import { checkSameOrigin } from "@/lib/scheduling/origin";
 import { saveCertificateDraft } from "@/lib/documents/certificate-drafts";
+import {
+  describeSignatures,
+  SIGNATURE_LABELS,
+} from "@/lib/documents/certificate-signatures";
 
 /**
  * Saving the record the engineer is part-way through.
@@ -15,6 +19,12 @@ import { saveCertificateDraft } from "@/lib/documents/certificate-drafts";
  * with `409` and the current draft, rather than applied. A phone left open in
  * a van cannot replace what was done afterwards on a tablet, and neither one
  * silently loses work: the refusal carries what is actually stored.
+ *
+ * **A save is also where a signature stops being true.** The store checks
+ * every stored mark against the fields being written and drops the ones that
+ * no longer match; this hands back what survived and what did not, so the
+ * generator can empty the box on screen and say why rather than leaving an
+ * engineer looking at a signature the record no longer carries.
  *
  * **Same-origin is checked explicitly**, as the reconciliation endpoint is,
  * and for the same reason: Auth.js sets `SameSite=Lax`, so a cross-site POST
@@ -110,6 +120,11 @@ export async function PUT(
       ok: true,
       revision: result.revision,
       updatedAt: result.updatedAt.toISOString(),
+      signatures: describeSignatures(result.signatures),
+      clearedSignatures: result.cleared.map((role) => ({
+        role,
+        label: SIGNATURE_LABELS[role],
+      })),
     },
     { status: 200, headers: NO_STORE },
   );

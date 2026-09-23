@@ -41,6 +41,72 @@ function sheetFieldIds(): string[] {
   ].map((match) => match[1]);
 }
 
+describe("the generator is a working document, not just the right text", () => {
+  /*
+    **Why this is worth asserting.** An HTML comment that is opened and never
+    closed swallows everything after it as far as the next `-->`. The file
+    still loads, the sheet still renders, every field this suite checks is
+    still present in the markup — and the generator's entire `<script>` is
+    inert inside a comment node, which is a silent, total failure that reads
+    as a page with no JavaScript rather than as an error.
+
+    It happened once, while the signature boxes were being added. It cost an
+    afternoon to find. It never gets to happen twice.
+  */
+  const withoutComments = GENERATOR.replace(/<!--[\s\S]*?-->/g, "");
+
+  test("no comment is left open", () => {
+    assert.equal(
+      withoutComments.includes("<!--"),
+      false,
+      "an unclosed comment would swallow the rest of the file",
+    );
+  });
+
+  test("the script tags are real elements, not comment text", () => {
+    /* The two libraries, and the generator's own inline script. */
+    assert.equal((withoutComments.match(/<script/g) ?? []).length, 3);
+    assert.ok(
+      withoutComments.includes("connectedBoot()"),
+      "connected mode is inside a live script",
+    );
+  });
+
+  test("the signature pad is markup the page will actually build", () => {
+    assert.ok(withoutComments.includes('id="signaturePad"'));
+    assert.ok(withoutComments.includes('id="sigImgIssued"'));
+    assert.ok(withoutComments.includes('id="sigImgReceived"'));
+    assert.ok(withoutComments.includes('data-sign="issued"'));
+    assert.ok(withoutComments.includes('data-sign="received"'));
+  });
+
+  test("the signature pad is outside the sheet, so it cannot become a field", () => {
+    const sheetStart = withoutComments.indexOf('<div class="sheet" id="sheet">');
+    const sheetEnd = withoutComments.indexOf(
+      '<div class="modal-overlay" id="signatureModal">',
+    );
+    assert.ok(sheetStart > 0 && sheetEnd > sheetStart);
+    assert.equal(
+      withoutComments.slice(sheetStart, sheetEnd).includes("<canvas"),
+      false,
+      "nothing `collectSheet()` walks may be a drawing surface",
+    );
+  });
+
+  test("the PDF clone strips the signature controls", () => {
+    /*
+      `.sig-actions` holds the Sign and Clear buttons. They are screen
+      affordances; a certificate with "Sign" printed next to the signature
+      would be a different document from the one the office has always had.
+    */
+    assert.ok(
+      /clone\.querySelectorAll\('button, \.landlord-select-line, \.sig-actions'\)/.test(
+        withoutComments,
+      ),
+    );
+  });
+});
+
 describe("the draft's field list and the generator's sheet", () => {
   test("every static box on the sheet is a field the server will store", () => {
     /*

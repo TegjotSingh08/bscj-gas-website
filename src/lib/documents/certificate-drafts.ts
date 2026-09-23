@@ -15,6 +15,15 @@ import {
   sanitiseDraftFields,
   type CertificateDraftFields,
 } from "./certificate-draft-fields";
+import {
+  attestedContentHash,
+  describeMissingSignatures,
+  normaliseSignatureImage,
+  pruneSignatures,
+  sanitiseSignatures,
+  type CertificateSignatures,
+  type SignatureRole,
+} from "./certificate-signatures";
 
 /**
  * The engineer's gas safety record, held against the job while it is written.
@@ -79,6 +88,14 @@ export type CertificateDraft = {
   /** Set once a submission has been recorded against this draft. */
   submittedAt: Date | null;
   submittedDocumentId: string | null;
+  /**
+   * The marks drawn on the signature row, if any.
+   *
+   * Each one is kept only while the fields it was put against are unchanged.
+   * See `certificate-signatures.ts` — the rule lives there and is applied by
+   * every save below.
+   */
+  signatures: CertificateSignatures;
 };
 
 export type DraftJob = {
@@ -145,23 +162,14 @@ export async function loadCertificateDraft(input: {
       updatedAt: certificateDrafts.updatedAt,
       submittedAt: certificateDrafts.submittedAt,
       submittedDocumentId: certificateDrafts.submittedDocumentId,
+      signatures: certificateDrafts.signatures,
     })
     .from(certificateDrafts)
     .where(eq(certificateDrafts.jobId, job.id))
     .limit(1);
 
   if (!row) {
-    return {
-      ok: true,
-      job,
-      draft: {
-        fields: {},
-        revision: 0,
-        updatedAt: null,
-        submittedAt: null,
-        submittedDocumentId: null,
-      },
-    };
+    return { ok: true, job, draft: emptyDraft() };
   }
 
   return {
@@ -179,12 +187,43 @@ export async function loadCertificateDraft(input: {
       updatedAt: row.updatedAt,
       submittedAt: row.submittedAt,
       submittedDocumentId: row.submittedDocumentId,
+      /*
+        Sanitised on the way out for the same reason the fields are: a mark
+        whose image no longer decodes, or which lost the hash that binds it to
+        the record, is not a signature and must not be shown as one.
+      */
+      signatures: sanitiseSignatures(row.signatures),
     },
   };
 }
 
+/** A job with no draft yet, in one place so every caller agrees what that is. */
+function emptyDraft(): CertificateDraft {
+  return {
+    fields: {},
+    revision: 0,
+    updatedAt: null,
+    submittedAt: null,
+    submittedDocumentId: null,
+    signatures: {},
+  };
+}
+
 export type SaveResult =
-  | { ok: true; revision: number; updatedAt: Date }
+  | {
+      ok: true;
+      revision: number;
+      updatedAt: Date;
+      /** What survived the save. See `cleared`. */
+      signatures: CertificateSignatures;
+      /**
+       * Marks this save removed, because what they were put against changed.
+       *
+       * The caller is expected to say so. A signature that quietly disappears
+       * is very nearly as bad as one that quietly stays.
+       */
+      cleared: SignatureRole[];
+    }
   /**
    * Somebody else's save landed first.
    *
@@ -253,15 +292,45 @@ export async function saveCertificateDraft(input: {
       .returning({ revision: certificateDrafts.revision });
 
     if (inserted.length > 0) {
-      return { ok: true, revision: inserted[0].revision, updatedAt: now };
+      return {
+        ok: true,
+        revision: inserted[0].revision,
+        updatedAt: now,
+        signatures: {},
+        cleared: [],
+      };
     }
     return conflict(session, job.id);
   }
+
+  /*
+    **The signature rule is applied here, on the way past.**
+
+    A mark is only true of the record it was drawn against, so the stored
+    signatures are read, checked against the fields about to be written, and
+    the ones that no longer match are dropped. It happens inside the ordinary
+    save because that is the only moment the record changes — putting it
+    anywhere else would leave a window where a browser could submit a
+    certificate carrying a signature for a different set of readings.
+
+    The read is safe against a race for the same reason everything else here
+    is: the `UPDATE` below still requires the revision to be untouched, so a
+    save that slipped in between makes this one a conflict rather than a
+    writer of stale signatures.
+  */
+  const [before] = await db
+    .select({ signatures: certificateDrafts.signatures })
+    .from(certificateDrafts)
+    .where(eq(certificateDrafts.jobId, job.id))
+    .limit(1);
+
+  const pruned = pruneSignatures(sanitiseSignatures(before?.signatures), fields);
 
   const updated = await db
     .update(certificateDrafts)
     .set({
       fields,
+      signatures: pruned.signatures,
       revision: sql`${certificateDrafts.revision} + 1`,
       updatedBy: session.user.id,
       updatedAt: now,
@@ -290,7 +359,13 @@ export async function saveCertificateDraft(input: {
     .returning({ revision: certificateDrafts.revision });
 
   if (updated.length === 0) return conflict(session, job.id);
-  return { ok: true, revision: updated[0].revision, updatedAt: now };
+  return {
+    ok: true,
+    revision: updated[0].revision,
+    updatedAt: now,
+    signatures: pruned.signatures,
+    cleared: pruned.cleared,
+  };
 }
 
 /** The refusal, with whatever is actually stored attached to it. */
@@ -301,16 +376,155 @@ async function conflict(session: Session, jobId: string): Promise<SaveResult> {
     conflict: true,
     error:
       "This record has been saved somewhere else since this screen loaded. Nothing has been overwritten.",
-    draft: current.ok
-      ? current.draft
-      : {
-          fields: {},
-          revision: 0,
-          updatedAt: null,
-          submittedAt: null,
-          submittedDocumentId: null,
-        },
+    draft: current.ok ? current.draft : emptyDraft(),
   };
+}
+
+export type SignResult =
+  | {
+      ok: true;
+      revision: number;
+      signatures: CertificateSignatures;
+    }
+  | { ok: false; conflict: true; error: string; draft: CertificateDraft }
+  | { ok: false; conflict?: false; error: string };
+
+/**
+ * Puts a drawn mark into one of the two signature boxes, or takes it out.
+ *
+ * **It is its own operation rather than a field.** Three things follow from
+ * that and none of them would be true if a signature travelled with the rest
+ * of the sheet:
+ *
+ * 1. **It is deliberate.** A signature is written by somebody tapping *Sign*
+ *    and drawing; it is never a by-product of typing a name, never copied
+ *    from another certificate, and there is no code path that produces one
+ *    from anything other than the image that was drawn.
+ * 2. **It binds to a known state.** The caller says which revision it is
+ *    signing, and a mismatch is a conflict — so the mark cannot land against
+ *    a record that has moved since the screen showed it. The hash is then
+ *    taken from the **stored** fields, not from anything the browser sent.
+ * 3. **It is a change to the record.** The revision moves, so another device
+ *    with the job open finds out the ordinary way.
+ *
+ * `dataUrl` of `null` clears the box. Clearing is always allowed: the person
+ * who drew it is entitled to say that was not their signature.
+ */
+export async function signCertificateDraft(input: {
+  session: Session;
+  jobId: string;
+  role: SignatureRole;
+  dataUrl: string | null;
+  expectedRevision: number;
+}): Promise<SignResult> {
+  const { session, jobId, role, expectedRevision } = input;
+  assertCan(session.user.role, "certificate:issue");
+
+  const db = getDb();
+  if (!db) return { ok: false, error: NO_DATABASE };
+
+  const job = await authorisedJob(session, jobId);
+  if (!job) return { ok: false, error: NOT_FOUND };
+
+  if (!canUploadCertificate(job.lifecycleStatus)) {
+    return { ok: false, error: uploadRefusal(job.lifecycleStatus) ?? NOT_FOUND };
+  }
+
+  let image: string | null = null;
+  if (input.dataUrl !== null) {
+    const normalised = normaliseSignatureImage(input.dataUrl);
+    if (!normalised.ok) return { ok: false, error: normalised.error };
+    image = normalised.dataUrl;
+  }
+
+  const [row] = await db
+    .select({
+      fields: certificateDrafts.fields,
+      revision: certificateDrafts.revision,
+      signatures: certificateDrafts.signatures,
+    })
+    .from(certificateDrafts)
+    .where(eq(certificateDrafts.jobId, job.id))
+    .limit(1);
+
+  /*
+    Nothing to sign against. The generator saves the sheet before it offers
+    the pad, so this is a client that did not — and signing an empty record
+    would produce a mark bound to nothing.
+  */
+  if (!row) {
+    return {
+      ok: false,
+      error: "Save this record before signing it.",
+    };
+  }
+  if (row.revision !== expectedRevision) {
+    const current = await loadCertificateDraft({ session, jobId });
+    return {
+      ok: false,
+      conflict: true,
+      error:
+        "This record changed after the signature pad was opened, so nothing was signed. Open the job again and sign against what is saved now.",
+      draft: current.ok ? current.draft : emptyDraft(),
+    };
+  }
+
+  const fields = sanitiseDraftFields(row.fields);
+  const existing = sanitiseSignatures(row.signatures);
+  const nextRevision = row.revision + 1;
+
+  const signatures: CertificateSignatures = { ...existing };
+  if (image === null) {
+    delete signatures[role];
+  } else {
+    signatures[role] = {
+      dataUrl: image,
+      capturedAt: new Date().toISOString(),
+      capturedAtRevision: nextRevision,
+      /* Derived here, from what is stored. A client does not get to say what
+         its signature covers. */
+      contentHash: attestedContentHash(fields, role),
+    };
+  }
+
+  const updated = await db
+    .update(certificateDrafts)
+    .set({
+      signatures,
+      revision: nextRevision,
+      updatedBy: session.user.id,
+      updatedAt: new Date(),
+      /*
+        Signing changes the record, so it ends any submission attempt in
+        flight for exactly the reasons an ordinary save does. The document
+        already with the office is untouched — it is immutable and belongs to
+        the certificate lifecycle — but this draft is no longer the one that
+        was sent.
+      */
+      submissionKey: null,
+      submissionStartedAt: null,
+      submittedAt: null,
+    })
+    .where(
+      and(
+        eq(certificateDrafts.jobId, job.id),
+        eq(certificateDrafts.revision, expectedRevision),
+      ),
+    )
+    .returning({ revision: certificateDrafts.revision });
+
+  if (updated.length === 0) {
+    const current = await loadCertificateDraft({ session, jobId });
+    return {
+      ok: false,
+      conflict: true,
+      error:
+        "This record was saved somewhere else, so nothing was signed. Nothing has been overwritten.",
+      draft: current.ok ? current.draft : emptyDraft(),
+    };
+  }
+
+  return { ok: true, revision: updated[0].revision, signatures };
 }
 
 export type SubmitResult =
@@ -374,6 +588,7 @@ export async function submitCertificateDraft(input: {
       submissionKey: certificateDrafts.submissionKey,
       submittedDocumentId: certificateDrafts.submittedDocumentId,
       submissionStartedAt: certificateDrafts.submissionStartedAt,
+      signatures: certificateDrafts.signatures,
     })
     .from(certificateDrafts)
     .where(eq(certificateDrafts.jobId, job.id))
@@ -425,7 +640,21 @@ export async function submitCertificateDraft(input: {
     };
   }
 
-  const missing = describeIncompleteDraft(sanitiseDraftFields(existing.fields));
+  /*
+    The engineer's mark is checked here, from the stored image and the stored
+    fields, and it is checked **again** rather than relied on from the save.
+    A browser could post a submission without ever having opened the pad; the
+    only thing that decides whether the certificate about to go to an
+    administrator has a signature on it is this.
+  */
+  const storedFields = sanitiseDraftFields(existing.fields);
+  const missing = [
+    ...describeIncompleteDraft(storedFields),
+    ...describeMissingSignatures(
+      storedFields,
+      sanitiseSignatures(existing.signatures),
+    ),
+  ];
   if (missing.length > 0) {
     return {
       ok: false,

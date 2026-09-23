@@ -9,6 +9,7 @@ import {
   type Connection,
 } from "../support/disposable-postgres";
 import { seed, type Fixture } from "../support/fixtures";
+import { TEST_SIGNATURE_PNG } from "../support/signature";
 
 /**
  * **The connected workflow, through the application, against PostgreSQL.**
@@ -145,7 +146,7 @@ const { createInvoiceDraft, issueInvoice, markInvoicePaid } = await import(
 );
 const { listDueWork } = await import("../../src/lib/compliance/due-work");
 const { readFileSync } = await import("node:fs");
-const { saveCertificateDraft, submitCertificateDraft } = await import(
+const { saveCertificateDraft, signCertificateDraft, submitCertificateDraft } = await import(
   "../../src/lib/documents/certificate-drafts"
 );
 const { listAgencyJobCertificates } = await import(
@@ -626,6 +627,20 @@ describe("the certificate", () => {
       expectedRevision: 0,
     });
     assert.ok(saved.ok);
+
+    /*
+      The engineer signs the record before it goes anywhere. The *Issued by*
+      box on the certificate is theirs, and an unsigned record is refused —
+      submitting it is not a separate act of attestation.
+    */
+    const signed = await signCertificateDraft({
+      session: engineer() as never,
+      jobId: fixture.jobId,
+      role: "issued",
+      dataUrl: TEST_SIGNATURE_PNG,
+      expectedRevision: saved.revision,
+    });
+    assert.ok(signed.ok);
 
     const submitted = await submitCertificateDraft({
       session: engineer() as never,

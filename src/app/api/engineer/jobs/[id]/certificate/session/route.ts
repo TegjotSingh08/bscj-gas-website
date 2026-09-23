@@ -6,6 +6,7 @@ import { getBusinessIdentity } from "@/lib/settings/store";
 import { buildCp12Payload, type Cp12PrefillFacts } from "@/lib/jobs/cp12-prefill";
 import { loadCertificateDraft } from "@/lib/documents/certificate-drafts";
 import { canUploadCertificate } from "@/lib/documents/release";
+import { describeSignatures } from "@/lib/documents/certificate-signatures";
 
 /**
  * Everything the connected generator needs to open on a job, in one request.
@@ -105,6 +106,11 @@ export async function GET(
         revision: loaded.draft.revision,
         updatedAt: loaded.draft.updatedAt?.toISOString() ?? null,
         submittedAt: loaded.draft.submittedAt?.toISOString() ?? null,
+        /*
+          The marks already on the record, so a resumed sheet shows what was
+          signed rather than an empty box the engineer would sign twice.
+        */
+        signatures: describeSignatures(loaded.draft.signatures),
       },
     },
     {

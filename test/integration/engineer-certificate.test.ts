@@ -14,9 +14,15 @@ import { seed, type Fixture } from "../support/fixtures";
 import {
   loadCertificateDraft,
   saveCertificateDraft,
+  signCertificateDraft,
   submitCertificateDraft,
   draftSummaryFor,
 } from "../../src/lib/documents/certificate-drafts";
+import type { SignatureRole } from "../../src/lib/documents/certificate-signatures";
+import {
+  OTHER_TEST_SIGNATURE_PNG,
+  TEST_SIGNATURE_PNG,
+} from "../support/signature";
 
 /**
  * The connected engineer certificate workflow, against a real database.
@@ -131,6 +137,39 @@ async function saveComplete(session = engineer(), revision = 0) {
     fields: completeFields(),
     expectedRevision: revision,
   });
+}
+
+/**
+ * Signs the stored record as the engineer, at whatever revision it is on.
+ *
+ * Reads the revision rather than being told it, because that is what a
+ * signature is for in these tests: the specific binding is exercised
+ * deliberately in the signature suite, and everywhere else the point is
+ * simply that a submittable record has been signed.
+ */
+async function signIssued(
+  session = engineer(),
+  role: SignatureRole = "issued",
+  image: string = TEST_SIGNATURE_PNG,
+): Promise<number> {
+  const loaded = await loadCertificateDraft({ session, jobId: fixture.jobId });
+  assert.ok(loaded.ok);
+  const signed = await signCertificateDraft({
+    session,
+    jobId: fixture.jobId,
+    role,
+    dataUrl: image,
+    expectedRevision: loaded.draft.revision,
+  });
+  assert.ok(signed.ok, "the fixture record could not be signed");
+  return signed.revision;
+}
+
+/** A finished record that has been signed — what a submission actually needs. */
+async function saveCompleteSigned(session = engineer(), revision = 0) {
+  const saved = await saveComplete(session, revision);
+  assert.ok(saved.ok);
+  return { ok: true as const, revision: await signIssued(session) };
 }
 
 async function countRows(table: string, where = ""): Promise<number> {
@@ -372,7 +411,7 @@ describe("a job that is not yours", () => {
   });
 
   test("another engineer cannot submit it", async () => {
-    await saveComplete();
+    await saveCompleteSigned();
 
     const submitted = await submitCertificateDraft({
       session: otherEngineer(),
@@ -558,7 +597,7 @@ describe("submitting the finished record", () => {
   });
 
   test("a finished record reaches awaiting review, and issues nothing", async () => {
-    await saveComplete();
+    await saveCompleteSigned();
 
     const submitted = await submitCertificateDraft({
       session: engineer(),
@@ -605,7 +644,7 @@ describe("submitting the finished record", () => {
   });
 
   test("the job's own lifecycle is untouched by submitting", async () => {
-    await saveComplete();
+    await saveCompleteSigned();
     await submitCertificateDraft({
       session: engineer(),
       jobId: fixture.jobId,
@@ -626,7 +665,7 @@ describe("submitting the finished record", () => {
   });
 
   test("a rubbish file is refused by the same PDF check the upload uses", async () => {
-    await saveComplete();
+    await saveCompleteSigned();
     const submitted = await submitCertificateDraft({
       session: engineer(),
       jobId: fixture.jobId,
@@ -641,7 +680,7 @@ describe("submitting the finished record", () => {
 
 describe("a double tap, a timeout and a retry", () => {
   test("the same submission key never makes a second record", async () => {
-    await saveComplete();
+    await saveCompleteSigned();
 
     const first = await submitCertificateDraft({
       session: engineer(),
@@ -672,7 +711,7 @@ describe("a double tap, a timeout and a retry", () => {
   });
 
   test("two simultaneous taps produce one document", async () => {
-    await saveComplete();
+    await saveCompleteSigned();
 
     const [a, b] = await Promise.all([
       submitCertificateDraft({
@@ -707,7 +746,7 @@ describe("a double tap, a timeout and a retry", () => {
   });
 
   test("more work after a submission is a new attempt, not a replay", async () => {
-    await saveComplete();
+    await saveCompleteSigned();
     const first = await submitCertificateDraft({
       session: engineer(),
       jobId: fixture.jobId,
@@ -734,6 +773,24 @@ describe("a double tap, a timeout and a retry", () => {
       expectedRevision: loaded.draft.revision,
     });
 
+    /*
+      The edit also took the signature off, because the record it was put
+      against is not the record any more. So the second attempt needs the
+      engineer to sign the corrected version — which is the point.
+    */
+    const unsigned = await submitCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+      bytes: SPECIMEN,
+      filename: "TEST-NOT-VALID-certificate.pdf",
+      submissionKey: "first-attempt",
+    });
+    assert.equal(unsigned.ok, false);
+    assert.ok(!unsigned.ok);
+    assert.deepEqual(unsigned.missing, ["Engineer signature"]);
+
+    await signIssued();
+
     const replayAttempt = await submitCertificateDraft({
       session: engineer(),
       jobId: fixture.jobId,
@@ -750,7 +807,7 @@ describe("a double tap, a timeout and a retry", () => {
   });
 
   test("a failed submission leaves the draft exactly as it was", async () => {
-    await saveComplete();
+    await saveCompleteSigned();
 
     const failed = await submitCertificateDraft({
       session: engineer(),
@@ -787,7 +844,7 @@ describe("a double tap, a timeout and a retry", () => {
 
 describe("the office picks it up through the path it always used", () => {
   test("a submitted record is reviewable and releasable, unchanged", async () => {
-    await saveComplete();
+    await saveCompleteSigned();
     const submitted = await submitCertificateDraft({
       session: engineer(),
       jobId: fixture.jobId,
@@ -910,7 +967,7 @@ describe("a submission interrupted part-way", () => {
       retry, on any device, got the same answer and the certificate could never
       be filed.
     */
-    await saveComplete();
+    await saveCompleteSigned();
     await claimLeftBehind("attempt-1");
 
     const retried = await submitCertificateDraft({
@@ -936,7 +993,7 @@ describe("a submission interrupted part-way", () => {
       but the draft never learned its id. A retry must not store a second copy
       for an administrator to choose between — it has to find the first.
     */
-    await saveComplete();
+    await saveCompleteSigned();
 
     /*
       Stored the way the submission path stores it — under the key derived
@@ -996,7 +1053,7 @@ describe("a submission interrupted part-way", () => {
       taken seconds ago is a request that is probably still running, and the
       right answer there is to wait rather than to store a second document.
     */
-    await saveComplete();
+    await saveCompleteSigned();
     await claimLeftBehind("attempt-1", 0);
 
     const second = await submitCertificateDraft({
@@ -1028,7 +1085,7 @@ describe("the PDF and the draft are the same state", () => {
       submission is refused rather than filing a PDF of the old readings
       against the new record.
     */
-    const saved = await saveComplete();
+    const saved = await saveCompleteSigned();
     assert.ok(saved.ok);
 
     // The engineer changes a reading after the certificate was drawn.
@@ -1059,7 +1116,7 @@ describe("the PDF and the draft are the same state", () => {
   });
 
   test("drawn from the current revision goes through", async () => {
-    const saved = await saveComplete();
+    const saved = await saveCompleteSigned();
     assert.ok(saved.ok);
 
     const submitted = await submitCertificateDraft({
@@ -1079,7 +1136,7 @@ describe("the PDF and the draft are the same state", () => {
       has not reloaded since the deploy — a worse failure than the one the
       check prevents, and one the engineer cannot diagnose.
     */
-    await saveComplete();
+    await saveCompleteSigned();
     const submitted = await submitCertificateDraft({
       session: engineer(),
       jobId: fixture.jobId,
@@ -1100,7 +1157,7 @@ describe("editing a record that has already been sent", () => {
       — but the job screen must not keep saying "submitted and waiting" over
       work nobody has seen.
     */
-    await saveComplete();
+    await saveCompleteSigned();
     const submitted = await submitCertificateDraft({
       session: engineer(),
       jobId: fixture.jobId,
@@ -1146,7 +1203,7 @@ describe("editing a record that has already been sent", () => {
 
 describe("an administrator can clear a submission nobody can finish", () => {
   test("a stalled claim is listed, and releasing it lets the engineer resend", async () => {
-    await saveComplete();
+    await saveCompleteSigned();
     await conn.client.query(
       `update certificate_draft
           set submission_key = 'abandoned',
@@ -1202,7 +1259,7 @@ describe("an administrator can clear a submission nobody can finish", () => {
   });
 
   test("a completed submission is not offered as stalled", async () => {
-    await saveComplete();
+    await saveCompleteSigned();
     const submitted = await submitCertificateDraft({
       session: engineer(),
       jobId: fixture.jobId,
@@ -1257,7 +1314,7 @@ describe("a submitted certificate is findable, not just visible on its own job",
     const before = await countPendingReview();
     assert.equal(before, 2, "the fixture's own two pending documents");
 
-    await saveComplete();
+    await saveCompleteSigned();
     const submitted = await submitCertificateDraft({
       session: engineer(),
       jobId: fixture.jobId,
@@ -1329,6 +1386,14 @@ describe("a submitted certificate is findable, not just visible on its own job",
       expectedRevision: 0,
     });
     assert.ok(saved.ok);
+    const signed = await signCertificateDraft({
+      session: engineer(),
+      jobId,
+      role: "issued",
+      dataUrl: TEST_SIGNATURE_PNG,
+      expectedRevision: saved.revision,
+    });
+    assert.ok(signed.ok);
     const submitted = await submitCertificateDraft({
       session: engineer(),
       jobId,
@@ -1371,5 +1436,494 @@ describe("a submitted certificate is findable, not just visible on its own job",
       false,
       "a released certificate is no longer awaiting review",
     );
+  });
+});
+
+/* ==========================================================================
+   Signatures
+   --------------------------------------------------------------------------
+   The certificate has always had two boxes and they have always printed
+   empty. These are the rules that fill them: what a mark may be, what it is
+   bound to, what removes it, and what a record may be submitted without.
+   ========================================================================== */
+
+describe("capturing a signature", () => {
+  test("a mark is stored against the job and comes back from the server", async () => {
+    const saved = await saveComplete();
+    assert.ok(saved.ok);
+
+    const signed = await signCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+      role: "issued",
+      dataUrl: TEST_SIGNATURE_PNG,
+      expectedRevision: saved.revision,
+    });
+    assert.ok(signed.ok);
+    assert.equal(signed.revision, saved.revision + 1, "signing changes the record");
+
+    /*
+      Reloaded from the database, which is the point: the engineer can close
+      the tab, sign out, pick up a different device and the mark is still
+      there. Nothing about it lives in a browser.
+    */
+    const loaded = await loadCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+    });
+    assert.ok(loaded.ok);
+    assert.equal(loaded.draft.signatures.issued?.dataUrl, TEST_SIGNATURE_PNG);
+    assert.equal(loaded.draft.signatures.issued?.capturedAtRevision, signed.revision);
+    assert.equal(loaded.draft.signatures.received, undefined);
+  });
+
+  test("the two boxes are separate, and one is not the other", async () => {
+    await saveComplete();
+    await signIssued(engineer(), "issued", TEST_SIGNATURE_PNG);
+    await signIssued(engineer(), "received", OTHER_TEST_SIGNATURE_PNG);
+
+    const loaded = await loadCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+    });
+    assert.ok(loaded.ok);
+    assert.equal(loaded.draft.signatures.issued?.dataUrl, TEST_SIGNATURE_PNG);
+    assert.equal(
+      loaded.draft.signatures.received?.dataUrl,
+      OTHER_TEST_SIGNATURE_PNG,
+    );
+  });
+
+  test("a typed name never becomes a mark", async () => {
+    /*
+      Both print names are on this record and both are stored. Neither
+      produces a signature, and there is no code path by which one could:
+      the only writer of the column is `signCertificateDraft`, and it takes an
+      image.
+    */
+    await saveCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+      fields: completeFields({ receivedPrintName: "A Fixture Tenant" }),
+      expectedRevision: 0,
+    });
+
+    const loaded = await loadCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+    });
+    assert.ok(loaded.ok);
+    assert.equal(loaded.draft.fields.issuedPrintName, "Fixture Engineer");
+    assert.equal(loaded.draft.fields.receivedPrintName, "A Fixture Tenant");
+    assert.deepEqual(loaded.draft.signatures, {}, "two names, no signature");
+  });
+
+  test("something that is not an image is refused and nothing is stored", async () => {
+    const saved = await saveComplete();
+    assert.ok(saved.ok);
+
+    const attempt = await signCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+      role: "issued",
+      dataUrl: "Fixture Engineer",
+      expectedRevision: saved.revision,
+    });
+    assert.equal(attempt.ok, false);
+
+    const loaded = await loadCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+    });
+    assert.ok(loaded.ok);
+    assert.deepEqual(loaded.draft.signatures, {});
+    assert.equal(loaded.draft.revision, saved.revision, "not even the revision moved");
+  });
+
+  test("signing before anything is saved is refused rather than inventing a draft", async () => {
+    const attempt = await signCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+      role: "issued",
+      dataUrl: TEST_SIGNATURE_PNG,
+      expectedRevision: 1,
+    });
+    assert.equal(attempt.ok, false);
+    assert.ok(!attempt.ok);
+    assert.match(attempt.error, /save this record/i);
+  });
+
+  test("signing a job that has not been visited is refused", async () => {
+    await saveComplete();
+    await conn.client.query(
+      "update job set lifecycle_status = 'scheduled' where id = $1",
+      [fixture.jobId],
+    );
+
+    const attempt = await signCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+      role: "issued",
+      dataUrl: TEST_SIGNATURE_PNG,
+      expectedRevision: 1,
+    });
+    assert.equal(attempt.ok, false);
+  });
+});
+
+describe("clearing and redrawing", () => {
+  test("clearing empties the box and leaves the rest of the record alone", async () => {
+    await saveComplete();
+    const revision = await signIssued();
+
+    const cleared = await signCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+      role: "issued",
+      dataUrl: null,
+      expectedRevision: revision,
+    });
+    assert.ok(cleared.ok);
+
+    const loaded = await loadCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+    });
+    assert.ok(loaded.ok);
+    assert.deepEqual(loaded.draft.signatures, {});
+    assert.deepEqual(
+      loaded.draft.fields,
+      completeFields(),
+      "the record itself is untouched",
+    );
+  });
+
+  test("redrawing replaces the mark rather than keeping both", async () => {
+    await saveComplete();
+    await signIssued(engineer(), "issued", TEST_SIGNATURE_PNG);
+    await signIssued(engineer(), "issued", OTHER_TEST_SIGNATURE_PNG);
+
+    const loaded = await loadCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+    });
+    assert.ok(loaded.ok);
+    assert.equal(loaded.draft.signatures.issued?.dataUrl, OTHER_TEST_SIGNATURE_PNG);
+  });
+
+  test("clearing one box does not touch the other", async () => {
+    await saveComplete();
+    await signIssued(engineer(), "issued", TEST_SIGNATURE_PNG);
+    const revision = await signIssued(engineer(), "received", OTHER_TEST_SIGNATURE_PNG);
+
+    await signCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+      role: "received",
+      dataUrl: null,
+      expectedRevision: revision,
+    });
+
+    const loaded = await loadCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+    });
+    assert.ok(loaded.ok);
+    assert.equal(loaded.draft.signatures.issued?.dataUrl, TEST_SIGNATURE_PNG);
+    assert.equal(loaded.draft.signatures.received, undefined);
+  });
+});
+
+describe("a mark is bound to the record it was put against", () => {
+  test("a stale revision is refused, and carries what is actually stored", async () => {
+    const saved = await saveComplete();
+    assert.ok(saved.ok);
+
+    // Another device saves in between.
+    await saveCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+      fields: completeFields({ comments: "From the tablet." }),
+      expectedRevision: saved.revision,
+    });
+
+    const stale = await signCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+      role: "issued",
+      dataUrl: TEST_SIGNATURE_PNG,
+      expectedRevision: saved.revision,
+    });
+    assert.equal(stale.ok, false);
+    assert.ok(!stale.ok && stale.conflict);
+    assert.equal(stale.draft.revision, saved.revision + 1);
+    assert.deepEqual(stale.draft.signatures, {}, "nothing was signed");
+  });
+
+  test("editing the record afterwards takes the mark off, and names it", async () => {
+    await saveComplete();
+    const revision = await signIssued();
+
+    const saved = await saveCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+      fields: completeFields({ app_1_highCO: "48" }),
+      expectedRevision: revision,
+    });
+    assert.ok(saved.ok);
+    assert.deepEqual(saved.cleared, ["issued"]);
+    assert.deepEqual(saved.signatures, {});
+
+    const loaded = await loadCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+    });
+    assert.ok(loaded.ok);
+    assert.deepEqual(loaded.draft.signatures, {}, "not kept over the change");
+  });
+
+  test("saving the same record again keeps the mark", async () => {
+    await saveComplete();
+    const revision = await signIssued();
+
+    const saved = await saveCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+      fields: completeFields(),
+      expectedRevision: revision,
+    });
+    assert.ok(saved.ok);
+    assert.deepEqual(saved.cleared, []);
+    assert.ok(saved.signatures.issued, "an autosave is not an edit");
+  });
+
+  test("adding the tenant's name keeps the engineer's mark and removes theirs", async () => {
+    await saveComplete();
+    await signIssued(engineer(), "issued", TEST_SIGNATURE_PNG);
+    const revision = await signIssued(engineer(), "received", OTHER_TEST_SIGNATURE_PNG);
+
+    const saved = await saveCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+      fields: completeFields({ receivedPrintName: "A Fixture Tenant" }),
+      expectedRevision: revision,
+    });
+    assert.ok(saved.ok);
+    assert.deepEqual(saved.cleared, ["received"]);
+    assert.ok(saved.signatures.issued);
+  });
+
+  test("a mark from one job never appears on another", async () => {
+    await saveComplete();
+    await signIssued();
+
+    const { rows } = await conn.client.query<{ id: string }>(
+      `insert into job
+         (reference, idempotency_key, agent_organisation_id, customer_id,
+          billing_customer_id, property_id, product_id, source,
+          scheduling_method, lifecycle_status, appliance_count,
+          price_total_pence, customer_snapshot, property_snapshot,
+          price_snapshot, assigned_engineer_id)
+       values ('BSCJ-SIGNEXT', 'BSCJ-SIGNEXT', $1, $2, $2, $3, 'cp12', 'portal',
+               'tenant_selected', 'in_progress', 1, 4500,
+               '{"name":"Ada Fixture"}'::jsonb,
+               '{"postcode":"WV1 1AA"}'::jsonb,
+               '{"totalPence":4500}'::jsonb, $4)
+       returning id`,
+      [
+        fixture.organisationId,
+        fixture.landlordId,
+        fixture.propertyId,
+        fixture.engineerUserId,
+      ],
+    );
+
+    await saveCertificateDraft({
+      session: engineer(),
+      jobId: rows[0].id,
+      fields: completeFields({ certNo: "TEST-NOT-VALID-0002" }),
+      expectedRevision: 0,
+    });
+
+    const other = await loadCertificateDraft({
+      session: engineer(),
+      jobId: rows[0].id,
+    });
+    assert.ok(other.ok);
+    assert.deepEqual(
+      other.draft.signatures,
+      {},
+      "the next certificate starts unsigned, always",
+    );
+  });
+});
+
+describe("a signature is only the engineer's to give", () => {
+  test("another engineer cannot sign this job's record", async () => {
+    await saveComplete();
+
+    const attempt = await signCertificateDraft({
+      session: otherEngineer(),
+      jobId: fixture.jobId,
+      role: "issued",
+      dataUrl: TEST_SIGNATURE_PNG,
+      expectedRevision: 1,
+    });
+    assert.equal(attempt.ok, false);
+    assert.ok(!attempt.ok);
+    assert.match(attempt.error, /could not be found/i);
+
+    const loaded = await loadCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+    });
+    assert.ok(loaded.ok);
+    assert.deepEqual(loaded.draft.signatures, {});
+  });
+
+  test("a job that does not exist reads the same as one that is not theirs", async () => {
+    const missing = await signCertificateDraft({
+      session: engineer(),
+      jobId: "00000000-0000-4000-8000-000000000000",
+      role: "issued",
+      dataUrl: TEST_SIGNATURE_PNG,
+      expectedRevision: 1,
+    });
+    const notMine = await signCertificateDraft({
+      session: otherEngineer(),
+      jobId: fixture.jobId,
+      role: "issued",
+      dataUrl: TEST_SIGNATURE_PNG,
+      expectedRevision: 1,
+    });
+    assert.ok(!missing.ok && !notMine.ok);
+    assert.equal(missing.error, notMine.error);
+  });
+
+  test("losing the job loses the ability to sign it", async () => {
+    await saveComplete();
+    await conn.client.query(
+      "update job set assigned_engineer_id = $1 where id = $2",
+      [fixture.otherEngineerUserId, fixture.jobId],
+    );
+
+    const attempt = await signCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+      role: "issued",
+      dataUrl: TEST_SIGNATURE_PNG,
+      expectedRevision: 1,
+    });
+    assert.equal(attempt.ok, false);
+  });
+});
+
+describe("what signing does and does not do", () => {
+  test("it issues nothing, sends nothing and moves no date", async () => {
+    await saveComplete();
+    await signIssued();
+
+    assert.equal(await countRows("certificate"), 0);
+    assert.equal(await countRows("compliance_cycle"), 0);
+    assert.equal(await countRows("outbound_email"), 0);
+    assert.equal(
+      await countRows("document", "where blob_key not like 'fixture/%'"),
+      0,
+      "signing is not submitting",
+    );
+  });
+
+  test("an unsigned record cannot be submitted, whatever the browser does", async () => {
+    await saveComplete();
+
+    const submitted = await submitCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+      bytes: SPECIMEN,
+      filename: "TEST-NOT-VALID-certificate.pdf",
+      submissionKey: "unsigned",
+    });
+    assert.equal(submitted.ok, false);
+    assert.ok(!submitted.ok);
+    assert.deepEqual(submitted.missing, ["Engineer signature"]);
+    assert.equal(
+      await countRows("document", "where blob_key not like 'fixture/%'"),
+      0,
+      "no PDF was stored for an unsigned record",
+    );
+  });
+
+  test("nobody there to receive it does not stop the record being filed", async () => {
+    /*
+      The whole point of leaving the second box optional. This record has an
+      engineer's mark and nothing in the *Received by* box, and it goes to the
+      office as it stands — with the box empty and nothing claimed about it.
+    */
+    await saveComplete();
+    await signIssued();
+
+    const submitted = await submitCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+      bytes: SPECIMEN,
+      filename: "TEST-NOT-VALID-certificate.pdf",
+      submissionKey: "nobody-home",
+    });
+    assert.ok(submitted.ok);
+
+    const loaded = await loadCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+    });
+    assert.ok(loaded.ok);
+    assert.equal(
+      loaded.draft.signatures.received,
+      undefined,
+      "absence is recorded as absence",
+    );
+  });
+
+  test("signing ends a submission attempt in flight, and leaves its document alone", async () => {
+    await saveComplete();
+    const revision = await signIssued();
+
+    const submitted = await submitCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+      bytes: SPECIMEN,
+      filename: "TEST-NOT-VALID-certificate.pdf",
+      submissionKey: "before-the-tenant-signed",
+    });
+    assert.ok(submitted.ok);
+
+    /* The tenant appears after the record went. The engineer signs them in. */
+    await signCertificateDraft({
+      session: engineer(),
+      jobId: fixture.jobId,
+      role: "received",
+      dataUrl: OTHER_TEST_SIGNATURE_PNG,
+      expectedRevision: revision,
+    });
+
+    /*
+      **The document already with the office is immutable.** It is still
+      there, still awaiting review, still the same bytes — a later signature
+      on the draft does not reach inside a submitted PDF, and correcting one
+      goes through the office's own versioning as it always has.
+    */
+    const { rows } = await conn.client.query<{
+      id: string;
+      size_bytes: number;
+      sent_at: string | null;
+    }>("select id, size_bytes, sent_at from document where id = $1", [
+      submitted.documentId,
+    ]);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].size_bytes, SPECIMEN.byteLength);
+    assert.equal(rows[0].sent_at, null);
+
+    /* But the job no longer claims the draft is the thing that was sent. */
+    const summary = await draftSummaryFor(engineer(), fixture.jobId);
+    assert.deepEqual(summary, { exists: true, submittedAt: null });
   });
 });

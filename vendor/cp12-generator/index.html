@@ -159,6 +159,14 @@
     #pdfCaptureHost .sheet{overflow:visible;padding:14px;}
     #pdfCaptureHost .info-row{flex-direction:row;}
     #pdfCaptureHost .field-line label{font-size:11px;}
+
+    /*
+      Sign and Clear are thumb targets on a doorstep. The capture host never
+      sees them — `makePrintClone` removes `.sig-actions` outright — so this
+      cannot reach the certificate.
+    */
+    body[data-connected] .sig-btn{min-height:44px;padding:6px 14px;font-size:14px;}
+    body[data-connected] .sig-modal canvas{height:150px;}
   }
 
   /* ---------- Sheet ---------- */
@@ -310,6 +318,36 @@
     height:44px;background:#fff;border:1px solid var(--border);border-radius:2px;margin:4px 0 7px 0;
   }
   .sig-col label{font-weight:bold;}
+  /*
+    The drawn mark, inside the box the certificate has always had. `contain`
+    means it is limited by the box's height, which is the same height a wet
+    signature would have had, so the document's proportions do not change.
+  */
+  .sig-img{display:block;width:100%;height:100%;object-fit:contain;}
+  /*
+    An author `display:block` beats the browser's own `[hidden]{display:none}`,
+    so without this an empty box shows a broken-image icon after a signature is
+    cleared — which reads as "something went wrong" rather than "not signed".
+  */
+  .sig-img[hidden]{display:none;}
+  .sig-actions{display:flex;align-items:center;gap:8px;margin:-4px 0 7px 0;flex-wrap:wrap;}
+  .sig-btn{
+    font-size:12px;padding:4px 10px;border:1px solid var(--navy);background:#fff;
+    color:var(--navy);border-radius:4px;cursor:pointer;
+  }
+  .sig-state{font-size:11px;color:#555;}
+  .sig-state[data-signed="1"]{color:#1e7a43;font-weight:600;}
+
+  /* The pad itself. Outside the sheet, so it can never reach the certificate. */
+  .sig-modal .sig-pad-wrap{position:relative;margin:10px 0;}
+  .sig-modal canvas{
+    display:block;width:100%;height:190px;background:#fff;
+    border:1px dashed var(--border);border-radius:4px;touch-action:none;cursor:crosshair;
+  }
+  .sig-modal .sig-pad-hint{
+    position:absolute;left:12px;bottom:10px;font-size:12px;color:#999;pointer-events:none;
+  }
+  .sig-modal .sig-note{font-size:12px;color:#555;margin:6px 0 0 0;}
 
   .footer-note{
     max-width:1300px;margin:10px auto 0 auto;font-size:12px;color:#555;text-align:center;
@@ -521,16 +559,39 @@
     </div>
   </div>
 
+  <!--
+    The signature row.
+
+    The two boxes and their labels are unchanged: this is the same certificate
+    it has always been, and no declaration, disclaimer or wording of any kind
+    has been added to it. What is new is only inside the box — an image the
+    person actually drew, where standalone use still leaves an empty box for a
+    wet signature after printing.
+
+    The Sign / Clear controls carry `conn-only`, so they exist only when the
+    generator is working against a job, and `makePrintClone` strips them from
+    the PDF along with every other button.
+  -->
   <div class="sig-row">
     <div class="sig-col">
       <label>Issued by: Signed</label>
-      <div class="sig-box"></div>
+      <div class="sig-box"><img class="sig-img" id="sigImgIssued" alt="" hidden></div>
+      <div class="sig-actions conn-only" hidden>
+        <button type="button" class="sig-btn" data-sign="issued">Sign</button>
+        <button type="button" class="sig-btn" data-clear="issued" hidden>Clear</button>
+        <span class="sig-state" id="sigStateIssued">Not signed</span>
+      </div>
       <label>Print Name</label>
       <input type="text" id="issuedPrintName">
     </div>
     <div class="sig-col">
       <label>Received by: Signed</label>
-      <div class="sig-box"></div>
+      <div class="sig-box"><img class="sig-img" id="sigImgReceived" alt="" hidden></div>
+      <div class="sig-actions conn-only" hidden>
+        <button type="button" class="sig-btn" data-sign="received">Sign</button>
+        <button type="button" class="sig-btn" data-clear="received" hidden>Clear</button>
+        <span class="sig-state" id="sigStateReceived">Not signed</span>
+      </div>
       <label>Print Name</label>
       <input type="text" id="receivedPrintName">
     </div>
@@ -566,6 +627,29 @@
   <strong>Submit for review</strong> sends the finished record to the office;
   it does not issue the certificate and emails nobody.
 </p>
+
+<!-- ===================== Signature pad =====================
+  Outside `#sheet` deliberately. Nothing in here is a field, nothing in here
+  is collected by `collectSheet()`, and the capture host never sees it — the
+  only thing that reaches the certificate is the finished image, placed in the
+  box the certificate has always had.
+-->
+<div class="modal-overlay" id="signatureModal">
+  <div class="modal sig-modal">
+    <h3 id="signatureTitle">Signature</h3>
+    <p class="sig-note" id="signatureIntro"></p>
+    <div class="sig-pad-wrap">
+      <canvas id="signaturePad"></canvas>
+      <span class="sig-pad-hint" id="signaturePadHint">Sign here with a finger or a stylus</span>
+    </div>
+    <p class="sig-note" id="signatureNote"></p>
+    <div class="modal-buttons">
+      <button type="button" id="btnSignatureCancel">Cancel</button>
+      <button type="button" id="btnSignatureRedraw">Clear and start again</button>
+      <button type="button" class="primary" id="btnSignatureUse" disabled>Use this signature</button>
+    </div>
+  </div>
+</div>
 
 <!-- ===================== Manage Landlords Modal ===================== -->
 <div class="modal-overlay" id="landlordModal">
@@ -1130,7 +1214,7 @@ function makePrintClone(){
     }
     el.replaceWith(rep);
   });
-  clone.querySelectorAll('button, .landlord-select-line').forEach(el=>el.remove());
+  clone.querySelectorAll('button, .landlord-select-line, .sig-actions').forEach(el=>el.remove());
   clone.removeAttribute('id');
   return clone;
 }
@@ -1846,6 +1930,14 @@ async function connectedSaveNow(explicit){
     CONNECTED.revision = body.revision;
     CONNECTED.saving = false;
     /*
+      The server decides which marks survived this save, from the fields it
+      actually stored. This end only mirrors the answer — so a box empties on
+      screen at the same moment it empties on the record, and the engineer is
+      told rather than left to notice.
+    */
+    applySignatures(body.signatures);
+    reportClearedSignatures(body.clearedSignatures);
+    /*
       Only clear the unsaved flag if nothing was typed while the request was
       in flight. Otherwise this would show "Saved" over changes the server has
       never seen, which is the one thing a save indicator must not do.
@@ -1932,6 +2024,26 @@ async function connectedSubmit(){
       return;
     }
 
+    /*
+      The engineer's own mark. The server refuses a submission without one
+      too — this is here so the refusal never has to happen, and so the
+      engineer is told before a PDF is drawn on a phone.
+
+      The "Received by" box is deliberately **not** checked. Nobody may have
+      been at the property, and a rule that forced a mark into that box would
+      only teach engineers to draw it themselves.
+    */
+    if(!signatures.issued){
+      setSaveState('clean');
+      showImportReport('bad','Not submitted yet',
+        '<p>This record has not been signed. The <strong>Issued by</strong> box ' +
+        'on the certificate is yours — sign it, then submit.</p>' +
+        '<p>Your draft is saved. Nothing has been lost.</p>');
+      const signBtn = document.querySelector('[data-sign="issued"]');
+      if(signBtn) signBtn.scrollIntoView({block:'center'});
+      return;
+    }
+
     if(typeof html2canvas === 'undefined' || !window.jspdf){
       setSaveState('clean');
       showImportReport('bad','Not submitted',
@@ -2009,11 +2121,324 @@ function connectedSubmitted(replayed){
   setSaveState('submitted');
   qs('btnSubmit').hidden = true;
   qs('btnSaveDraft').hidden = true;
+  /*
+    The document is with the office and is immutable. Signing or clearing here
+    would change the draft underneath it and say nothing about the PDF an
+    administrator is about to read, so the controls go — a correction goes
+    through the office's own versioning, as it always has.
+  */
+  document.querySelectorAll('.sig-actions').forEach(el => { el.hidden = true; });
   showImportReport('ok', replayed ? 'Already submitted' : 'Submitted for review',
     '<p>This gas safety record is with the office for ' + escapeHtml(CONNECTED.reference) + '.</p>' +
     '<p><strong>It is not issued yet.</strong> An administrator reads it and releases ' +
     'it; nobody is emailed and no renewal date moves until they do.</p>' +
     '<p>You can close this tab. <a href="/engineer/jobs/' + encodeURIComponent(CONNECTED.jobId) + '">Back to the job</a></p>');
+}
+
+/* ==========================================================================
+   Signatures
+   --------------------------------------------------------------------------
+   The certificate has always had two boxes — "Issued by: Signed" and
+   "Received by: Signed" — and they have always printed empty, for a wet
+   signature after the document was printed. Connected mode fills them in
+   where the work actually happens.
+
+   **Rules this end keeps, and the server enforces independently.**
+
+   - A signature is *drawn*. There is no path from a typed name to an image,
+     and no previous certificate's mark is ever reused: the pad opens blank,
+     every time, for every box.
+   - A signature is bound to a saved record. The pad will not open until the
+     draft has reached the server, and the mark is filed against the revision
+     it was drawn on. The server re-derives what it covers from what is
+     stored; nothing here is trusted with that.
+   - A signature stops being true when the record changes. The server drops
+     it during the ordinary save and says which — this end then empties the
+     box and explains, rather than leaving a mark on screen that the record no
+     longer carries.
+   - Nothing is stored in this browser. The image goes to the server and comes
+     back from it, like every other part of a connected draft.
+   ========================================================================== */
+
+/** What each box is called when it is being talked about, not printed. */
+const SIGNATURE_BOXES = {
+  issued: {
+    img: 'sigImgIssued',
+    state: 'sigStateIssued',
+    title: 'Sign as the engineer',
+    intro: 'This goes in the "Issued by: Signed" box on the certificate.',
+    note: 'Required before this record can be submitted.',
+  },
+  received: {
+    img: 'sigImgReceived',
+    state: 'sigStateReceived',
+    title: 'Signature of the person receiving this record',
+    intro: 'This goes in the "Received by: Signed" box on the certificate.',
+    note: 'Optional. If nobody is here to sign, leave it — the box stays empty and nothing is assumed.',
+  },
+};
+
+/** What is on the record now, exactly as the server last reported it. */
+const signatures = {issued:null, received:null};
+
+/** Puts the server's answer on screen. The only way a box is ever filled. */
+function applySignatures(fromServer){
+  const source = fromServer || {};
+  Object.keys(SIGNATURE_BOXES).forEach(role=>{
+    const entry = source[role];
+    signatures[role] = entry && typeof entry.dataUrl === 'string' ? entry : null;
+  });
+  renderSignatures();
+}
+
+function renderSignatures(){
+  Object.keys(SIGNATURE_BOXES).forEach(role=>{
+    const box = SIGNATURE_BOXES[role];
+    const entry = signatures[role];
+    const img = qs(box.img);
+    const state = qs(box.state);
+    if(img){
+      if(entry){ img.src = entry.dataUrl; img.hidden = false; }
+      else { img.removeAttribute('src'); img.hidden = true; }
+    }
+    if(state){
+      state.textContent = entry ? 'Signed' : 'Not signed';
+      state.setAttribute('data-signed', entry ? '1' : '0');
+    }
+    const signBtn = document.querySelector('[data-sign="' + role + '"]');
+    const clearBtn = document.querySelector('[data-clear="' + role + '"]');
+    if(signBtn) signBtn.textContent = entry ? 'Sign again' : 'Sign';
+    if(clearBtn) clearBtn.hidden = !entry;
+  });
+}
+
+/** Says which marks a save removed, and why. Never silent. */
+function reportClearedSignatures(cleared){
+  if(!Array.isArray(cleared) || cleared.length === 0) return;
+  showImportReport('bad',
+    cleared.length === 1 ? 'A signature was cleared' : 'The signatures were cleared',
+    '<p>This record was changed after it was signed, so a signature on it no ' +
+    'longer belonged to what it now says. It has been removed rather than ' +
+    'kept over the change:</p><ul>' +
+    cleared.map(c => '<li>' + escapeHtml(c && c.label ? c.label : String(c)) + '</li>').join('') +
+    '</ul><p>Sign again once the record is finished. Nothing else has been altered.</p>');
+}
+
+/* ---------------- The pad ---------------- */
+const pad = {
+  role: null,
+  ctx: null,
+  drawing: false,
+  /* The ink's own bounds, so the saved image is the signature and not the
+     empty space around it. In backing-store pixels. */
+  minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity,
+  /* How far the pen has travelled, so one accidental tap is not a signature. */
+  distance: 0,
+  lastX: 0, lastY: 0,
+  scale: 1,
+};
+
+const MIN_SIGNATURE_DISTANCE = 40;   /* CSS pixels of pen travel. */
+
+function padPoint(event){
+  const canvas = qs('signaturePad');
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (event.clientX - rect.left) * pad.scale,
+    y: (event.clientY - rect.top) * pad.scale,
+  };
+}
+
+function resetPad(){
+  const canvas = qs('signaturePad');
+  const rect = canvas.getBoundingClientRect();
+  /*
+    Three times the box, so the mark is drawn at the resolution the PDF
+    capture works at rather than being enlarged into a soft edge afterwards.
+  */
+  pad.scale = 3;
+  canvas.width = Math.max(1, Math.round(rect.width * pad.scale));
+  canvas.height = Math.max(1, Math.round(rect.height * pad.scale));
+  pad.ctx = canvas.getContext('2d');
+  pad.ctx.clearRect(0, 0, canvas.width, canvas.height);
+  pad.ctx.strokeStyle = '#10233f';
+  pad.ctx.lineWidth = 2.4 * pad.scale;
+  pad.ctx.lineCap = 'round';
+  pad.ctx.lineJoin = 'round';
+  pad.drawing = false;
+  pad.minX = Infinity; pad.minY = Infinity; pad.maxX = -Infinity; pad.maxY = -Infinity;
+  pad.distance = 0;
+  qs('signaturePadHint').hidden = false;
+  qs('btnSignatureUse').disabled = true;
+}
+
+function padExtend(point){
+  if(point.x < pad.minX) pad.minX = point.x;
+  if(point.y < pad.minY) pad.minY = point.y;
+  if(point.x > pad.maxX) pad.maxX = point.x;
+  if(point.y > pad.maxY) pad.maxY = point.y;
+}
+
+function padStart(event){
+  if(!pad.ctx) return;
+  event.preventDefault();
+  const point = padPoint(event);
+  pad.drawing = true;
+  pad.lastX = point.x; pad.lastY = point.y;
+  padExtend(point);
+  qs('signaturePadHint').hidden = true;
+  /* A single tap should leave the dot it made, not nothing. */
+  pad.ctx.beginPath();
+  pad.ctx.moveTo(point.x, point.y);
+  pad.ctx.lineTo(point.x + 0.01, point.y);
+  pad.ctx.stroke();
+  try{ event.target.setPointerCapture(event.pointerId); }catch(e){}
+}
+
+function padMove(event){
+  if(!pad.drawing) return;
+  event.preventDefault();
+  const point = padPoint(event);
+  pad.ctx.beginPath();
+  pad.ctx.moveTo(pad.lastX, pad.lastY);
+  pad.ctx.lineTo(point.x, point.y);
+  pad.ctx.stroke();
+  pad.distance += Math.hypot(point.x - pad.lastX, point.y - pad.lastY) / pad.scale;
+  pad.lastX = point.x; pad.lastY = point.y;
+  padExtend(point);
+  qs('btnSignatureUse').disabled = pad.distance < MIN_SIGNATURE_DISTANCE;
+}
+
+function padEnd(){
+  if(!pad.drawing) return;
+  pad.drawing = false;
+  qs('btnSignatureUse').disabled = pad.distance < MIN_SIGNATURE_DISTANCE;
+}
+
+/**
+ * The drawing, cropped to the ink.
+ *
+ * Without this the image is mostly empty pad, and `object-fit: contain`
+ * would then shrink a signature to a fraction of the box it is supposed to
+ * fill. Returns null when there is nothing on it.
+ */
+function padImage(){
+  if(pad.minX === Infinity) return null;
+  const canvas = qs('signaturePad');
+  const margin = 6 * pad.scale;
+  const x = Math.max(0, Math.floor(pad.minX - margin));
+  const y = Math.max(0, Math.floor(pad.minY - margin));
+  const width = Math.min(canvas.width - x, Math.ceil(pad.maxX - pad.minX + margin * 2));
+  const height = Math.min(canvas.height - y, Math.ceil(pad.maxY - pad.minY + margin * 2));
+  if(width < 1 || height < 1) return null;
+
+  const out = document.createElement('canvas');
+  out.width = width;
+  out.height = height;
+  /* Transparent, so the box's own white shows through in both the screen and
+     the PDF and the mark never sits on a grey rectangle. */
+  out.getContext('2d').drawImage(canvas, x, y, width, height, 0, 0, width, height);
+  return out.toDataURL('image/png');
+}
+
+function closeSignaturePad(){
+  qs('signatureModal').classList.remove('open');
+  pad.role = null;
+}
+
+/**
+ * Opens the pad for one box.
+ *
+ * The draft is saved first and the pad does not open if that fails. A mark
+ * has to be *against* something, and a record that only exists on this screen
+ * is not something the server could bind it to.
+ */
+async function openSignaturePad(role){
+  if(!SIGNATURE_BOXES[role]) return;
+  if(CONNECTED.submitted) return;
+
+  const saved = await connectedSave(true);
+  if(!saved){
+    showImportReport('bad','Not signed',
+      '<p>This record could not be saved, so there was nothing to sign against ' +
+      'and the signature pad was not opened. Your work is still on this screen.</p>');
+    return;
+  }
+
+  pad.role = role;
+  const box = SIGNATURE_BOXES[role];
+  qs('signatureTitle').textContent = box.title;
+  qs('signatureIntro').textContent = box.intro;
+  qs('signatureNote').textContent = box.note;
+  qs('signatureModal').classList.add('open');
+  /* Sized after it is visible, or the canvas has no box to measure. */
+  resetPad();
+}
+
+/** Sends a mark, or a `null` to take one away. Returns true if it landed. */
+async function putSignature(role, image){
+  try{
+    const response = await fetch(jobUrl('/signature'), {
+      method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({role, image, revision: CONNECTED.revision}),
+    });
+    const body = await response.json().catch(()=>({}));
+
+    if(response.status === 409){
+      setSaveState('conflict');
+      showImportReport('bad','This record was saved somewhere else',
+        '<p>Another device or tab changed this gas safety record, so nothing was ' +
+        'signed and nothing has been overwritten.</p>' +
+        '<p>Open the job again on this device to load the current version, then sign it.</p>');
+      return false;
+    }
+    if(!response.ok){
+      showImportReport('bad', image === null ? 'Not cleared' : 'Not signed',
+        '<p>' + escapeHtml(body.error || 'That did not reach the office. Try again.') + '</p>');
+      return false;
+    }
+
+    CONNECTED.revision = body.revision;
+    applySignatures(body.signatures);
+    setSaveState('clean', new Date().toLocaleTimeString());
+    return true;
+  }catch(err){
+    showImportReport('bad', image === null ? 'Not cleared' : 'Not signed',
+      '<p>That did not reach the office. Your work is still on this screen — ' +
+      'check your signal and try again.</p>');
+    return false;
+  }
+}
+
+async function useSignature(){
+  const role = pad.role;
+  if(!role) return;
+  const image = padImage();
+  if(!image){
+    qs('signatureNote').textContent = 'Nothing has been drawn yet.';
+    return;
+  }
+  const useBtn = qs('btnSignatureUse');
+  useBtn.disabled = true;
+  const ok = await putSignature(role, image);
+  useBtn.disabled = false;
+  if(ok){
+    closeSignaturePad();
+    qs('importReport').hidden = true;
+  }
+}
+
+async function clearSignature(role){
+  if(CONNECTED.submitted) return;
+  if(!confirm('Remove this signature from the record?\n\nThe box will be empty until it is signed again.')) return;
+  const saved = await connectedSave(true);
+  if(!saved){
+    showImportReport('bad','Not cleared',
+      '<p>This record could not be saved, so nothing was changed.</p>');
+    return;
+  }
+  await putSignature(role, null);
 }
 
 /** Opens the generator on a job: fetch, prefill, then lay the draft over it. */
@@ -2051,6 +2476,7 @@ async function connectedBoot(){
 
   CONNECTED.reference = data.job.reference || '';
   CONNECTED.revision = data.draft.revision || 0;
+  applySignatures(data.draft.signatures);
 
   /*
     Prefill first, onto the blank sheet, then the stored draft over the top.
@@ -2151,6 +2577,29 @@ function fieldLabel(id){
 if(CONNECTED.on){
   qs('btnSaveDraft').addEventListener('click', ()=>{ connectedSave(true); });
   qs('btnSubmit').addEventListener('click', connectedSubmit);
+
+  document.querySelectorAll('[data-sign]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{ openSignaturePad(btn.getAttribute('data-sign')); });
+  });
+  document.querySelectorAll('[data-clear]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{ clearSignature(btn.getAttribute('data-clear')); });
+  });
+
+  const padCanvas = qs('signaturePad');
+  padCanvas.addEventListener('pointerdown', padStart);
+  padCanvas.addEventListener('pointermove', padMove);
+  padCanvas.addEventListener('pointerup', padEnd);
+  padCanvas.addEventListener('pointercancel', padEnd);
+  padCanvas.addEventListener('pointerleave', padEnd);
+
+  qs('btnSignatureRedraw').addEventListener('click', resetPad);
+  qs('btnSignatureCancel').addEventListener('click', closeSignaturePad);
+  qs('btnSignatureUse').addEventListener('click', useSignature);
+  /* Tapping the backdrop is a cancel, as it is on the landlord modal. */
+  qs('signatureModal').addEventListener('click', (e)=>{
+    if(e.target === qs('signatureModal')) closeSignaturePad();
+  });
+
   /*
     A last word before the tab closes on unsaved work. It cannot save — a
     browser will not wait for a request here — so it only warns, and the
