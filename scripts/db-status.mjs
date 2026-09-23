@@ -29,6 +29,33 @@ const { loadEnvironment, scrub } = await import("./load-env.mjs");
 const { resolveTarget, assertConfirmedEndpoint, TargetError } = await import(
   "../src/lib/ops/db-target.ts"
 );
+const { checkJournalFile, describeJournalProblems } = await import(
+  "../src/lib/ops/migration-journal.ts"
+);
+
+/*
+  **The journal is checked before the target is even resolved.**
+
+  This command's whole job is to tell an operator whether the database and the
+  repository agree, and it used to compare them positionally: journal entry
+  *n* against applied row *n*, ordered by `created_at`. That comparison is
+  only meaningful while the journal's own order and `created_at` order are the
+  same thing — and the defect that made this necessary was precisely a journal
+  whose timestamps did not increase. Read against that, `db:status` would have
+  paired the wrong hash with the wrong tag and reported drift, or worse, not
+  reported it.
+
+  It needs no connection, so it happens first and costs nothing.
+*/
+const journalCheck = checkJournalFile(
+  (path) => readFileSync(path, "utf8"),
+  "drizzle",
+);
+if (!journalCheck.ok) {
+  console.error(`\n${describeJournalProblems(journalCheck.problems)}\n`);
+  console.error("  Nothing was read from any database.\n");
+  exit(1);
+}
 
 let mode;
 try {
