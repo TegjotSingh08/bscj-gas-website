@@ -1684,6 +1684,20 @@ export const certificateDrafts = pgTable(
     ),
     /** The generator's flat field map, allow-listed on the way in. */
     fields: jsonb("fields").notNull(),
+    /**
+     * The captured signatures, keyed by the box they belong to.
+     *
+     * Separate from `fields` deliberately. A signature is not a field: it is
+     * an image rather than text, it is far larger than the 4,000-character
+     * cap a field carries, and it is the one thing on the sheet that must
+     * stop being true when the sheet changes. Keeping it out of the field map
+     * means the generator's element-id contract is untouched, and it means a
+     * mark can carry the hash of what it was put against — which is what
+     * `certificate-signatures.ts` checks on every save.
+     *
+     * Null on a row that predates it, which reads as "nothing signed yet".
+     */
+    signatures: jsonb("signatures"),
     /** Incremented on every accepted save. See the note above. */
     revision: integer("revision").notNull().default(1),
     updatedBy: uuid("updated_by").references(() => appUsers.id, {
