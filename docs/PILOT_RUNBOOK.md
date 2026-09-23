@@ -92,6 +92,29 @@ to send.
   and touches nothing that has been submitted or issued. The down file
   carries the query to check for work in progress first.
 
+**Migrations 0011 and 0012 — the same table, two more columns**
+- `0011_certificate_submission_lease` adds `submission_started_at`;
+  `0012_certificate_draft_signatures` adds `signatures`. Both are one nullable
+  column on the table `0010` created. Additive, no default written to existing
+  rows, nothing read or rewritten, no precheck.
+- **Apply all three in order, before the deploy.** The running build names
+  `signatures` in its queries, so a deployment serving the connected workflow
+  against a database without it fails on every certificate draft save. An
+  older build ignores the column entirely, so applying early is harmless —
+  which is why the order is always migrate, verify, then deploy.
+- Rolling back is the reverse order: `0012`, then `0011`, then `0010`.
+  Reversing `0012` discards signatures drawn on **unsubmitted** drafts;
+  reversing `0011` loses only automatic recovery of an interrupted
+  submission; reversing `0010` discards unsubmitted drafts entirely. **None
+  of them touches a submitted or issued certificate** — verified by actually
+  running them in `test/integration/migration-rollback.test.ts`.
+- **Roll the application back first, or together.** Reversing `0012` under a
+  build that still expects the column breaks certificate drafts immediately.
+
+**After the three are applied**
+- `npm run db:status` should report **13 of 13** applied, **25 tables, 22
+  enums**. Before them the pilot reports 10 of 13 and 24 tables.
+
 **Blob storage**
 - Attach a Vercel Blob store; `BLOB_READ_WRITE_TOKEN` is injected and nothing
   else is needed. The local driver refuses to run when `NODE_ENV=production`,

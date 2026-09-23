@@ -180,19 +180,217 @@ taller and fit-to-page shrinks it onto one page. Smaller, still legible, and
 nothing is lost. That is the right failure mode and it is the generator's own
 pre-existing behaviour.
 
-**Two characteristics worth knowing, neither introduced by this workflow and
-neither a defect:**
+**One characteristic worth knowing, not introduced by this workflow and not a
+defect:**
 
-- **The signature boxes are blank.** `.sig-box` is an empty `<div>` with no
-  input; the generator has never captured a signature. The boxes render
-  correctly, correctly sized and labelled, for a wet signature after printing,
-  and the two print names *are* captured and do appear. Adding signature
-  capture would be a new feature.
 - **The PDF has no text layer.** It is a rasterised image, because the
   generator draws through html2canvas and embeds a JPEG. So a released
   certificate is not searchable or selectable. That is how the original tool
   has always produced them.
 
+**The signature boxes were blank at that acceptance, and are not any more.**
+`.sig-box` was an empty `<div>`; the generator had never captured a signature,
+so a released certificate carried two printed names above two empty boxes.
+Signature capture was added on 23 September 2026 — see below.
+
 **Not verified here** — the **Vercel Blob** driver. Every document above went
 into the local store. The screens are identical on Blob; the driver underneath
 them has not been exercised from this workflow.
+
+---
+
+# Signatures — 23 September 2026
+
+The certificate's two signature boxes are now filled where the work happens,
+on the engineer's device, instead of being left empty for a wet signature
+after printing.
+
+## The contract this had to fit, established before anything was built
+
+The sheet's signature row has exactly three columns and nothing else:
+
+| On the certificate | Field | What it is |
+| --- | --- | --- |
+| **Issued by: Signed** | `.sig-box` (was an empty `<div>`) | The engineer who carried out the inspection. |
+| Print Name | `issuedPrintName` | Already captured, already prints. |
+| **Received by: Signed** | `.sig-box` (was an empty `<div>`) | Whoever was at the property and took a copy. |
+| Print Name | `receivedPrintName` | Already captured, already prints. |
+| **Date** | `sigDate` | Already captured. Required for submission. |
+
+**There is no declaration text anywhere on the sheet**, and none has been
+added. The labels say *Signed* and nothing more. Nothing in the code says what
+a signature means, because the certificate does not say it either, and writing
+that wording would be inventing a legal fact BSCJ has not supplied.
+
+**Nothing here claims a drawn signature establishes legal validity.** What it
+establishes is narrower and true: a specific person, authenticated on this job,
+deliberately drew a mark against a known state of this record, and the record
+has not changed since.
+
+**Release validation is untouched.** `checkRelease()` still asks an
+administrator for the certificate number, the inspection date and the next due
+date, re-typed from the PDF. It has no opinion about signatures and did not
+acquire one.
+
+## The rules
+
+### A signature is drawn, never derived
+
+The only writer is `signCertificateDraft`, and it takes an image. There is no
+path from a typed name to a mark, no carry-over from a previous certificate,
+and the pad opens blank every time for every box. The server decodes the PNG,
+checks its magic bytes and dimensions, and **re-encodes from the decoded
+bytes**, so what is stored is exactly what was validated.
+
+### A signature is bound to the job, the engineer and the revision
+
+Signing is its own request. It names the revision it is signing, a mismatch is
+a `409`, and the hash of what it covers is taken from the **stored** fields —
+never from anything the browser sends. Access is re-derived from the job row
+on every call, like every other write in this workflow.
+
+### Editing an attested field removes the mark, and says so
+
+This is the rule, stated once. A mark is kept only while the fields it was put
+against are unchanged. It is enforced on the server **inside the ordinary
+save**: the stored marks are checked against the fields being written, the
+ones that no longer match are dropped, and the response names them. The
+browser mirrors that — the box empties and a notice says which signature went
+and why. Nothing is silently retained, and nothing silently disappears.
+
+The two boxes attest to slightly different things, deliberately:
+
+| Mark | Covers | Does not cover |
+| --- | --- | --- |
+| Issued by | Every field that prints on the certificate | `receivedPrintName` — who took the copy is not part of what the engineer certifies |
+| Received by | Every field that prints, including their own name | — |
+
+That difference is what makes the doorstep order work: the engineer signs,
+then types the tenant's name, and the engineer's mark survives. The tenant
+signs last, and nothing after it should change. Neither attests to
+`landlordSelect2`, which is the standalone landlord picker and is stripped
+from the PDF.
+
+### The engineer's mark is required; the other one is not
+
+`describeMissingSignatures` refuses a submission without **Issued by**. The
+engineer is the person holding the device; it is one tap; and an *Issued by:
+Signed* box left empty on a released certificate is the gap this work exists
+to close. The check runs on the server, from the stored image and the stored
+fields — the generator's own check exists only so the engineer is told before
+a PDF is drawn on a phone.
+
+**Received by is optional and its absence is recorded as absence.** A property
+can be empty, a tenant can be out, a landlord can ask for it by email.
+Requiring a mark there would not produce one; it would produce engineers
+drawing it themselves. When nobody signs, the box prints empty exactly as it
+always has and nothing is written on the certificate about why — see *Still to
+decide*.
+
+### Submitted documents stay immutable
+
+Signing after a submission behaves exactly as editing after one does: the
+draft is no longer the thing that was sent, so the job stops saying "submitted
+and waiting", and the PDF already with the office is untouched. A correction
+goes through the office's existing versioning and supersession, unchanged. The
+Sign and Clear controls are hidden once a record has been submitted.
+
+### Standalone use is unchanged
+
+The controls carry `conn-only`. Without `?job=<uuid>` the boxes are empty
+`<div>`s with no image and no buttons, exactly as before, and the standalone
+footer's description of where data lives is still true.
+
+## What is new in the code
+
+| Piece | Where |
+| --- | --- |
+| The rules — what an image may be, what a mark covers, what removes it | `src/lib/documents/certificate-signatures.ts` |
+| Signing and clearing, and pruning during a save | `signCertificateDraft`, `saveCertificateDraft` |
+| One route | `PUT /api/engineer/jobs/[id]/certificate/signature` |
+| The column | `certificate_draft.signatures`, migration `0012` |
+| The pad, the boxes and the notices | `vendor/cp12-generator/index.html` |
+
+`signatures` is a column rather than a member of `fields` because a signature
+is not a field: it is an image, it is far larger than the 4,000-character
+per-field cap, and it has to carry the hash of what it covers. Keeping it out
+means the generator's element-id contract is untouched.
+
+## Mobile
+
+- The pad is a full-width canvas, 150px tall at phone width, with `touch-action:
+  none` so drawing does not scroll the page.
+- It captures at three times the box, which is the resolution the PDF is drawn
+  at, and crops to the ink so the mark fills the certificate's box instead of
+  sitting inside empty pad.
+- **Use this signature** stays disabled until the pen has travelled 40px, so an
+  accidental tap is not a signature. **Clear and start again** empties it.
+- Sign and Clear are 44px tall. The capture host never sees them —
+  `makePrintClone` removes `.sig-actions` outright.
+
+## Verified
+
+**Unit** — `src/lib/documents/certificate-signatures.test.ts` (30 tests): what
+may be stored (a name is refused; a data URL that only claims to be a PNG is
+refused; SVG and JPEG are refused; oversized and photograph-sized are refused;
+a valid PNG round-trips canonically), what a mark covers (stable under
+trimming and key order; changed by a reading or an outcome; the `issued` /
+`received` difference; unaffected by a field that never prints), what removes
+one, what survives a read of the column, and what the signature row must have
+before submission.
+
+`certificate-draft-fields.test.ts` also now asserts the generator is a working
+document: no HTML comment left open, three real `<script>` elements, the pad
+outside `#sheet`, and `.sig-actions` stripped from the PDF clone. That test
+exists because an unclosed comment added during this work swallowed the
+generator's entire script into a comment node — the page still rendered, every
+field was still in the markup, and nothing ran.
+
+**Integration, against real PostgreSQL** — the signature suites in
+`engineer-certificate.test.ts` and the route on the wire in
+`access-boundaries.test.ts`: store and reload, the two boxes separate, a typed
+name producing no mark, a non-image refused with nothing stored, signing
+before saving refused, signing an unvisited job refused, clear, redraw,
+clearing one box not touching the other, stale revision refused with the
+current draft attached, an edit clearing and naming what it cleared, an
+autosave of the same record keeping the mark, the tenant's name keeping the
+engineer's mark and removing the tenant's, no mark crossing to another job,
+another engineer refused, a reassigned job losing access, signing issuing
+nothing, an unsigned record refused, an unsigned *Received by* not blocking,
+and a submitted document left untouched by later signing.
+
+**Browser, signed in, throwaway database, phone width (375px), system Chrome** —
+engineer login → assigned job → connected generator → a record with long
+landlord and property details, twelve defect entries, eight comment
+paragraphs and all six appliance rows → **submit refused because it was not
+signed** → pad opened → *Use this signature* disabled on an empty pad, enabled
+after drawing, disabled again after *Clear and start again* → engineer signed →
+tenant's name typed, engineer's mark still there → tenant signed → **full page
+reload**: both marks restored from the server, `localStorage` empty → a reading
+changed: both marks cleared with the notice naming them → re-signed → submitted
+→ Sign controls hidden → administrator opened the stored PDF through the
+existing review screen and received the identical 3,271,178 bytes.
+
+The submitted PDF was extracted from the document store and read. One page,
+A4 landscape (841.89 × 595.28pt), all six appliance rows, the *Equipotential
+Bonding* outcome printing as ✗, and **both signatures in the correct boxes**,
+crisp at full resolution. The long text degrades by scaling rather than
+clipping, as it did at the 22 September acceptance.
+
+**Not verified here** — the **Vercel Blob** driver, still. Every document above
+went into the local store.
+
+## Still to decide — one question for BSCJ
+
+**When nobody is there to sign, should the certificate say so?** Today the
+*Received by* box prints empty, which is what the paper form has always done
+and what an unsigned box has always meant. The alternative is printing
+something like *Not obtained — nobody present* in the box.
+
+Implemented as: optional, absent, nothing written. That is the honest default
+and it changes no wording on the certificate. Making it say something is a
+change to the face of a compliance document, so it needs BSCJ's decision
+rather than a developer's — and if the answer is yes, the wording has to come
+from BSCJ too.
+
+Everything else here is implemented and needs no decision.

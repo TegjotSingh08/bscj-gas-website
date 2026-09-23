@@ -3,8 +3,9 @@
 **Read this first.** It exists so a new session does not have to re-audit the
 repository. Update it at the end of every piece of work.
 
-Last updated: 22 September 2026 (agency-onboarding readiness pass; `0009`
-owner-confirmed applied, `0010` and `0011` outstanding).
+Last updated: 23 September 2026 (signature capture in the connected
+generator; `0009` owner-confirmed applied, `0010`, `0011` and `0012`
+outstanding).
 
 ---
 
@@ -1224,8 +1225,8 @@ full list, not the pilot subset.
     ever sent: no tenant invitation, no certificate, no invoice, and **no
     account invitation or password reset**. An agency invited with no schedule
     running simply never hears from us.
-16. **Migrations `0010` and `0011` must be applied** to any database the
-    current commit is deployed against.
+16. **Migrations `0010`, `0011` and `0012` must be applied** to any database
+    the current commit is deployed against.
 
     **Owner-reported baseline, not checked from here:** `0000`–`0009` are
     applied to the pilot — the owner confirmed `10` of `10` applied and then
@@ -1233,13 +1234,29 @@ full list, not the pilot subset.
     and `0009` was outstanding. Both were wrong.
 
     **Outstanding now:** `0010_engineer_certificate_drafts` (one new table,
-    `certificate_draft`) and `0011_certificate_submission_lease` (one nullable
-    column on it). Neither has a pre-condition to check first, unlike `0009`.
-    Both have only ever been applied to disposable test databases here.
+    `certificate_draft`), `0011_certificate_submission_lease` (one nullable
+    column on it) and `0012_certificate_draft_signatures` (one more nullable
+    column on it). None has a pre-condition to check first, unlike `0009`. All
+    three have only ever been applied to disposable test databases here.
 
-    Expect `12` on disk and `10` applied before; `12` / `12` and **25 tables,
+    Expect `13` on disk and `10` applied before; `13` / `13` and **25 tables,
     22 enums** after. Order matters and is documented in `PILOT_RUNBOOK.md`
     §2E.7 and `docs/acceptance/README.md` §4: migrate, verify, *then* push.
+
+    **The down files have now actually been run**, against a disposable
+    database with a submitted certificate and a signed draft on it —
+    `test/integration/migration-rollback.test.ts`. Reversing `0012` takes the
+    marks and leaves the draft; reversing `0011` takes the lease column and
+    leaves the draft; reversing `0010` drops the table and every unsubmitted
+    draft with it. **No `document`, `certificate` or `compliance_cycle` row is
+    touched by any of them**, and each is safe to run twice. Until this, every
+    rollback claim in this repository was written and never executed.
+
+    **Rolling back needs the application rolled back too, or first.** The
+    deployed build selects `signatures` by name, so reversing `0012` under a
+    build that expects it breaks every certificate draft save immediately. The
+    other direction is safe — an older build ignores the column — which is why
+    the order is migrate, then deploy.
 
 ### Known issues
 
@@ -1291,9 +1308,24 @@ permits an email.
 
 **Schema:** migration `0010_engineer_certificate_drafts` adds one table,
 `certificate_draft`. Purely additive — no existing table is altered and no row
-is read or rewritten. It takes the chain to **11 migrations and 25 tables**;
-enums are unchanged at 22. The pilot is at 10 applied and 24 tables until it
-is deployed.
+is read or rewritten. With `0011` (the submission lease) and `0012` (the
+signatures) it takes the chain to **13 migrations and 25 tables**; enums are
+unchanged at 22. The pilot is at 10 applied and 24 tables until it is
+deployed.
+
+**Signature capture — 23 September 2026.** The two signature boxes on the
+certificate are filled on the engineer's device instead of being left empty
+for a wet signature after printing. A mark is drawn, never derived from a
+name; it is bound to the job, the engineer and the draft revision; and editing
+an attested field removes it on the server during the ordinary save, with the
+engineer told which and why. The engineer's *Issued by* mark is required
+before submission; *Received by* is optional and its absence is recorded as
+absence. Submission, review and release are unchanged, and standalone use of
+the generator is untouched.
+
+Full contract, rules and verification: `docs/ENGINEER_CERTIFICATE_WORKFLOW.md`.
+**One question is open for BSCJ** — whether an unsigned *Received by* box
+should print anything. Implemented as: it prints nothing.
 
 **`/engineer/certificate` is unchanged for standalone use.** Without
 `?job=<uuid>` the generator behaves exactly as it always has, which is what
